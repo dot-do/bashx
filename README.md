@@ -1,43 +1,34 @@
 # bashx.do
 
-> AI-enhanced bash execution with safety, intent understanding, and intelligent recovery
+> ONE tool. ONE interface. Maximum intelligence.
 
 **bashx** wraps bash with judgment. It doesn't just execute—it **thinks** before executing.
 
 ```typescript
-import { bashx } from 'bashx'
+import { bash } from 'bashx'
 
-// Natural language → safe execution
-await bashx`deploy the latest commit to staging`
+// Just run commands
+await bash`ls -la`
 
-// Explain before running
-const explanation = await bashx.explain('find . -name "*.log" -delete')
-// → "Recursively finds all .log files and deletes them. IRREVERSIBLE."
+// Or describe what you want
+await bash`find all typescript files over 100 lines`
 
-// Safety check
-const report = await bashx.safe('chmod -R 777 /')
-// → { safe: false, reasons: ['Recursive permission change on root'], severity: 'critical' }
+// Dangerous commands are blocked
+await bash`rm -rf /`  // → { blocked: true, requiresConfirm: true }
+
+// Unless you confirm
+await bash('rm -rf /', { confirm: true })  // → executes
 ```
 
-## The Problem
+## The Insight
 
 ```
-fsx.do  = filesystem + AI → safe, reversible
-gitx.do = git + AI        → safe, versioned
-bash    = execute anything → DANGEROUS, irreversible
+fsx  → wraps filesystem protocol → discrete tools make sense
+gitx → wraps git protocol       → discrete tools make sense
+bashx → IS the universal tool   → ONE tool: bash
 ```
 
-Bash is the universal execution layer. Every tool ultimately becomes a bash command. But unlike filesystems or git, **bash executes with consequences**.
-
-## The Solution
-
-bashx adds a **judgment layer** between intent and execution:
-
-1. **Understands intent** (not just syntax)
-2. **Assesses risk** (before running)
-3. **Provides alternatives** (safer options)
-4. **Recovers from failure** (intelligent retry)
-5. **Explains actions** (transparency)
+Bash already has thousands of "tools" - they're called commands. We don't re-wrap what's already wrapped.
 
 ## Installation
 
@@ -49,166 +40,112 @@ pnpm add bashx
 
 ## API
 
-### Natural Language Execution
+### Tagged Template
 
 ```typescript
-// Tagged template for intent-based execution
-await bashx`list all typescript files modified today`
-await bashx`clean up node_modules and rebuild`
-await bashx`deploy to production` // Will require confirmation!
+import { bash } from 'bashx'
+
+// Commands
+await bash`git status`
+await bash`find . -name "*.ts" | wc -l`
+
+// With interpolation
+const file = 'package.json'
+await bash`cat ${file}`
+
+// Natural language (auto-detected)
+await bash`list all typescript files modified today`
+await bash`find large files over 100MB`
 ```
 
-### Direct Execution with Safety
+### With Options
 
 ```typescript
-// Execute with safety requirements
-const result = await bashx.run({
-  cmd: 'rm -rf ./build',
-  intent: 'clean build directory',
-  require: {
-    safe: true,        // Must pass safety check
-    reversible: true,  // Must be undoable
-    maxImpact: 'medium' // Impact threshold
+// Confirm dangerous operations
+await bash('rm -rf node_modules', { confirm: true })
+
+// Dry run
+await bash('deploy.sh', { dryRun: true })
+
+// Custom timeout
+await bash('long-running-task', { timeout: 60000 })
+
+// Custom working directory
+await bash('npm install', { cwd: './packages/core' })
+```
+
+## Result Type
+
+Every invocation returns a rich result:
+
+```typescript
+interface BashResult {
+  // Input
+  input: string           // Original input
+  command: string         // Actual command (or generated)
+  generated: boolean      // Was command generated from intent?
+
+  // AST Analysis
+  ast?: Program           // Parsed AST (tree-sitter-bash)
+  valid: boolean          // Syntactically valid?
+  errors?: ParseError[]   // Syntax errors found
+  fixed?: {               // Auto-fixed version (if fixable)
+    command: string
+    changes: Fix[]
   }
-})
 
-// Dry run by default for dangerous operations
-if (result.dryRun) {
-  console.log('Would delete:', result.wouldDelete)
-  await result.confirm() // Explicitly confirm
+  // Semantic Understanding
+  intent: {
+    commands: string[]    // Commands being run
+    reads: string[]       // Files being read
+    writes: string[]      // Files being written
+    deletes: string[]     // Files being deleted
+    network: boolean      // Network access?
+    elevated: boolean     // Needs sudo?
+  }
+
+  // Safety Classification
+  classification: {
+    type: 'read' | 'write' | 'delete' | 'execute' | 'network' | 'system'
+    impact: 'none' | 'low' | 'medium' | 'high' | 'critical'
+    reversible: boolean
+    reason: string
+  }
+
+  // Execution
+  stdout: string
+  stderr: string
+  exitCode: number
+
+  // Safety Gate
+  blocked?: boolean       // Was execution blocked?
+  requiresConfirm?: boolean
+  blockReason?: string
+
+  // Recovery
+  undo?: string           // Command to undo (if reversible)
+  suggestions?: string[]  // Optimizations, alternatives
 }
-```
-
-### Explain Commands
-
-```typescript
-const explanation = await bashx.explain('grep -r "TODO" --include="*.ts" | wc -l')
-// {
-//   summary: "Count lines containing 'TODO' in TypeScript files",
-//   breakdown: [
-//     { part: 'grep', type: 'command', explanation: 'Search for patterns in files' },
-//     { part: '-r', type: 'flag', explanation: 'Search recursively' },
-//     { part: '"TODO"', type: 'argument', explanation: 'Pattern to search for' },
-//     { part: '--include="*.ts"', type: 'flag', explanation: 'Only search .ts files' },
-//     { part: '|', type: 'pipe', explanation: 'Send output to next command' },
-//     { part: 'wc -l', type: 'command', explanation: 'Count lines' }
-//   ],
-//   classification: { type: 'read', reversible: true, impact: 'none' },
-//   sideEffects: []
-// }
-```
-
-### Safety Analysis
-
-```typescript
-const report = await bashx.safe('rm -rf /', {
-  cwd: '/home/user',
-  user: 'developer'
-})
-// {
-//   safe: false,
-//   classification: {
-//     type: 'delete',
-//     reversible: false,
-//     scope: 'global',
-//     impact: 'critical',
-//     requires: ['confirmation', 'sudo']
-//   },
-//   risks: [
-//     { severity: 'critical', description: 'Deletes entire filesystem' }
-//   ],
-//   recommendations: [
-//     'Never run this command',
-//     'If cleaning up, specify exact directory'
-//   ],
-//   alternatives: [
-//     { command: 'rm -rf ./build', description: 'Delete specific directory' }
-//   ]
-// }
-```
-
-### Generate Commands from Intent
-
-```typescript
-const generated = await bashx.generate('find large files over 100MB', {
-  platform: 'darwin',
-  shell: 'zsh'
-})
-// {
-//   command: 'find . -type f -size +100M -exec ls -lh {} \\;',
-//   explanation: 'Find files larger than 100MB and show their sizes',
-//   classification: { type: 'read', ... },
-//   alternatives: [
-//     { command: 'du -h . | sort -rh | head -20', ... }
-//   ]
-// }
-```
-
-### Intelligent Recovery
-
-```typescript
-// Auto-recovery on common errors
-const result = await bashx.exec('npm install', {
-  recover: true,
-  maxAttempts: 3
-})
-// If ENOSPC → cleanup temp files, retry
-// If EACCES → suggest sudo or fix permissions
-// If ENOENT → suggest creating directory
-```
-
-### Fix Failed Commands
-
-```typescript
-const fixed = await bashx.fix(
-  'git commit -m "update"',
-  'error: pathspec "update" did not match any file(s) known to git'
-)
-// {
-//   command: 'git commit -m "update"',
-//   explanation: 'The -m flag needs quotes around the message',
-//   warnings: ['Make sure you have staged changes with git add']
-// }
-```
-
-### Parse Command Output
-
-```typescript
-const npmAudit = await bashx.exec('npm audit --json')
-const vulns = await bashx.parse(npmAudit.stdout, {
-  critical: 'number',
-  high: 'number',
-  moderate: 'number',
-  low: 'number',
-  total: 'number'
-})
-// { critical: 2, high: 5, moderate: 12, low: 3, total: 22 }
 ```
 
 ## MCP Integration
 
-bashx exposes 18 tools via Model Context Protocol:
+**ONE tool: `bash`**
 
-| Tool | Description |
-|------|-------------|
-| `bash_run` | Execute command with safety checks |
-| `bash_explain` | Explain what command does |
-| `bash_safe` | Check if command is safe |
-| `bash_generate` | Generate command from intent |
-| `bash_dry_run` | Simulate command execution |
-| `bash_pipe` | Chain commands with AI |
-| `bash_parse` | Parse command output |
-| `bash_env` | Get/set environment |
-| `bash_history` | Search command history |
-| `bash_alias` | Manage command aliases |
-| `bash_which` | Find command location |
-| `bash_man` | Get command documentation |
-| `bash_complete` | Auto-complete command |
-| `bash_fix` | Fix broken command |
-| `bash_optimize` | Optimize command |
-| `bash_undo` | Undo last command |
-| `bash_script` | Generate shell script |
-| `bash_cron` | Manage scheduled tasks |
+```typescript
+{
+  name: 'bash',
+  description: 'Execute bash commands with AI-enhanced safety and AST-based validation',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      input: { type: 'string', description: 'Command or intent' },
+      confirm: { type: 'boolean', description: 'Confirm dangerous operations' }
+    },
+    required: ['input']
+  }
+}
+```
 
 ### Claude Desktop Integration
 
@@ -226,42 +163,72 @@ bashx exposes 18 tools via Model Context Protocol:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      bashx.do SDK                           │
-│  bashx`intent` → safety check → execute → parse output     │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Evaluation Layer                          │
-│  ┌───────────────┐  ┌────────────────┐  ┌───────────────┐  │
-│  │ Intent Parser │  │ Safety Checker │  │ Context Builder│  │
-│  │ (ai.extract)  │  │ (ai.is)        │  │ (fsx, gitx)   │  │
-│  └───────────────┘  └────────────────┘  └───────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Execution Layer                           │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │ Sandbox     │  │ Dry-Run     │  │ Live Execution      │ │
-│  │ (isolated)  │  │ (simulate)  │  │ (with recovery)     │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+Input: command OR intent
+         ↓
+┌─────────────────────────────────────┐
+│         AST Parser                  │
+│  • tree-sitter-bash (WASM)         │
+│  • Parse to AST                    │
+│  • Recover from errors             │
+│  • Identify syntax issues          │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         AST Analysis                │
+│  • Extract commands, files         │
+│  • Structural safety analysis      │
+│  • Auto-fix syntax errors          │
+│  • Suggest optimizations           │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         Safety Gate                 │
+│  • Classify from AST (not regex)   │
+│  • Block critical operations       │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         Execution                   │
+│  • Run (possibly fixed) command    │
+│  • Track for undo                  │
+└─────────────────────────────────────┘
+         ↓
+Output: BashResult with AST metadata
 ```
 
-## Safety Classification
+## AST-Based Safety
 
-Every command is classified before execution:
+Safety analysis uses **structural AST analysis**, not regex:
 
 ```typescript
-interface CommandClassification {
-  type: 'read' | 'write' | 'delete' | 'execute' | 'network' | 'system'
-  reversible: boolean
-  scope: 'file' | 'directory' | 'tree' | 'system' | 'global'
-  impact: 'none' | 'low' | 'medium' | 'high' | 'critical'
-  requires: ('confirmation' | 'backup' | 'dryrun' | 'sudo')[]
-}
+// AST knows this is rm with -rf flag targeting /
+// Not just pattern matching "rm -rf /"
+const ast = parse('rm -rf /')
+const analysis = analyze(ast)
+// {
+//   type: 'delete',
+//   impact: 'critical',
+//   reversible: false,
+//   reason: 'Recursive delete targeting root filesystem'
+// }
+```
+
+This enables:
+
+1. **Structural detection** of dangerous patterns
+2. **Syntax error detection** and auto-fixing
+3. **Command optimization** suggestions
+4. **Intent extraction** from AST structure
+
+## Syntax Fixing
+
+bashx can detect and fix malformed commands:
+
+```typescript
+// Input with unclosed quote
+await bash`echo "hello`
+// → Detects unclosed quote, suggests fix
+// → fixed: { command: 'echo "hello"', changes: [...] }
 ```
 
 ## License

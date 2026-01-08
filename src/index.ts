@@ -1,91 +1,82 @@
 /**
- * bashx.do - AI-enhanced bash execution
+ * bashx.do - AI-enhanced bash with AST-based validation
  *
- * bashx wraps bash with:
- * - Intent understanding (natural language → commands)
- * - Safety classification (before execution)
- * - Intelligent recovery (auto-fix errors)
- * - Output parsing (structured extraction)
+ * ONE tool. ONE interface. Maximum intelligence.
  *
  * @example
  * ```typescript
- * import { bashx } from 'bashx'
+ * import { bash } from 'bashx'
  *
- * // Natural language
- * await bashx`deploy to staging`
+ * // Just run commands
+ * await bash`ls -la`
  *
- * // With safety checks
- * await bashx.run({
- *   cmd: 'rm -rf ./build',
- *   intent: 'clean build directory',
- *   require: { safe: true, reversible: true }
- * })
+ * // Or describe what you want
+ * await bash`find all typescript files over 100 lines`
  *
- * // Explain before running
- * const explanation = await bashx.explain('find . -name "*.log" -delete')
+ * // Dangerous commands are blocked
+ * await bash`rm -rf /`  // → { blocked: true, requiresConfirm: true }
+ *
+ * // Unless you confirm
+ * await bash('rm -rf /', { confirm: true })  // → executes
  * ```
  */
 
-import { createClient, tagged, type ClientOptions, type TaggedTemplate } from 'rpc.do'
-import type {
-  BashxClient,
-  BashxResult,
-  DoOptions,
-  RunOptions,
-  ExecOptions,
-  ExecResult,
-  Explanation,
-  SafetyReport,
-  SafetyContext,
-  GeneratedCommand,
-  GenerateContext,
-  PipeStep,
-  PipeResult,
-  HistoryEntry,
-} from './types.js'
-import type { McpTool } from 'mcp.do'
+import { createClient, type ClientOptions } from 'rpc.do'
+import type { BashResult, BashOptions, BashClient } from './types.js'
 
 export * from './types.js'
 
 /**
- * Create a bashx client with custom options
- *
- * @example
- * ```typescript
- * const client = BashX({ apiKey: 'my-key' })
- * await client.run({ cmd: 'ls -la' })
- * ```
+ * Create a bash client with custom options
  */
-export function BashX(options?: ClientOptions): BashxClient {
-  const client = createClient<BashxClient>('https://bashx.do', options)
+export function Bash(clientOptions?: ClientOptions): BashClient {
+  const rpcClient = createClient<{ bash: (input: string, options?: BashOptions) => Promise<BashResult> }>(
+    'https://bashx.do',
+    clientOptions
+  )
 
-  // Enhance with tagged template support
-  const enhancedClient = client as BashxClient
+  // Create the dual-mode function (tagged template + direct call)
+  const bashFn = function (
+    inputOrStrings: string | TemplateStringsArray,
+    ...values: unknown[]
+  ): Promise<BashResult> {
+    // Tagged template: bash`command`
+    if (Array.isArray(inputOrStrings) && 'raw' in inputOrStrings) {
+      const strings = inputOrStrings as TemplateStringsArray
+      const input = strings.reduce(
+        (acc, str, i) => acc + str + (values[i] !== undefined ? String(values[i]) : ''),
+        ''
+      )
+      return rpcClient.bash(input)
+    }
 
-  enhancedClient.do = tagged(async (query: string, opts?: DoOptions) => {
-    return client.invokeTool('bash_query', { query, ...opts })
-  })
+    // Direct call: bash('command', options)
+    const input = inputOrStrings as string
+    const options = values[0] as BashOptions | undefined
+    return rpcClient.bash(input, options)
+  } as BashClient
 
-  return enhancedClient
+  return bashFn
 }
 
 /**
- * Default bashx client instance
+ * Default bash client
  *
  * @example
  * ```typescript
- * import { bashx } from 'bashx'
+ * import { bash } from 'bashx'
  *
- * // Natural language execution
- * await bashx`list all typescript files`
+ * // Tagged template
+ * const result = await bash`git status`
  *
- * // Explain a command
- * const explanation = await bashx.explain('grep -r "TODO" --include="*.ts"')
+ * // With interpolation
+ * const file = 'package.json'
+ * const result = await bash`cat ${file}`
  *
- * // Check safety
- * const report = await bashx.safe('chmod -R 777 /')
+ * // With options
+ * const result = await bash('rm -rf build', { confirm: true })
  * ```
  */
-export const bashx: BashxClient = BashX()
+export const bash: BashClient = Bash()
 
-export default bashx
+export default bash

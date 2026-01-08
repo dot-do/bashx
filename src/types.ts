@@ -1,351 +1,200 @@
 /**
  * bashx.do Type Definitions
- * AI-enhanced bash execution with safety, intent understanding, and intelligent recovery
+ *
+ * Single tool architecture: ONE tool called 'bash' with AST-based validation
  */
 
-import type { TaggedTemplate, ClientOptions } from 'rpc.do'
-import type { McpTool } from 'mcp.do'
-
 // ============================================================================
-// Core Types
+// AST Types (tree-sitter-bash compatible)
 // ============================================================================
 
-/**
- * Result of any bashx operation
- */
-export interface BashxResult {
-  success: boolean
-  stdout?: string
-  stderr?: string
-  exitCode?: number
-  command?: string
-  dryRun?: boolean
-  explanation?: string
-  error?: BashxError
-  metadata?: ResultMetadata
+export type BashNode =
+  | Program
+  | List
+  | Pipeline
+  | Command
+  | Subshell
+  | CompoundCommand
+  | FunctionDef
+  | Word
+  | Redirect
+  | Assignment
+
+export interface Program {
+  type: 'Program'
+  body: BashNode[]
+  errors?: ParseError[]
 }
 
-export interface ResultMetadata {
-  duration?: number
-  startedAt?: string
-  completedAt?: string
-  attempts?: number
-  recovered?: boolean
-  recoveryStrategy?: string
+export interface List {
+  type: 'List'
+  operator: '&&' | '||' | ';' | '&'
+  left: BashNode
+  right: BashNode
 }
 
-export interface BashxError {
-  code: string
+export interface Pipeline {
+  type: 'Pipeline'
+  negated: boolean
+  commands: Command[]
+}
+
+export interface Command {
+  type: 'Command'
+  name: Word | null
+  prefix: Assignment[]
+  args: Word[]
+  redirects: Redirect[]
+}
+
+export interface Subshell {
+  type: 'Subshell'
+  body: BashNode[]
+}
+
+export interface CompoundCommand {
+  type: 'CompoundCommand'
+  kind: 'if' | 'for' | 'while' | 'until' | 'case' | 'select' | 'brace' | 'arithmetic'
+  body: BashNode[]
+}
+
+export interface FunctionDef {
+  type: 'FunctionDef'
+  name: string
+  body: BashNode
+}
+
+export interface Word {
+  type: 'Word'
+  value: string
+  quoted?: 'single' | 'double' | 'ansi-c' | 'locale'
+  expansions?: Expansion[]
+}
+
+export interface Expansion {
+  type: 'ParameterExpansion' | 'CommandSubstitution' | 'ArithmeticExpansion' | 'ProcessSubstitution'
+  start: number
+  end: number
+  content: string | BashNode[]
+}
+
+export interface Redirect {
+  type: 'Redirect'
+  op: '>' | '>>' | '<' | '<<' | '<<<' | '>&' | '<&' | '<>' | '>|'
+  fd?: number
+  target: Word
+}
+
+export interface Assignment {
+  type: 'Assignment'
+  name: string
+  value: Word | null
+  operator: '=' | '+='
+}
+
+export interface ParseError {
   message: string
-  category: ErrorCategory
-  recoverable: boolean
-  suggestions?: string[]
+  line: number
+  column: number
+  suggestion?: string
 }
 
-export type ErrorCategory =
-  | 'permission_denied'
-  | 'not_found'
-  | 'disk_full'
-  | 'network_timeout'
-  | 'syntax_error'
-  | 'command_not_found'
-  | 'argument_error'
-  | 'resource_busy'
-  | 'unknown'
-
 // ============================================================================
-// Safety Types
+// Safety & Classification Types
 // ============================================================================
 
-/**
- * Classification of a command's safety characteristics
- */
 export interface CommandClassification {
-  type: CommandType
+  type: 'read' | 'write' | 'delete' | 'execute' | 'network' | 'system' | 'mixed'
+  impact: 'none' | 'low' | 'medium' | 'high' | 'critical'
   reversible: boolean
-  scope: CommandScope
-  impact: ImpactLevel
-  requires: SafetyRequirement[]
-  confidence: number
+  reason: string
 }
 
-export type CommandType =
-  | 'read'      // Only reads data (ls, cat, grep)
-  | 'write'     // Creates or modifies files
-  | 'delete'    // Removes data
-  | 'execute'   // Runs programs
-  | 'network'   // Network operations
-  | 'system'    // System-level operations
-  | 'mixed'     // Multiple types combined
-
-export type CommandScope =
-  | 'file'       // Single file operation
-  | 'directory'  // Directory operation
-  | 'tree'       // Recursive directory operation
-  | 'system'     // System-wide
-  | 'network'    // External network
-  | 'global'     // Affects everything
-
-export type ImpactLevel =
-  | 'none'       // No side effects (pure read)
-  | 'low'        // Easily reversible
-  | 'medium'     // Reversible with effort
-  | 'high'       // Difficult to reverse
-  | 'critical'   // Irreversible or dangerous
-
-export type SafetyRequirement =
-  | 'confirmation'  // User must confirm
-  | 'backup'        // Create backup first
-  | 'dryrun'        // Show what would happen
-  | 'sudo'          // Requires elevation
-  | 'audit'         // Log for audit trail
-
-/**
- * Detailed safety analysis report
- */
-export interface SafetyReport {
-  safe: boolean
-  classification: CommandClassification
-  risks: Risk[]
-  recommendations: string[]
-  alternatives?: AlternativeCommand[]
+export interface Intent {
+  commands: string[]
+  reads: string[]
+  writes: string[]
+  deletes: string[]
+  network: boolean
+  elevated: boolean
 }
 
-export interface Risk {
-  severity: 'low' | 'medium' | 'high' | 'critical'
-  description: string
-  mitigation?: string
-}
-
-export interface AlternativeCommand {
-  command: string
-  description: string
-  saferBecause: string
-}
-
-export interface SafetyContext {
-  cwd?: string
-  user?: string
-  environment?: Record<string, string>
-  recentCommands?: string[]
-  gitStatus?: { dirty: boolean; branch: string }
+export interface Fix {
+  type: 'insert' | 'replace' | 'delete'
+  position: number | 'start' | 'end'
+  value?: string
+  reason: string
 }
 
 // ============================================================================
-// Execution Types
+// Result Type
 // ============================================================================
 
-export interface RunOptions {
-  cmd: string
-  intent?: string
-  cwd?: string
-  env?: Record<string, string>
-  timeout?: number
-  require?: {
-    safe?: boolean
-    reversible?: boolean
-    maxImpact?: ImpactLevel
+export interface BashResult {
+  // Input
+  input: string
+
+  // AST Analysis
+  ast?: Program
+  valid: boolean
+  errors?: ParseError[]
+  fixed?: {
+    command: string
+    changes: Fix[]
   }
-  dryRun?: boolean
-  recover?: boolean
-  maxAttempts?: number
-}
 
-export interface ExecOptions {
-  cwd?: string
-  env?: Record<string, string>
-  timeout?: number
-  shell?: string
-  recover?: boolean
-  maxAttempts?: number
-  onStdout?: (chunk: string) => void
-  onStderr?: (chunk: string) => void
-}
+  // Semantic Understanding
+  intent: Intent
 
-export interface ExecResult extends BashxResult {
-  pid?: number
-  signal?: string
-  timedOut?: boolean
-}
-
-// ============================================================================
-// Generation Types
-// ============================================================================
-
-export interface GenerateContext {
-  cwd?: string
-  platform?: 'darwin' | 'linux' | 'windows'
-  shell?: 'bash' | 'zsh' | 'sh' | 'fish' | 'powershell'
-  availableCommands?: string[]
-  installedPackages?: string[]
-  projectType?: string
-  gitStatus?: { dirty: boolean; branch: string }
-}
-
-export interface GeneratedCommand {
-  command: string
-  explanation: string
+  // Safety Classification
   classification: CommandClassification
-  alternatives?: AlternativeCommand[]
-  warnings?: string[]
-}
 
-// ============================================================================
-// Explanation Types
-// ============================================================================
-
-export interface Explanation {
+  // Execution
   command: string
-  summary: string
-  breakdown: CommandBreakdown[]
-  classification: CommandClassification
-  sideEffects: string[]
-  examples?: string[]
-  documentation?: string
-  manPage?: string
-}
-
-export interface CommandBreakdown {
-  part: string
-  type: 'command' | 'flag' | 'argument' | 'operator' | 'redirect' | 'pipe'
-  explanation: string
-}
-
-// ============================================================================
-// Pipe Types
-// ============================================================================
-
-export type PipeStep =
-  | string                              // Raw command
-  | { cmd: string; transform?: boolean } // Command with AI transform
-  | ((input: string) => string | Promise<string>) // Transform function
-
-export interface PipeResult extends BashxResult {
-  steps: PipeStepResult[]
-}
-
-export interface PipeStepResult {
-  step: number
-  command: string
+  generated: boolean
   stdout: string
   stderr: string
   exitCode: number
-  duration: number
+
+  // Safety Gate
+  blocked?: boolean
+  requiresConfirm?: boolean
+  blockReason?: string
+
+  // Recovery
+  undo?: string
+  suggestions?: string[]
 }
 
 // ============================================================================
 // Client Types
 // ============================================================================
 
-export interface DoOptions {
-  model?: string
-  context?: GenerateContext
-  safe?: boolean
+export interface BashOptions {
+  confirm?: boolean
   dryRun?: boolean
+  timeout?: number
+  cwd?: string
 }
 
-/**
- * Main bashx client interface
- */
-export interface BashxClient {
-  // Tagged template - natural language to command
-  do: TaggedTemplate<Promise<BashxResult>>
-
-  // Direct execution with intent
-  run(options: RunOptions): Promise<BashxResult>
-
-  // Explain what a command does
-  explain(cmd: string): Promise<Explanation>
-
-  // Safety analysis
-  safe(cmd: string, context?: SafetyContext): Promise<SafetyReport>
-
-  // Generate command from intent
-  generate(intent: string, context?: GenerateContext): Promise<GeneratedCommand>
-
-  // Execute with automatic recovery
-  exec(cmd: string, options?: ExecOptions): Promise<ExecResult>
-
-  // Pipe chains with AI understanding
-  pipe(...steps: PipeStep[]): Promise<PipeResult>
-
-  // Dry run - show what would happen
-  dryRun(cmd: string): Promise<BashxResult>
-
-  // Undo last command (if reversible)
-  undo(): Promise<BashxResult>
-
-  // Parse command output with schema
-  parse<T>(output: string, schema: Record<string, string>): Promise<T>
-
-  // Fix broken command
-  fix(cmd: string, error: string): Promise<GeneratedCommand>
-
-  // Get command history
-  history(options?: { limit?: number; filter?: string }): Promise<HistoryEntry[]>
-
-  // MCP integration
-  listTools(): Promise<McpTool[]>
-  invokeTool(name: string, params: Record<string, unknown>): Promise<BashxResult>
-}
-
-export interface HistoryEntry {
-  command: string
-  timestamp: string
-  exitCode: number
-  duration: number
-  cwd: string
+export interface BashClient {
+  (input: string, options?: BashOptions): Promise<BashResult>
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<BashResult>
 }
 
 // ============================================================================
-// MCP Types
+// MCP Tool Type
 // ============================================================================
 
-export interface BashxMcpTool {
-  name: string
+export interface BashMcpTool {
+  name: 'bash'
   description: string
   inputSchema: {
     type: 'object'
-    properties: Record<string, unknown>
-    required?: string[]
+    properties: {
+      input: { type: 'string'; description: string }
+      confirm: { type: 'boolean'; description: string }
+    }
+    required: ['input']
   }
 }
-
-export type BashxToolName =
-  | 'bash_run'
-  | 'bash_explain'
-  | 'bash_safe'
-  | 'bash_generate'
-  | 'bash_dry_run'
-  | 'bash_pipe'
-  | 'bash_parse'
-  | 'bash_env'
-  | 'bash_history'
-  | 'bash_alias'
-  | 'bash_which'
-  | 'bash_man'
-  | 'bash_complete'
-  | 'bash_fix'
-  | 'bash_optimize'
-  | 'bash_undo'
-  | 'bash_script'
-  | 'bash_cron'
-
-// ============================================================================
-// Recovery Types
-// ============================================================================
-
-export interface RecoveryStrategy {
-  errorPattern: RegExp | string
-  category: ErrorCategory
-  actions: RecoveryAction[]
-}
-
-export type RecoveryAction =
-  | { type: 'retry'; delay?: number }
-  | { type: 'sudo' }
-  | { type: 'create_directory'; path: string }
-  | { type: 'install_package'; package: string }
-  | { type: 'cleanup'; path: string }
-  | { type: 'alternative'; command: string }
-  | { type: 'ask_user'; message: string }
