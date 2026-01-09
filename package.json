@@ -25,6 +25,10 @@
     "./db": {
       "types": "./dist/db/index.d.ts",
       "import": "./dist/db/index.js"
+    },
+    "./ast": {
+      "types": "./dist/ast/index.d.ts",
+      "import": "./dist/ast/index.js"
     }
   },
   "files": [
@@ -59,6 +63,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.7.4",
     "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/node": "^25.0.3",
     "drizzle-orm": "^0.45.1",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",

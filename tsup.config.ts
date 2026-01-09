@@ -7,6 +7,7 @@ export default defineConfig({
     'db/index': 'src/db/index.ts',
     'mcp/index': 'src/mcp/index.ts',
     'safety/index': 'src/safety/index.ts',
+    'ast/index': 'src/ast/index.ts',
   },
   format: ['esm'],
   dts: true,
