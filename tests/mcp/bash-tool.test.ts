@@ -406,7 +406,8 @@ describe('MCP Tool Result Formatting', () => {
 
   describe('Undo Capability', () => {
     it('should include undo for reversible operations', async () => {
-      const result = await handleBash({ input: 'mv old.txt new.txt' })
+      // mv requires confirmation now that it's classified as dangerous
+      const result = await handleBash({ input: 'mv old.txt new.txt', confirm: true })
 
       expect(result.undo).toBeDefined()
       expect(result.undo).toBe('mv new.txt old.txt')

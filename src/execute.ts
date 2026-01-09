@@ -582,10 +582,9 @@ function requiresConfirmation(command: string, classification: SafetyClassificat
   }
 
   // Check for dangerous patterns - but only outside of quotes
-  // Note: mv and cp are not in this list because they are handled by classification
-  // (only require confirmation if targeting system paths)
   const dangerousPatterns = [
     { pattern: /\brm\b/, name: 'rm' },
+    { pattern: /\bmv\b/, name: 'mv' },
     { pattern: /\bsudo\b/, name: 'sudo' },
     { pattern: /\bchmod\b/, name: 'chmod' },
     { pattern: /\bchown\b/, name: 'chown' },
