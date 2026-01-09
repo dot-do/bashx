@@ -856,3 +856,18 @@ export type {
   GetContainerFn,
   ContainerExecutorConfig,
 } from './container-executor.js'
+
+// Re-export tiered executor
+export {
+  TieredExecutor,
+  createTieredExecutor,
+} from './tiered-executor.js'
+
+export type {
+  ExecutionTier,
+  TierClassification,
+  RpcServiceBinding,
+  WorkerLoaderBinding,
+  SandboxBinding,
+  TieredExecutorConfig,
+} from './tiered-executor.js'
