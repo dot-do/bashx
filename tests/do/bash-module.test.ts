@@ -570,46 +570,75 @@ describe('withBash type exports', () => {
 
 import type { FsCapability, FsEntry, FsStat } from '../../src/types.js'
 
-// Helper to create a mock FsCapability
+/**
+ * Helper to create a mock FsCapability that matches fsx.do's interface.
+ *
+ * fsx.do's FsCapability has:
+ * - read(path, options?) - returns string when encoding is 'utf-8', Uint8Array otherwise
+ * - list(path, options?) - returns Dirent[] (with methods) when withFileTypes: true
+ * - stat(path) - returns Stats with isFile()/isDirectory() as methods
+ */
 function createMockFsCapability(
   files: Record<string, string> = {},
-  stats: Record<string, Partial<FsStat>> = {},
+  statOverrides: Record<string, { isFile?: boolean; isDirectory?: boolean }> = {},
 ): FsCapability {
   return {
-    read: vi.fn(async (path: string) => {
+    // fsx.do read() accepts options parameter with encoding
+    read: vi.fn(async (path: string, options?: { encoding?: string }) => {
       if (path in files) {
         return files[path]
       }
       throw new Error(`File not found: ${path}`)
     }),
-    exists: vi.fn(async (path: string) => path in files || path in stats),
-    list: vi.fn(async (path: string) => {
+    exists: vi.fn(async (path: string) => path in files || path in statOverrides),
+    // fsx.do list() accepts options and returns Dirent[] with methods when withFileTypes: true
+    list: vi.fn(async (path: string, options?: { withFileTypes?: boolean }) => {
       // Return entries based on what files start with the path
-      const entries: FsEntry[] = []
-      for (const filePath of Object.keys({ ...files, ...stats })) {
+      const entries: Array<{ name: string; isDirectory(): boolean }> = []
+      for (const filePath of Object.keys({ ...files, ...statOverrides })) {
         if (filePath.startsWith(path === '.' ? '' : path)) {
           const name = filePath.replace(path === '.' ? '' : path + '/', '').split('/')[0]
           if (name && !entries.some((e) => e.name === name)) {
+            const isDir = !filePath.includes('.') || filePath.endsWith('/')
             entries.push({
               name,
-              isDirectory: !filePath.includes('.') || filePath.endsWith('/'),
+              // fsx.do Dirent has isDirectory() as a method
+              isDirectory: () => isDir,
             })
           }
         }
       }
       return entries
     }),
+    // fsx.do stat() returns Stats with isFile()/isDirectory() as methods
     stat: vi.fn(async (path: string) => {
-      const defaultStat: FsStat = {
-        size: files[path]?.length || 0,
-        isDirectory: path.endsWith('/') || !(path in files),
-        isFile: path in files,
-        createdAt: new Date('2025-01-01'),
-        modifiedAt: new Date('2025-01-01'),
+      // Check for overrides first
+      const override = statOverrides[path]
+      const isDir = override?.isDirectory ?? (path.endsWith('/') || !(path in files))
+      const isFile = override?.isFile ?? (path in files)
+      const size = files[path]?.length || 0
+      return {
+        size,
+        // fsx.do Stats class has isFile() and isDirectory() as methods
+        isFile: () => isFile,
+        isDirectory: () => isDir,
+        // Additional Stats properties for compatibility
+        mode: 0o644,
+        uid: 0,
+        gid: 0,
+        nlink: 1,
+        dev: 0,
+        ino: 0,
+        rdev: 0,
+        blksize: 4096,
+        blocks: Math.ceil(size / 512),
+        atimeMs: Date.now(),
+        mtimeMs: Date.now(),
+        ctimeMs: Date.now(),
+        birthtimeMs: Date.now(),
       }
-      return { ...defaultStat, ...stats[path] }
     }),
-  }
+  } as unknown as FsCapability
 }
 
 describe('BashModule with FsCapability', () => {
@@ -650,7 +679,8 @@ describe('BashModule with FsCapability', () => {
 
       expect(result.stdout).toBe('Hello, World!')
       expect(result.exitCode).toBe(0)
-      expect(fs.read).toHaveBeenCalledWith('file.txt')
+      // fsx.do read() is called with encoding option
+      expect(fs.read).toHaveBeenCalledWith('file.txt', { encoding: 'utf-8' })
       expect(executor.execute).not.toHaveBeenCalled()
     })
 
@@ -699,11 +729,11 @@ describe('BashModule with FsCapability', () => {
         'file1.txt': 'content',
         'file2.txt': 'content',
       })
-      // Override list to return specific entries
+      // Override list to return fsx.do Dirent-like entries with isDirectory() as method
       ;(fs.list as any).mockResolvedValue([
-        { name: 'file1.txt', isDirectory: false },
-        { name: 'file2.txt', isDirectory: false },
-        { name: 'subdir', isDirectory: true },
+        { name: 'file1.txt', isDirectory: () => false },
+        { name: 'file2.txt', isDirectory: () => false },
+        { name: 'subdir', isDirectory: () => true },
       ])
       const bash = new BashModule(executor, { fs })
 
@@ -713,18 +743,20 @@ describe('BashModule with FsCapability', () => {
       expect(result.stdout).toContain('file2.txt')
       expect(result.stdout).toContain('subdir/')
       expect(result.exitCode).toBe(0)
-      expect(fs.list).toHaveBeenCalledWith('.')
+      // fsx.do list() is called with withFileTypes option
+      expect(fs.list).toHaveBeenCalledWith('.', { withFileTypes: true })
     })
 
     it('should list specific directory', async () => {
       const executor = createMockExecutor()
       const fs = createMockFsCapability()
-      ;(fs.list as any).mockResolvedValue([{ name: 'nested.txt', isDirectory: false }])
+      ;(fs.list as any).mockResolvedValue([{ name: 'nested.txt', isDirectory: () => false }])
       const bash = new BashModule(executor, { fs })
 
       const result = await bash.exec('ls', ['/app'])
 
-      expect(fs.list).toHaveBeenCalledWith('/app')
+      // fsx.do list() is called with withFileTypes option
+      expect(fs.list).toHaveBeenCalledWith('/app', { withFileTypes: true })
     })
   })
 
@@ -910,7 +942,8 @@ describe('withBash with FsCapability integration', () => {
     const result = await instance.bash.exec('cat', ['config.json'])
 
     expect(result.stdout).toBe('{"key": "value"}')
-    expect(fsCapability.read).toHaveBeenCalledWith('config.json')
+    // fsx.do read() is called with encoding option
+    expect(fsCapability.read).toHaveBeenCalledWith('config.json', { encoding: 'utf-8' })
     expect(executor.execute).not.toHaveBeenCalled()
   })
 

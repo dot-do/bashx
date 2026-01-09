@@ -961,11 +961,29 @@ export interface BashCapability {
 }
 
 // ============================================================================
-// Filesystem Capability Types (for FsModule integration)
+// Filesystem Capability Types (from fsx.do)
 // ============================================================================
 
 /**
+ * Re-export the comprehensive FsCapability interface from fsx.do.
+ *
+ * fsx.do provides a full POSIX-like filesystem API for Cloudflare Durable Objects
+ * with tiered storage (hot/warm/cold), streaming support, and more.
+ *
+ * bashx uses a subset of this interface for Tier 1 native operations:
+ * - read(): For cat, head, tail commands
+ * - exists(): For test -e commands
+ * - list(): For ls commands
+ * - stat(): For test -f, test -d commands
+ *
+ * @see https://github.com/dot-do/fsx for full documentation
+ */
+export type { FsCapability, Stats as FsStats, Dirent, ReadOptions, ListOptions } from 'fsx.do'
+
+/**
  * Filesystem entry returned by list operations.
+ * This is a simplified interface for backward compatibility.
+ * The full Dirent class from fsx.do provides more functionality.
  */
 export interface FsEntry {
   /** Entry name (file or directory name) */
@@ -976,6 +994,8 @@ export interface FsEntry {
 
 /**
  * File/directory statistics.
+ * This is a simplified interface for backward compatibility.
+ * The full Stats class from fsx.do provides POSIX-compatible methods.
  */
 export interface FsStat {
   /** Size in bytes */
@@ -992,6 +1012,7 @@ export interface FsStat {
 
 /**
  * Options for filesystem read operations.
+ * @deprecated Use ReadOptions from fsx.do instead
  */
 export interface FsReadOptions {
   /** Encoding for reading file content */
@@ -1004,6 +1025,7 @@ export interface FsReadOptions {
 
 /**
  * Options for filesystem list operations.
+ * @deprecated Use ListOptions from fsx.do instead
  */
 export interface FsListOptions {
   /** Filter function for entries */
@@ -1012,49 +1034,6 @@ export interface FsListOptions {
   recursive?: boolean
   /** Pattern to match (glob-like) */
   pattern?: string
-}
-
-/**
- * Filesystem capability interface.
- * This is the interface that FsModule from dotdo implements.
- * BashModule can optionally use this for optimized file operations.
- *
- * When available, commands like `cat`, `head`, `tail` can be executed
- * natively via $.fs instead of spawning a subprocess.
- *
- * @example
- * ```typescript
- * // In a DO with both fs and bash capabilities
- * class MyDO extends withBash(withFs(DO), (instance) => ({
- *   execute: async (cmd, opts) => containerExecutor.run(cmd, opts)
- * })) {
- *   async readFile(path: string) {
- *     // This might use $.fs.read() internally for 'cat' commands
- *     return this.$.bash.exec('cat', [path])
- *   }
- * }
- * ```
- */
-export interface FsCapability {
-  /**
-   * Read file content.
-   */
-  read(path: string, options?: FsReadOptions): Promise<string>
-
-  /**
-   * Check if a path exists.
-   */
-  exists(path: string): Promise<boolean>
-
-  /**
-   * List directory contents.
-   */
-  list(path: string, options?: FsListOptions): Promise<FsEntry[]>
-
-  /**
-   * Get file/directory statistics.
-   */
-  stat(path: string): Promise<FsStat>
 }
 
 // ============================================================================

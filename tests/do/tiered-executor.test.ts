@@ -23,6 +23,14 @@ import type { FsCapability, FsEntry, FsStat, BashResult } from '../../src/types.
 // MOCK HELPERS
 // ============================================================================
 
+/**
+ * Create a mock FsCapability that matches fsx.do's interface.
+ *
+ * fsx.do's FsCapability has:
+ * - read(path, options?) - returns string when encoding is 'utf-8', Uint8Array otherwise
+ * - list(path, options?) - returns Dirent[] (with methods) when withFileTypes: true
+ * - stat(path) - returns Stats with isFile()/isDirectory() as methods
+ */
 function createMockFsCapability(): FsCapability {
   const files: Record<string, string> = {
     '/test.txt': 'hello world\n',
@@ -30,45 +38,76 @@ function createMockFsCapability(): FsCapability {
     '/data.json': '{"name": "test"}\n',
   }
 
-  const directories: Record<string, FsEntry[]> = {
+  // fsx.do returns Dirent-like objects with isDirectory() as a method
+  const directories: Record<string, Array<{ name: string; isDirectory(): boolean }>> = {
     '/': [
-      { name: 'test.txt', isDirectory: false },
-      { name: 'multi.txt', isDirectory: false },
-      { name: 'data.json', isDirectory: false },
-      { name: 'subdir', isDirectory: true },
+      { name: 'test.txt', isDirectory: () => false },
+      { name: 'multi.txt', isDirectory: () => false },
+      { name: 'data.json', isDirectory: () => false },
+      { name: 'subdir', isDirectory: () => true },
     ],
-    '/subdir': [{ name: 'nested.txt', isDirectory: false }],
+    '/subdir': [{ name: 'nested.txt', isDirectory: () => false }],
   }
 
   return {
-    read: async (path) => {
+    // fsx.do read() accepts options parameter with encoding
+    read: async (path: string, options?: { encoding?: string }) => {
       if (files[path]) return files[path]
       throw new Error(`ENOENT: no such file: ${path}`)
     },
     exists: async (path) => path in files || path in directories,
-    list: async (path) => directories[path] || [],
-    stat: async (path): Promise<FsStat> => {
+    // fsx.do list() accepts options and returns Dirent[] with methods when withFileTypes: true
+    list: async (path: string, options?: { withFileTypes?: boolean }) => {
+      return directories[path] || []
+    },
+    // fsx.do stat() returns Stats with isFile()/isDirectory() as methods
+    stat: async (path: string) => {
       if (files[path]) {
         return {
           size: files[path].length,
-          isDirectory: false,
-          isFile: true,
-          createdAt: new Date(),
-          modifiedAt: new Date(),
+          // fsx.do Stats class has isFile() and isDirectory() as methods
+          isDirectory: () => false,
+          isFile: () => true,
+          // Additional Stats properties for compatibility
+          mode: 0o644,
+          uid: 0,
+          gid: 0,
+          nlink: 1,
+          dev: 0,
+          ino: 0,
+          rdev: 0,
+          blksize: 4096,
+          blocks: 0,
+          atimeMs: Date.now(),
+          mtimeMs: Date.now(),
+          ctimeMs: Date.now(),
+          birthtimeMs: Date.now(),
         }
       }
       if (directories[path]) {
         return {
           size: 0,
-          isDirectory: true,
-          isFile: false,
-          createdAt: new Date(),
-          modifiedAt: new Date(),
+          // fsx.do Stats class has isFile() and isDirectory() as methods
+          isDirectory: () => true,
+          isFile: () => false,
+          mode: 0o755,
+          uid: 0,
+          gid: 0,
+          nlink: 1,
+          dev: 0,
+          ino: 0,
+          rdev: 0,
+          blksize: 4096,
+          blocks: 0,
+          atimeMs: Date.now(),
+          mtimeMs: Date.now(),
+          ctimeMs: Date.now(),
+          birthtimeMs: Date.now(),
         }
       }
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     },
-  }
+  } as unknown as FsCapability
 }
 
 function createMockSandbox(): SandboxBinding {

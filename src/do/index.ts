@@ -373,7 +373,7 @@ export class BashModule implements BashCapability {
   }
 
   /**
-   * Native implementation of 'cat' using FsCapability.
+   * Native implementation of 'cat' using FsCapability (from fsx.do).
    */
   private async nativeCat(args: string[], options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs || args.length === 0) return null
@@ -383,7 +383,10 @@ export class BashModule implements BashCapability {
     if (files.length === 0) return null
 
     try {
-      const contents = await Promise.all(files.map((file) => this.fs!.read(file)))
+      // Use encoding: 'utf-8' to ensure we get strings back from fsx.do
+      const contents = await Promise.all(
+        files.map((file) => this.fs!.read(file, { encoding: 'utf-8' }))
+      )
       const stdout = contents.join('')
 
       return this.createNativeResult(`cat ${args.join(' ')}`, stdout)
@@ -394,7 +397,7 @@ export class BashModule implements BashCapability {
   }
 
   /**
-   * Native implementation of 'ls' using FsCapability.
+   * Native implementation of 'ls' using FsCapability (from fsx.do).
    */
   private async nativeLs(args: string[], options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
@@ -404,8 +407,12 @@ export class BashModule implements BashCapability {
     const path = paths[0] || '.'
 
     try {
-      const entries = await this.fs.list(path)
-      const stdout = entries.map((e) => (e.isDirectory ? `${e.name}/` : e.name)).join('\n') + '\n'
+      // Use withFileTypes: true to get Dirent objects from fsx.do
+      const entries = await this.fs.list(path, { withFileTypes: true })
+      // fsx.do Dirent has isDirectory() as a method
+      const stdout = (entries as Array<{ name: string; isDirectory(): boolean }>)
+        .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+        .join('\n') + '\n'
 
       return this.createNativeResult(`ls ${args.join(' ')}`, stdout)
     } catch (error) {
@@ -415,7 +422,7 @@ export class BashModule implements BashCapability {
   }
 
   /**
-   * Native implementation of 'test' using FsCapability.
+   * Native implementation of 'test' using FsCapability (from fsx.do).
    */
   private async nativeTest(args: string[], options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
@@ -438,14 +445,16 @@ export class BashModule implements BashCapability {
           const exists = await this.fs.exists(path)
           if (!exists) return this.createNativeResult(`test ${args.join(' ')}`, '', '', 1)
           const stat = await this.fs.stat(path)
-          return this.createNativeResult(`test ${args.join(' ')}`, '', '', stat.isFile ? 0 : 1)
+          // fsx.do Stats class has isFile() as a method, not a property
+          return this.createNativeResult(`test ${args.join(' ')}`, '', '', stat.isFile() ? 0 : 1)
         }
         case '-d': {
           // Is directory
           const exists = await this.fs.exists(path)
           if (!exists) return this.createNativeResult(`test ${args.join(' ')}`, '', '', 1)
           const stat = await this.fs.stat(path)
-          return this.createNativeResult(`test ${args.join(' ')}`, '', '', stat.isDirectory ? 0 : 1)
+          // fsx.do Stats class has isDirectory() as a method, not a property
+          return this.createNativeResult(`test ${args.join(' ')}`, '', '', stat.isDirectory() ? 0 : 1)
         }
         default:
           return null // Unknown flag, fall back to executor
@@ -456,7 +465,7 @@ export class BashModule implements BashCapability {
   }
 
   /**
-   * Native implementation of 'head' using FsCapability.
+   * Native implementation of 'head' using FsCapability (from fsx.do).
    */
   private async nativeHead(args: string[], options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
@@ -477,7 +486,8 @@ export class BashModule implements BashCapability {
     if (!file) return null
 
     try {
-      const content = await this.fs.read(file)
+      // Use encoding: 'utf-8' to ensure we get a string back from fsx.do
+      const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
       const allLines = content.split('\n')
       const stdout = allLines.slice(0, lines).join('\n') + (allLines.length > lines ? '\n' : '')
 
@@ -489,7 +499,7 @@ export class BashModule implements BashCapability {
   }
 
   /**
-   * Native implementation of 'tail' using FsCapability.
+   * Native implementation of 'tail' using FsCapability (from fsx.do).
    */
   private async nativeTail(args: string[], options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
@@ -510,7 +520,8 @@ export class BashModule implements BashCapability {
     if (!file) return null
 
     try {
-      const content = await this.fs.read(file)
+      // Use encoding: 'utf-8' to ensure we get a string back from fsx.do
+      const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
       const allLines = content.split('\n')
       // Handle trailing newline - if last element is empty, don't count it
       const effectiveLines = allLines[allLines.length - 1] === '' ? allLines.slice(0, -1) : allLines

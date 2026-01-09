@@ -418,7 +418,14 @@ export class TieredExecutor implements BashExecutor {
   }
 
   /**
-   * Execute native filesystem operations via FsCapability
+   * Execute native filesystem operations via FsCapability (from fsx.do)
+   *
+   * fsx.do provides a comprehensive POSIX-like filesystem API. This method
+   * uses the following fsx.do methods:
+   * - read(path, { encoding: 'utf-8' }) - returns string for text operations
+   * - list(path, { withFileTypes: true }) - returns Dirent[] for directory listing
+   * - exists(path) - returns boolean for existence checks
+   * - stat(path) - returns Stats with isFile()/isDirectory() methods
    */
   private async executeNativeFs(
     cmd: string,
@@ -438,15 +445,25 @@ export class TieredExecutor implements BashExecutor {
           if (args.length === 0) {
             return this.createResult(`cat ${args.join(' ')}`, '', 'cat: missing operand', 1, 1)
           }
-          const contents = await Promise.all(args.filter(a => !a.startsWith('-')).map(f => this.fs!.read(f)))
+          // Use encoding: 'utf-8' to ensure we get strings back from fsx.do
+          const contents = await Promise.all(
+            args.filter(a => !a.startsWith('-')).map(f =>
+              this.fs!.read(f, { encoding: 'utf-8' })
+            )
+          )
           stdout = contents.join('')
           break
         }
 
         case 'ls': {
           const path = args.find(a => !a.startsWith('-')) || '.'
-          const entries = await this.fs.list(path)
-          stdout = entries.map(e => e.isDirectory ? `${e.name}/` : e.name).join('\n') + '\n'
+          // Use withFileTypes: true to get Dirent objects from fsx.do
+          const entries = await this.fs.list(path, { withFileTypes: true })
+          // fsx.do returns Dirent[] when withFileTypes is true
+          // Dirent has isDirectory() as a method
+          stdout = (entries as Array<{ name: string; isDirectory(): boolean }>)
+            .map(e => e.isDirectory() ? `${e.name}/` : e.name)
+            .join('\n') + '\n'
           break
         }
 
@@ -454,7 +471,8 @@ export class TieredExecutor implements BashExecutor {
           const file = args.find(a => !a.startsWith('-'))
           if (!file) return this.createResult('head', '', 'head: missing operand', 1, 1)
           const lines = parseInt(args.find(a => a.startsWith('-n'))?.slice(2) || '10', 10)
-          const content = await this.fs.read(file)
+          // Use encoding: 'utf-8' to ensure we get a string back
+          const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
           stdout = content.split('\n').slice(0, lines).join('\n') + '\n'
           break
         }
@@ -463,7 +481,8 @@ export class TieredExecutor implements BashExecutor {
           const file = args.find(a => !a.startsWith('-'))
           if (!file) return this.createResult('tail', '', 'tail: missing operand', 1, 1)
           const lines = parseInt(args.find(a => a.startsWith('-n'))?.slice(2) || '10', 10)
-          const content = await this.fs.read(file)
+          // Use encoding: 'utf-8' to ensure we get a string back
+          const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
           const allLines = content.split('\n')
           // Handle trailing newline - if last element is empty, exclude it from count
           const effectiveLines = allLines[allLines.length - 1] === '' ? allLines.slice(0, -1) : allLines
@@ -486,14 +505,16 @@ export class TieredExecutor implements BashExecutor {
               const exists = await this.fs.exists(path)
               if (!exists) { exitCode = 1; break }
               const stat = await this.fs.stat(path)
-              exitCode = stat.isFile ? 0 : 1
+              // fsx.do Stats class has isFile() as a method, not a property
+              exitCode = stat.isFile() ? 0 : 1
               break
             }
             case '-d': {
               const exists = await this.fs.exists(path)
               if (!exists) { exitCode = 1; break }
               const stat = await this.fs.stat(path)
-              exitCode = stat.isDirectory ? 0 : 1
+              // fsx.do Stats class has isDirectory() as a method, not a property
+              exitCode = stat.isDirectory() ? 0 : 1
               break
             }
             default:
