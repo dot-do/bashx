@@ -1,321 +1,363 @@
 # bashx.do
 
-> ONE tool. ONE interface. Maximum intelligence.
+**Safe shell execution for AI agents.** AST-parsed. Tiered execution. 1,400+ tests.
 
-**bashx** wraps bash with judgment. It doesn't just execute—it **thinks** before executing.
+[![npm version](https://img.shields.io/npm/v/bashx.do.svg)](https://www.npmjs.com/package/bashx.do)
+[![Tests](https://img.shields.io/badge/tests-1%2C415%20passing-brightgreen.svg)](https://github.com/dot-do/bashx)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## Why bashx?
+
+**AI agents need to run shell commands.** But giving an AI unrestricted shell access is terrifying.
+
+**bashx wraps bash with judgment.** Every command is parsed to an AST, analyzed for safety, and executed in the optimal tier - from native Workers APIs to full sandboxed Linux.
+
+**Scales to millions of agents.** Each agent gets its own isolated shell environment on Cloudflare's edge network. No shared state. No noisy neighbors. Just safe, fast shell execution at global scale.
 
 ```typescript
-import { bash } from 'bashx'
+import bash from 'bashx.do'
 
-// Just run commands
+// Run commands safely
 await bash`ls -la`
-
-// Or describe what you want
-await bash`find all typescript files over 100 lines`
+await bash`cat package.json`
 
 // Dangerous commands are blocked
-await bash`rm -rf /`  // → { blocked: true, requiresConfirm: true }
+await bash`rm -rf /`
+// → { blocked: true, reason: 'Recursive delete targeting root filesystem' }
 
-// Unless you confirm
-await bash('rm -rf /', { confirm: true })  // → executes
+// Unless explicitly confirmed
+await bash`rm -rf node_modules`({ confirm: true })
 ```
-
-## DO Integration
-
-bashx provides the `$.bash` capability for dotdo Durable Objects:
-
-```typescript
-import { DO } from 'dotdo/bash'
-
-class MySite extends DO {
-  async build() {
-    // $.bash is lazy-loaded from bashx
-    await this.$.bash`npm install && npm run build`
-    const result = await this.$.bash.exec('npm', ['run', 'test'])
-  }
-}
-```
-
-### Execution Tiers
-
-bashx uses a **tiered execution model** for optimal performance:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Tier 1: Native In-Worker (<1ms)                   │
-├─────────────────────────────────────────────────────────────────────┤
-│  • fetch/ofetch (curl equivalent)     • JSON operations              │
-│  • Node.js APIs (nodejs_compat_v2)    • Text processing              │
-│  • Path, crypto, streams, zlib        • Basic file ops via $.fs      │
-└─────────────────────────────────────────────────────────────────────┘
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                 Tier 2: RPC Bindings (<5ms)                          │
-├─────────────────────────────────────────────────────────────────────┤
-│  • $.jq → jq.do (jqjs as a service)                                  │
-│  • $.npm → npm.do (package resolution/execution)                     │
-│  • Heavy operations as separate Workers (keep bundle small)          │
-└─────────────────────────────────────────────────────────────────────┘
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│              Tier 3: worker_loaders (<10ms cold)                     │
-├─────────────────────────────────────────────────────────────────────┤
-│  • Dynamic npm packages (fetch from esm.sh, run in isolate)          │
-│  • User-provided code (sandboxed V8 isolate)                         │
-│  • ai-evaluate pattern for code execution                            │
-└─────────────────────────────────────────────────────────────────────┘
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│              Tier 4: Sandbox SDK (2-3s cold)                         │
-├─────────────────────────────────────────────────────────────────────┤
-│  Only for things that truly need Linux:                              │
-│  • Shell scripts with bash-specific features                         │
-│  • Python with native C extensions (numpy, pandas)                   │
-│  • Binary executables (ffmpeg, imagemagick)                          │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Native Command Mappings
-
-Most Unix commands map to native Workers APIs:
-
-| Command | Native Equivalent | Tier |
-|---------|-------------------|------|
-| `curl` | `ofetch`/`fetch` | 1 |
-| `cat`, `head`, `tail` | `$.fs.read()` | 1 |
-| `ls`, `find` | `$.fs.list()` | 1 |
-| `jq` | RPC to jq.do or inline jqjs | 2 |
-| `node` | nodejs_compat_v2 | 1 |
-| `npm install` | esm.sh + worker_loaders | 3 |
-| `bash script.sh` | Sandbox SDK | 4 |
-
-### As an RPC Service
-
-For heavy bash operations, bashx can run as a separate Worker:
-
-```toml
-# wrangler.toml
-[[services]]
-binding = "BASHX"
-service = "bashx-do"
-```
-
-```typescript
-// Heavy operations go through RPC
-const result = await env.BASHX.exec('complex-script.sh')
-```
-
-## The Insight
-
-```
-fsx  → wraps filesystem protocol → discrete tools make sense
-gitx → wraps git protocol       → discrete tools make sense
-bashx → IS the universal tool   → ONE tool: bash
-```
-
-Bash already has thousands of "tools" - they're called commands. We don't re-wrap what's already wrapped.
 
 ## Installation
 
 ```bash
-npm install bashx
-# or
-pnpm add bashx
+npm install bashx.do
 ```
 
-## API
-
-### Tagged Template
+## Quick Start
 
 ```typescript
-import { bash } from 'bashx'
+import bash from 'bashx.do'
 
-// Commands
-await bash`git status`
-await bash`find . -name "*.ts" | wc -l`
+// Simple commands
+const files = await bash`ls -la`
+const content = await bash`cat README.md`
 
-// With interpolation
-const file = 'package.json'
-await bash`cat ${file}`
+// With interpolation (automatically escaped)
+const filename = 'my file.txt'
+await bash`cat ${filename}`  // → cat 'my file.txt'
 
 // Natural language (auto-detected)
-await bash`list all typescript files modified today`
-await bash`find large files over 100MB`
+await bash`find all typescript files over 100 lines`
+await bash`show disk usage for current directory`
 ```
 
-### With Options
+## Features
+
+### AST-Based Safety Analysis
+
+Every command is parsed with tree-sitter-bash and analyzed structurally - not with regex:
 
 ```typescript
-// Confirm dangerous operations
-await bash('rm -rf node_modules', { confirm: true })
-
-// Dry run
-await bash('deploy.sh', { dryRun: true })
-
-// Custom timeout
-await bash('long-running-task', { timeout: 60000 })
-
-// Custom working directory
-await bash('npm install', { cwd: './packages/core' })
-```
-
-## Result Type
-
-Every invocation returns a rich result:
-
-```typescript
-interface BashResult {
-  // Input
-  input: string           // Original input
-  command: string         // Actual command (or generated)
-  generated: boolean      // Was command generated from intent?
-
-  // AST Analysis
-  ast?: Program           // Parsed AST (tree-sitter-bash)
-  valid: boolean          // Syntactically valid?
-  errors?: ParseError[]   // Syntax errors found
-  fixed?: {               // Auto-fixed version (if fixable)
-    command: string
-    changes: Fix[]
-  }
-
-  // Semantic Understanding
-  intent: {
-    commands: string[]    // Commands being run
-    reads: string[]       // Files being read
-    writes: string[]      // Files being written
-    deletes: string[]     // Files being deleted
-    network: boolean      // Network access?
-    elevated: boolean     // Needs sudo?
-  }
-
-  // Safety Classification
-  classification: {
-    type: 'read' | 'write' | 'delete' | 'execute' | 'network' | 'system'
-    impact: 'none' | 'low' | 'medium' | 'high' | 'critical'
-    reversible: boolean
-    reason: string
-  }
-
-  // Execution
-  stdout: string
-  stderr: string
-  exitCode: number
-
-  // Safety Gate
-  blocked?: boolean       // Was execution blocked?
-  requiresConfirm?: boolean
-  blockReason?: string
-
-  // Recovery
-  undo?: string           // Command to undo (if reversible)
-  suggestions?: string[]  // Optimizations, alternatives
-}
-```
-
-## MCP Integration
-
-**ONE tool: `bash`**
-
-```typescript
-{
-  name: 'bash',
-  description: 'Execute bash commands with AI-enhanced safety and AST-based validation',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      input: { type: 'string', description: 'Command or intent' },
-      confirm: { type: 'boolean', description: 'Confirm dangerous operations' }
-    },
-    required: ['input']
-  }
-}
-```
-
-### Claude Desktop Integration
-
-```json
-{
-  "mcpServers": {
-    "bashx": {
-      "command": "npx",
-      "args": ["bashx", "--mcp"]
-    }
-  }
-}
-```
-
-## Architecture
-
-```
-Input: command OR intent
-         ↓
-┌─────────────────────────────────────┐
-│         AST Parser                  │
-│  • tree-sitter-bash (WASM)         │
-│  • Parse to AST                    │
-│  • Recover from errors             │
-│  • Identify syntax issues          │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         AST Analysis                │
-│  • Extract commands, files         │
-│  • Structural safety analysis      │
-│  • Auto-fix syntax errors          │
-│  • Suggest optimizations           │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         Safety Gate                 │
-│  • Classify from AST (not regex)   │
-│  • Block critical operations       │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         Execution                   │
-│  • Run (possibly fixed) command    │
-│  • Track for undo                  │
-└─────────────────────────────────────┘
-         ↓
-Output: BashResult with AST metadata
-```
-
-## AST-Based Safety
-
-Safety analysis uses **structural AST analysis**, not regex:
-
-```typescript
-// AST knows this is rm with -rf flag targeting /
-// Not just pattern matching "rm -rf /"
-const ast = parse('rm -rf /')
-const analysis = analyze(ast)
+// bashx understands command structure
+await bash`rm -rf /`
+// AST analysis:
 // {
 //   type: 'delete',
 //   impact: 'critical',
 //   reversible: false,
 //   reason: 'Recursive delete targeting root filesystem'
 // }
+
+// Safe commands execute immediately
+await bash`ls -la`  // impact: 'none', executes
+
+// Dangerous commands require confirmation
+await bash`chmod -R 777 /`  // blocked, requires confirm: true
 ```
 
-This enables:
+### Tiered Execution
 
-1. **Structural detection** of dangerous patterns
-2. **Syntax error detection** and auto-fixing
-3. **Command optimization** suggestions
-4. **Intent extraction** from AST structure
+Commands run in the optimal tier for performance:
 
-## Syntax Fixing
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Tier 1: Native In-Worker (<1ms)                │
+├─────────────────────────────────────────────────────────────┤
+│  cat, ls, head, tail → fsx.do filesystem                    │
+│  curl, wget → fetch API                                     │
+│  echo, printf → native                                      │
+│  JSON operations → native                                   │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│              Tier 2: RPC Services (<5ms)                    │
+├─────────────────────────────────────────────────────────────┤
+│  jq → jq.do                                                 │
+│  git → gitx.do                                              │
+│  npm → npm.do                                               │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│              Tier 3: Dynamic Modules (<10ms)                │
+├─────────────────────────────────────────────────────────────┤
+│  npm packages loaded from esm.sh                            │
+│  Sandboxed V8 isolate execution                             │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│              Tier 4: Full Sandbox (2-3s cold)               │
+├─────────────────────────────────────────────────────────────┤
+│  Bash scripts with Linux-specific features                  │
+│  Python with native extensions                              │
+│  Binary executables (ffmpeg, imagemagick)                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Command Options
+
+```typescript
+// Confirm dangerous operations
+await bash`rm -rf node_modules`({ confirm: true })
+
+// Dry run (see what would happen)
+await bash`deploy.sh`({ dryRun: true })
+
+// Custom timeout
+await bash`long-running-task`({ timeout: 60000 })
+
+// Working directory
+await bash`npm install`({ cwd: './packages/core' })
+```
+
+### Rich Results
+
+Every command returns detailed information:
+
+```typescript
+const result = await bash`git status`
+
+result.stdout        // Command output
+result.stderr        // Error output
+result.exitCode      // Exit code
+
+result.ast           // Parsed AST (tree-sitter)
+result.intent        // { commands: ['git'], reads: [], writes: [] }
+result.classification // { type: 'read', impact: 'none', reversible: true }
+
+result.undo          // Command to reverse (if reversible)
+result.blocked       // Was execution blocked?
+result.blockReason   // Why it was blocked
+```
+
+### Syntax Fixing
 
 bashx can detect and fix malformed commands:
 
 ```typescript
-// Input with unclosed quote
 await bash`echo "hello`
-// → Detects unclosed quote, suggests fix
+// → Detects unclosed quote
 // → fixed: { command: 'echo "hello"', changes: [...] }
 ```
+
+### Undo Support
+
+Reversible commands can be undone:
+
+```typescript
+await bash`mv file.txt backup.txt`
+// result.undo = 'mv backup.txt file.txt'
+
+await bash`mkdir -p /app/data`
+// result.undo = 'rmdir /app/data'
+```
+
+## MCP Integration
+
+One tool for Claude Desktop and other MCP clients:
+
+```json
+{
+  "mcpServers": {
+    "bashx": {
+      "command": "npx",
+      "args": ["bashx.do", "--mcp"]
+    }
+  }
+}
+```
+
+The AI gets one tool: `bash`. It handles everything.
+
+```typescript
+{
+  name: 'bash',
+  description: 'Execute commands with AST-based safety analysis',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      input: { type: 'string', description: 'Command or intent' },
+      confirm: { type: 'boolean', description: 'Confirm dangerous operations' }
+    }
+  }
+}
+```
+
+## Durable Object Integration
+
+### With dotdo Framework
+
+```typescript
+import { DO } from 'dotdo'
+import { withBash } from 'bashx.do/do'
+
+class MySite extends withBash(DO) {
+  async build() {
+    await this.$.bash`npm install`
+    await this.$.bash`npm run build`
+    const result = await this.$.bash`npm test`
+    return result.exitCode === 0
+  }
+}
+```
+
+### As RPC Service
+
+```toml
+# wrangler.toml
+[[services]]
+binding = "BASHX"
+service = "bashx-worker"
+```
+
+```typescript
+const result = await env.BASHX.exec('complex-script.sh')
+```
+
+## Native Command Mappings
+
+Most Unix commands map to native Workers APIs:
+
+| Command | Native Implementation | Tier |
+|---------|----------------------|------|
+| `cat`, `head`, `tail` | fsx.do filesystem | 1 |
+| `ls`, `find` | fsx.do filesystem | 1 |
+| `curl`, `wget` | fetch API | 1 |
+| `echo`, `printf` | native | 1 |
+| `jq` | jq.do RPC | 2 |
+| `git` | gitx.do RPC | 2 |
+| `node` | V8 isolate | 3 |
+| `python`, `bash` | Sandbox | 4 |
+
+## API Reference
+
+### Tagged Template
+
+```typescript
+import bash from 'bashx.do'
+
+// Basic usage
+await bash`command`
+
+// With options
+await bash`command`({ confirm: true, timeout: 5000 })
+
+// With interpolation (auto-escaped)
+const file = 'my file.txt'
+await bash`cat ${file}`
+```
+
+### Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `confirm` | boolean | Allow dangerous operations |
+| `dryRun` | boolean | Show what would happen |
+| `timeout` | number | Timeout in milliseconds |
+| `cwd` | string | Working directory |
+
+### Result Type
+
+```typescript
+interface BashResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+
+  ast?: Program           // Parsed AST
+  intent: Intent          // Extracted intent
+  classification: Safety  // Safety classification
+
+  blocked?: boolean
+  blockReason?: string
+  undo?: string
+  suggestions?: string[]
+}
+```
+
+## How It Works
+
+```
+Input: "rm -rf node_modules"
+         ↓
+┌─────────────────────────────────────┐
+│         AST Parser                  │
+│    tree-sitter-bash (WASM)          │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         Safety Analysis             │
+│    Structural analysis, not regex   │
+│    → type: 'delete'                 │
+│    → impact: 'high'                 │
+│    → reversible: false              │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         Safety Gate                 │
+│    Block or require confirmation    │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         Tier Selection              │
+│    Pick optimal execution tier      │
+└─────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────┐
+│         Execute                     │
+│    Run in selected tier             │
+│    Track for undo                   │
+└─────────────────────────────────────┘
+         ↓
+Output: BashResult with full metadata
+```
+
+## Comparison
+
+| Feature | Raw shell | bashx.do |
+|---------|-----------|----------|
+| Safety analysis | None | AST-based |
+| Dangerous command blocking | No | Yes |
+| Undo support | No | Yes |
+| Tiered execution | No | Yes |
+| Edge-native | No | Yes |
+| AI-friendly | No | Yes |
+
+## Performance
+
+- **1,415 tests** covering all operations
+- **<1ms** for Tier 1 (native) commands
+- **<5ms** for Tier 2 (RPC) commands
+- **AST parsing** with tree-sitter WASM
 
 ## License
 
 MIT
+
+## Links
+
+- [GitHub](https://github.com/dot-do/bashx)
+- [Documentation](https://bashx.do)
+- [dotdo Framework](https://dotdo.dev)
