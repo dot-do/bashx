@@ -21,6 +21,10 @@
     "./do": {
       "types": "./dist/do/index.d.ts",
       "import": "./dist/do/index.js"
+    },
+    "./db": {
+      "types": "./dist/db/index.d.ts",
+      "import": "./dist/db/index.js"
     }
   },
   "files": [
@@ -36,18 +40,26 @@
     "lint": "eslint src",
     "clean": "rm -rf dist"
   },
-  "dependencies": {},
   "peerDependencies": {
+    "drizzle-orm": ">=0.30.0",
     "mcp.do": "*",
     "rpc.do": "*"
   },
   "peerDependenciesMeta": {
-    "mcp.do": { "optional": true },
-    "rpc.do": { "optional": true }
+    "mcp.do": {
+      "optional": true
+    },
+    "rpc.do": {
+      "optional": true
+    },
+    "drizzle-orm": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.7.4",
     "@cloudflare/workers-types": "^4.20250109.0",
+    "drizzle-orm": "^0.45.1",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^3.0.2"
