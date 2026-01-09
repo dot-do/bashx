@@ -949,3 +949,310 @@ describe('withBash with FsCapability integration', () => {
     expect(executor.execute).toHaveBeenCalled()
   })
 })
+
+// ============================================================================
+// DO Integration Pattern Tests
+// ============================================================================
+
+describe('DO Integration Patterns', () => {
+  describe('WorkflowContext-like integration', () => {
+    it('should support lazy capability initialization pattern', () => {
+      // Simulating the DO $ proxy pattern where capabilities are lazily initialized
+      const executor = createMockExecutor()
+
+      class MockWorkflowContext {
+        private _bash?: BashModule
+
+        get bash(): BashModule {
+          if (!this._bash) {
+            this._bash = new BashModule(executor)
+          }
+          return this._bash
+        }
+      }
+
+      const $ = new MockWorkflowContext()
+
+      // First access creates the module
+      const bash1 = $.bash
+      // Second access returns the same instance
+      const bash2 = $.bash
+
+      expect(bash1).toBe(bash2)
+      expect(bash1).toBeInstanceOf(BashModule)
+    })
+
+    it('should support capability registration pattern', () => {
+      // Pattern where DO registers capabilities at construction time
+      const executor = createMockExecutor()
+
+      class CapabilityRegistry {
+        private capabilities = new Map<string, unknown>()
+
+        register<T>(name: string, capability: T): void {
+          this.capabilities.set(name, capability)
+        }
+
+        get<T>(name: string): T | undefined {
+          return this.capabilities.get(name) as T | undefined
+        }
+      }
+
+      const registry = new CapabilityRegistry()
+      const bashModule = new BashModule(executor)
+
+      registry.register('bash', bashModule)
+
+      const retrieved = registry.get<BashModule>('bash')
+      expect(retrieved).toBe(bashModule)
+      expect(retrieved?.name).toBe('bash')
+    })
+  })
+
+  describe('Multi-capability composition', () => {
+    it('should compose multiple capabilities via mixin chain', () => {
+      // Simulating withFs + withBash composition
+      const executor = createMockExecutor()
+      const fsCapability = createMockFsCapability({ 'test.txt': 'content' })
+
+      class BaseClass {
+        id = 'test-do'
+      }
+
+      // Simulate withFs mixin
+      class WithFsClass extends BaseClass {
+        fs = fsCapability
+      }
+
+      // Apply withBash to class that already has fs
+      const ComposedClass = withBash(WithFsClass, {
+        executor: () => executor,
+        fs: (instance) => instance.fs,
+      })
+
+      const instance = new ComposedClass()
+
+      expect(instance.id).toBe('test-do')
+      expect(instance.fs).toBe(fsCapability)
+      expect(instance.bash).toBeInstanceOf(BashModule)
+      expect(instance.bash.hasFsCapability).toBe(true)
+    })
+
+    it('should allow async operations across capabilities', async () => {
+      const executor = createMockExecutor({
+        'git status': { stdout: 'On branch main\nnothing to commit', exitCode: 0 },
+      })
+      const fsCapability = createMockFsCapability({
+        '.git/config': '[core]\n\trepositoryformatversion = 0',
+      })
+
+      class BaseClass {}
+
+      const ComposedClass = withBash(BaseClass, {
+        executor: () => executor,
+        fs: () => fsCapability,
+      })
+
+      const instance = new ComposedClass()
+
+      // Read git config via native fs
+      const configResult = await instance.bash.exec('cat', ['.git/config'])
+      expect(configResult.stdout).toContain('repositoryformatversion')
+
+      // Execute git command via executor
+      const statusResult = await instance.bash.exec('git', ['status'])
+      expect(statusResult.stdout).toContain('On branch main')
+    })
+  })
+
+  describe('Durable Object lifecycle integration', () => {
+    it('should support initialization in constructor', () => {
+      const executor = createMockExecutor()
+
+      class MockDurableObject {
+        state: { id: string }
+        bash: BashModule
+
+        constructor(state: { id: string }) {
+          this.state = state
+          this.bash = new BashModule(executor)
+        }
+      }
+
+      const obj = new MockDurableObject({ id: 'test-id' })
+
+      expect(obj.state.id).toBe('test-id')
+      expect(obj.bash).toBeInstanceOf(BashModule)
+    })
+
+    it('should support initialization from environment bindings', () => {
+      const mockExecutor = createMockExecutor()
+
+      interface Env {
+        EXECUTOR: BashExecutor
+      }
+
+      class MockDurableObject {
+        bash: BashModule
+
+        constructor(state: unknown, env: Env) {
+          this.bash = new BashModule(env.EXECUTOR)
+        }
+      }
+
+      const env: Env = { EXECUTOR: mockExecutor }
+      const obj = new MockDurableObject({}, env)
+
+      expect(obj.bash).toBeInstanceOf(BashModule)
+    })
+
+    it('should support dispose pattern for cleanup', async () => {
+      const executor = createMockExecutor()
+      const bash = new BashModule(executor)
+
+      await bash.initialize()
+      await bash.dispose()
+
+      // After dispose, should be able to reinitialize
+      await bash.initialize()
+      expect(bash.name).toBe('bash')
+    })
+  })
+
+  describe('Error handling in DO context', () => {
+    it('should handle executor errors gracefully', async () => {
+      const failingExecutor: BashExecutor = {
+        execute: vi.fn().mockRejectedValue(new Error('Container unavailable')),
+      }
+
+      const bash = new BashModule(failingExecutor)
+
+      await expect(bash.exec('ls')).rejects.toThrow('Container unavailable')
+    })
+
+    it('should handle parse errors gracefully', async () => {
+      // Import the mocked parse function
+      const parserModule = await import('../../src/ast/parser.js')
+      const parse = vi.mocked(parserModule.parse)
+
+      // Reset mock to throw for this test
+      parse.mockImplementationOnce(() => {
+        throw new Error('Parse error')
+      })
+
+      const executor = createMockExecutor({
+        'invalid command {{': { stdout: '', stderr: 'syntax error', exitCode: 2 },
+      })
+      const bash = new BashModule(executor)
+
+      // Should fall through to executor even if parse fails
+      expect(() => bash.parse('invalid command {{')).toThrow()
+    })
+
+    it('should propagate executor timeout behavior', async () => {
+      const slowExecutor: BashExecutor = {
+        execute: vi.fn().mockImplementation(
+          () =>
+            new Promise((resolve) =>
+              setTimeout(
+                () =>
+                  resolve({
+                    input: 'slow',
+                    command: 'slow',
+                    valid: true,
+                    generated: false,
+                    stdout: 'eventually done',
+                    stderr: '',
+                    exitCode: 0,
+                    intent: { commands: [], reads: [], writes: [], deletes: [], network: false, elevated: false },
+                    classification: { type: 'read' as const, impact: 'none' as const, reversible: true, reason: '' },
+                  }),
+                50,
+              ),
+            ),
+        ),
+      }
+
+      const bash = new BashModule(slowExecutor)
+      const result = await bash.exec('slow', [], { timeout: 100 })
+
+      expect(result.stdout).toBe('eventually done')
+    })
+  })
+
+  describe('Environment variable handling', () => {
+    it('should pass environment variables through options', async () => {
+      const capturedOptions: any[] = []
+      const trackingExecutor: BashExecutor = {
+        execute: vi.fn().mockImplementation(async (command, options) => {
+          capturedOptions.push(options)
+          return {
+            input: command,
+            command,
+            valid: true,
+            generated: false,
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            intent: { commands: [], reads: [], writes: [], deletes: [], network: false, elevated: false },
+            classification: { type: 'read' as const, impact: 'none' as const, reversible: true, reason: '' },
+          }
+        }),
+      }
+
+      const bash = new BashModule(trackingExecutor)
+
+      await bash.exec('node', ['script.js'], {
+        env: {
+          NODE_ENV: 'production',
+          API_KEY: 'secret',
+        },
+        cwd: '/app',
+      })
+
+      expect(capturedOptions[0]).toMatchObject({
+        env: {
+          NODE_ENV: 'production',
+          API_KEY: 'secret',
+        },
+        cwd: '/app',
+      })
+    })
+  })
+
+  describe('Concurrent execution handling', () => {
+    it('should handle concurrent exec calls', async () => {
+      let callCount = 0
+      const concurrentExecutor: BashExecutor = {
+        execute: vi.fn().mockImplementation(async (command) => {
+          const count = ++callCount
+          await new Promise((r) => setTimeout(r, 10))
+          return {
+            input: command,
+            command,
+            valid: true,
+            generated: false,
+            stdout: `result-${count}`,
+            stderr: '',
+            exitCode: 0,
+            intent: { commands: [], reads: [], writes: [], deletes: [], network: false, elevated: false },
+            classification: { type: 'read' as const, impact: 'none' as const, reversible: true, reason: '' },
+          }
+        }),
+      }
+
+      const bash = new BashModule(concurrentExecutor)
+
+      const [r1, r2, r3] = await Promise.all([
+        bash.exec('cmd1'),
+        bash.exec('cmd2'),
+        bash.exec('cmd3'),
+      ])
+
+      expect(r1.stdout).toMatch(/result-\d/)
+      expect(r2.stdout).toMatch(/result-\d/)
+      expect(r3.stdout).toMatch(/result-\d/)
+      expect(concurrentExecutor.execute).toHaveBeenCalledTimes(3)
+    })
+  })
+})
