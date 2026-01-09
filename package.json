@@ -21,10 +21,6 @@
     "./do": {
       "types": "./dist/do/index.d.ts",
       "import": "./dist/do/index.js"
-    },
-    "./db": {
-      "types": "./dist/db/index.d.ts",
-      "import": "./dist/db/index.js"
     }
   },
   "files": [
