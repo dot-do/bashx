@@ -37,3 +37,27 @@ export { detectErrors, suggestFixes } from './fix.js'
 // Command optimization suggestions
 export { analyzeOptimizations, analyzeOptimizationsFromAst } from './optimize.js'
 export type { OptimizationSuggestion, OptimizationResult } from './optimize.js'
+
+// Tree-sitter-bash WASM integration (pending implementation)
+export {
+  initTreeSitter,
+  createParser,
+  parseWithTreeSitter,
+  isTreeSitterReady,
+  getTreeSitterLanguage,
+  walkTree,
+  findNodesByType,
+  getErrorNodes,
+  hasErrors,
+} from './tree-sitter.js'
+export type {
+  TreeSitterNode,
+  TreeSitterTree,
+  TreeSitterParser,
+  TreeSitterLanguage,
+  TreeSitterQuery,
+  QueryMatch,
+  QueryCapture,
+  Point,
+  Edit,
+} from './tree-sitter.js'
