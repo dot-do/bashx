@@ -1,17 +1,16 @@
 /**
- * Tree-sitter-bash WASM Integration (Stub)
+ * Tree-sitter-bash WASM Integration
  *
- * This module provides the interface for tree-sitter-bash WASM integration.
- * This is a stub file that defines the expected API - implementation pending.
- *
- * The actual implementation will:
- * 1. Load tree-sitter WASM module
- * 2. Load tree-sitter-bash language grammar
- * 3. Provide parsing and traversal utilities
+ * This module provides tree-sitter-bash WASM integration for parsing
+ * bash commands into syntax trees.
  *
  * @see https://tree-sitter.github.io/tree-sitter/
  * @see https://github.com/tree-sitter/tree-sitter-bash
  */
+
+import { Parser, Language, Query, Node, Tree } from 'web-tree-sitter'
+import { createRequire } from 'module'
+import { readFile } from 'fs/promises'
 
 // ============================================================================
 // Type Definitions
@@ -132,15 +131,235 @@ export interface TreeSitterParser {
 }
 
 // ============================================================================
-// Module State (Stub)
+// Module State
 // ============================================================================
 
 let _initialized = false
-let _parser: TreeSitterParser | null = null
-let _language: TreeSitterLanguage | null = null
+let _initPromise: Promise<void> | null = null
+let _parser: Parser | null = null
+let _language: Language | null = null
 
 // ============================================================================
-// Public API (Stubs - Not Implemented)
+// Internal Helpers
+// ============================================================================
+
+/**
+ * Get the path to the tree-sitter-bash WASM file and read it as bytes
+ * @returns Buffer containing the WASM file bytes
+ */
+async function loadBashWasmBytes(): Promise<Buffer> {
+  // Try to resolve from node_modules - try multiple package names
+  const packagePaths = [
+    'tree-sitter-bash/tree-sitter-bash.wasm',
+    'tree-sitter-wasms/out/tree-sitter-bash.wasm',
+  ]
+
+  const require = createRequire(import.meta.url)
+
+  for (const pkgPath of packagePaths) {
+    try {
+      const wasmPath = require.resolve(pkgPath)
+      return await readFile(wasmPath)
+    } catch {
+      // Continue to next package
+    }
+  }
+
+  throw new Error(
+    'Could not find tree-sitter-bash WASM file. Please install tree-sitter-bash package.'
+  )
+}
+
+/**
+ * Wrapper class to adapt web-tree-sitter Node to our TreeSitterNode interface
+ * The 0.25.x API uses properties for isNamed and hasError
+ */
+class NodeWrapper implements TreeSitterNode {
+  constructor(private readonly _node: Node) {}
+
+  get type(): string {
+    return this._node.type
+  }
+
+  get text(): string {
+    return this._node.text
+  }
+
+  get isNamed(): boolean {
+    return this._node.isNamed
+  }
+
+  get isError(): boolean {
+    return this._node.type === 'ERROR'
+  }
+
+  get hasError(): boolean {
+    return this._node.hasError
+  }
+
+  get startPosition(): Point {
+    return this._node.startPosition
+  }
+
+  get endPosition(): Point {
+    return this._node.endPosition
+  }
+
+  get startIndex(): number {
+    return this._node.startIndex
+  }
+
+  get endIndex(): number {
+    return this._node.endIndex
+  }
+
+  get firstChild(): TreeSitterNode | null {
+    return this._node.firstChild ? new NodeWrapper(this._node.firstChild) : null
+  }
+
+  get lastChild(): TreeSitterNode | null {
+    return this._node.lastChild ? new NodeWrapper(this._node.lastChild) : null
+  }
+
+  get children(): TreeSitterNode[] {
+    return this._node.children.map((c) => new NodeWrapper(c))
+  }
+
+  get namedChildren(): TreeSitterNode[] {
+    return this._node.namedChildren.map((c) => new NodeWrapper(c))
+  }
+
+  get childCount(): number {
+    return this._node.childCount
+  }
+
+  child(index: number): TreeSitterNode | null {
+    const c = this._node.child(index)
+    return c ? new NodeWrapper(c) : null
+  }
+
+  get nextSibling(): TreeSitterNode | null {
+    return this._node.nextSibling ? new NodeWrapper(this._node.nextSibling) : null
+  }
+
+  get previousSibling(): TreeSitterNode | null {
+    return this._node.previousSibling ? new NodeWrapper(this._node.previousSibling) : null
+  }
+
+  get nextNamedSibling(): TreeSitterNode | null {
+    return this._node.nextNamedSibling ? new NodeWrapper(this._node.nextNamedSibling) : null
+  }
+
+  get previousNamedSibling(): TreeSitterNode | null {
+    return this._node.previousNamedSibling ? new NodeWrapper(this._node.previousNamedSibling) : null
+  }
+
+  get parent(): TreeSitterNode | null {
+    return this._node.parent ? new NodeWrapper(this._node.parent) : null
+  }
+
+  childForFieldName(fieldName: string): TreeSitterNode | null {
+    const c = this._node.childForFieldName(fieldName)
+    return c ? new NodeWrapper(c) : null
+  }
+
+  childrenForFieldName(fieldName: string): TreeSitterNode[] {
+    // Use the childrenForFieldName method if available, otherwise use cursor-based approach
+    const childrenMethod = (this._node as unknown as { childrenForFieldName?: (name: string) => Node[] }).childrenForFieldName
+    if (childrenMethod) {
+      return childrenMethod.call(this._node, fieldName).map((c: Node) => new NodeWrapper(c))
+    }
+
+    // Cursor-based fallback for older API versions
+    const children: TreeSitterNode[] = []
+    const cursor = this._node.walk()
+    if (cursor.gotoFirstChild()) {
+      do {
+        const currentFieldName = cursor.currentFieldName
+        if (currentFieldName === fieldName) {
+          children.push(new NodeWrapper(cursor.currentNode))
+        }
+      } while (cursor.gotoNextSibling())
+    }
+
+    return children
+  }
+}
+
+/**
+ * Wrapper class to adapt web-tree-sitter Tree to our TreeSitterTree interface
+ */
+class TreeWrapper implements TreeSitterTree {
+  constructor(private readonly _tree: Tree) {}
+
+  get rootNode(): TreeSitterNode {
+    return new NodeWrapper(this._tree.rootNode)
+  }
+
+  edit(edit: Edit): void {
+    this._tree.edit(edit)
+  }
+}
+
+/**
+ * Wrapper class to adapt web-tree-sitter Language to our TreeSitterLanguage interface
+ */
+class LanguageWrapper implements TreeSitterLanguage {
+  constructor(private readonly _lang: Language) {}
+
+  query(source: string): TreeSitterQuery {
+    const query = new Query(this._lang, source)
+    return new QueryWrapper(query)
+  }
+}
+
+/**
+ * Wrapper class to adapt web-tree-sitter Query to our TreeSitterQuery interface
+ */
+class QueryWrapper implements TreeSitterQuery {
+  constructor(private readonly _query: Query) {}
+
+  matches(node: TreeSitterNode): QueryMatch[] {
+    // We need to unwrap the node to get the underlying Node
+    const rawNode = (node as NodeWrapper)['_node'] || (node as unknown as Node)
+    const rawMatches = this._query.matches(rawNode)
+    return rawMatches.map((m) => ({
+      pattern: m.patternIndex,
+      captures: m.captures.map((c) => ({
+        name: c.name,
+        node: new NodeWrapper(c.node),
+      })),
+    }))
+  }
+
+  captures(node: TreeSitterNode): QueryCapture[] {
+    const rawNode = (node as NodeWrapper)['_node'] || (node as unknown as Node)
+    const rawCaptures = this._query.captures(rawNode)
+    return rawCaptures.map((c) => ({
+      name: c.name,
+      node: new NodeWrapper(c.node),
+    }))
+  }
+}
+
+/**
+ * Wrapper class to adapt web-tree-sitter Parser to our TreeSitterParser interface
+ */
+class ParserWrapper implements TreeSitterParser {
+  constructor(private readonly _parser: Parser) {}
+
+  parse(source: string, oldTree?: TreeSitterTree): TreeSitterTree {
+    const rawOldTree = oldTree ? (oldTree as TreeWrapper)['_tree'] : undefined
+    const result = this._parser.parse(source, rawOldTree)
+    if (!result) {
+      throw new Error('Failed to parse source code')
+    }
+    return new TreeWrapper(result)
+  }
+}
+
+// ============================================================================
+// Public API
 // ============================================================================
 
 /**
@@ -158,11 +377,47 @@ let _language: TreeSitterLanguage | null = null
  * ```
  */
 export async function initTreeSitter(): Promise<void> {
-  // TODO: Implement WASM module loading
-  // 1. Load tree-sitter WASM
-  // 2. Load tree-sitter-bash language grammar
-  // 3. Create parser and set language
-  throw new Error('Not implemented: initTreeSitter - tree-sitter-bash WASM integration pending')
+  // Already initialized
+  if (_initialized) {
+    return
+  }
+
+  // Initialization in progress - wait for it
+  if (_initPromise) {
+    return _initPromise
+  }
+
+  // Start initialization
+  _initPromise = (async () => {
+    try {
+      // Initialize the tree-sitter WASM module
+      await Parser.init()
+
+      // Load the bash language grammar from WASM bytes
+      const wasmBytes = await loadBashWasmBytes()
+      _language = await Language.load(wasmBytes)
+
+      // Create the default parser and set its language
+      _parser = new Parser()
+      _parser.setLanguage(_language)
+
+      _initialized = true
+    } catch (error) {
+      _initPromise = null
+      // Better error handling to capture the actual error
+      let errorMessage: string
+      if (error instanceof Error) {
+        errorMessage = error.stack || error.message || error.toString()
+      } else if (typeof error === 'object' && error !== null) {
+        errorMessage = JSON.stringify(error)
+      } else {
+        errorMessage = String(error)
+      }
+      throw new Error(`Failed to initialize tree-sitter: ${errorMessage || 'Unknown error'}`)
+    }
+  })()
+
+  return _initPromise
 }
 
 /**
@@ -181,7 +436,7 @@ export function getTreeSitterLanguage(): TreeSitterLanguage {
   if (!_initialized || !_language) {
     throw new Error('Tree-sitter not initialized. Call initTreeSitter() first.')
   }
-  return _language
+  return new LanguageWrapper(_language)
 }
 
 /**
@@ -201,11 +456,13 @@ export function getTreeSitterLanguage(): TreeSitterLanguage {
  * ```
  */
 export function createParser(): TreeSitterParser {
-  if (!_initialized) {
+  if (!_initialized || !_language) {
     throw new Error('Tree-sitter not initialized. Call initTreeSitter() first.')
   }
-  // TODO: Create and return new parser instance
-  throw new Error('Not implemented: createParser - tree-sitter-bash WASM integration pending')
+
+  const parser = new Parser()
+  parser.setLanguage(_language)
+  return new ParserWrapper(parser)
 }
 
 /**
@@ -233,11 +490,20 @@ export function parseWithTreeSitter(source: string): TreeSitterTree {
   if (!_initialized || !_parser) {
     throw new Error('Tree-sitter not initialized. Call initTreeSitter() first.')
   }
-  return _parser.parse(source)
+
+  // Reset the parser before each parse to prevent state corruption issues
+  // that can occur with certain inputs (like heredocs in tree-sitter-bash)
+  _parser.reset()
+
+  const tree = _parser.parse(source)
+  if (!tree) {
+    throw new Error('Failed to parse source code')
+  }
+  return new TreeWrapper(tree)
 }
 
 // ============================================================================
-// Utility Functions (Stubs)
+// Utility Functions
 // ============================================================================
 
 /**
@@ -255,10 +521,7 @@ export function parseWithTreeSitter(source: string): TreeSitterTree {
  * })
  * ```
  */
-export function walkTree(
-  node: TreeSitterNode,
-  visitor: (node: TreeSitterNode) => void
-): void {
+export function walkTree(node: TreeSitterNode, visitor: (node: TreeSitterNode) => void): void {
   visitor(node)
   for (const child of node.children) {
     walkTree(child, visitor)

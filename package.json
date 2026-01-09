@@ -65,11 +65,11 @@
     "@cloudflare/workers-types": "^4.20250109.0",
     "@types/node": "^25.0.3",
     "drizzle-orm": "^0.45.1",
-    "tree-sitter-wasms": "^0.1.13",
+    "tree-sitter-bash": "^0.25.1",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^3.0.2",
-    "web-tree-sitter": "^0.26.3"
+    "web-tree-sitter": "0.25.0"
   },
   "keywords": [
     "bash",
