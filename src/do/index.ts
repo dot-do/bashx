@@ -30,6 +30,7 @@ import type {
   Program,
   SafetyClassification,
   Intent,
+  FsCapability,
 } from '../types.js'
 import { parse } from '../ast/parser.js'
 import { analyze, isDangerous } from '../ast/analyze.js'
@@ -55,6 +56,46 @@ export interface BashExecutor {
    */
   spawn?(command: string, args?: string[], options?: SpawnOptions): Promise<SpawnHandle>
 }
+
+// ============================================================================
+// MODULE OPTIONS
+// ============================================================================
+
+/**
+ * Options for configuring BashModule behavior.
+ *
+ * @example
+ * ```typescript
+ * const bash = new BashModule(executor, {
+ *   fs: fsCapability,           // Optional FsCapability for native file ops
+ *   useNativeOps: true,         // Enable native operation optimization
+ * })
+ * ```
+ */
+export interface BashModuleOptions {
+  /**
+   * Optional FsCapability for native file operations.
+   *
+   * When provided, commands like `cat`, `head`, `tail`, `ls` can be
+   * executed natively using $.fs instead of spawning a subprocess.
+   * This is faster (Tier 1) and works in pure Workers environments.
+   */
+  fs?: FsCapability
+
+  /**
+   * Whether to use native operations when available.
+   * When true and fs is provided, file operations will use FsCapability.
+   *
+   * @default true
+   */
+  useNativeOps?: boolean
+}
+
+/**
+ * Commands that can be executed natively via FsCapability.
+ * Maps command names to their native implementation handler.
+ */
+const NATIVE_FS_COMMANDS = new Set(['cat', 'head', 'tail', 'ls', 'test'])
 
 // ============================================================================
 // BASH MODULE CLASS
@@ -110,6 +151,16 @@ export class BashModule implements BashCapability {
   private readonly executor: BashExecutor
 
   /**
+   * Optional FsCapability for native file operations.
+   */
+  private readonly fs?: FsCapability
+
+  /**
+   * Whether to use native operations when available.
+   */
+  private readonly useNativeOps: boolean
+
+  /**
    * Whether the module has been initialized.
    */
   private initialized = false
@@ -118,9 +169,31 @@ export class BashModule implements BashCapability {
    * Create a new BashModule instance.
    *
    * @param executor - The executor to use for running commands
+   * @param options - Optional configuration including FsCapability integration
+   *
+   * @example
+   * ```typescript
+   * // Basic usage
+   * const bash = new BashModule(executor)
+   *
+   * // With FsCapability for native file operations
+   * const bash = new BashModule(executor, { fs: fsCapability })
+   *
+   * // Disable native ops (always use executor)
+   * const bash = new BashModule(executor, { fs: fsCapability, useNativeOps: false })
+   * ```
    */
-  constructor(executor: BashExecutor) {
+  constructor(executor: BashExecutor, options?: BashModuleOptions) {
     this.executor = executor
+    this.fs = options?.fs
+    this.useNativeOps = options?.useNativeOps ?? true
+  }
+
+  /**
+   * Check if FsCapability is available and native ops are enabled.
+   */
+  get hasFsCapability(): boolean {
+    return this.useNativeOps && this.fs !== undefined
   }
 
   /**
@@ -272,13 +345,32 @@ export class BashModule implements BashCapability {
 // ============================================================================
 
 /**
+ * Type helper for classes with bash capability.
+ */
+export interface WithBashCapability {
+  /** The bash module for executing commands */
+  readonly bash: BashModule
+}
+
+/**
+ * Constructor type helper for mixin composition.
+ */
+export type Constructor<T = object> = new (...args: any[]) => T
+
+/**
  * Mixin function to add bash capability to a Durable Object class.
  *
+ * This mixin provides lazy initialization of the BashModule, meaning
+ * the executor is only created when the `bash` property is first accessed.
+ * The BashModule instance is then cached for subsequent accesses.
+ *
  * @param Base - The base DO class to extend
- * @param createExecutor - Factory function to create the executor
+ * @param createExecutor - Factory function to create the executor.
+ *   Receives the instance as its argument, allowing access to instance
+ *   properties like `env` for configuring the executor.
  * @returns Extended class with bash capability
  *
- * @example
+ * @example Basic usage
  * ```typescript
  * import { withBash } from 'bashx/do'
  * import { DO } from 'dotdo'
@@ -295,21 +387,64 @@ export class BashModule implements BashCapability {
  *   }
  * }
  * ```
+ *
+ * @example With environment bindings
+ * ```typescript
+ * import { withBash } from 'bashx/do'
+ * import { DO } from 'dotdo'
+ *
+ * interface Env {
+ *   CONTAINER_SERVICE: Fetcher
+ * }
+ *
+ * class MyDO extends withBash(DO<Env>, (instance) => ({
+ *   execute: async (cmd, opts) => {
+ *     const response = await instance.env.CONTAINER_SERVICE.fetch(
+ *       'https://container/exec',
+ *       { method: 'POST', body: JSON.stringify({ cmd, opts }) }
+ *     )
+ *     return response.json()
+ *   }
+ * })) {
+ *   // this.bash is now available with type safety
+ * }
+ * ```
+ *
+ * @example Chaining with other mixins
+ * ```typescript
+ * import { withBash } from 'bashx/do'
+ * import { withFs } from 'fsx/do'
+ * import { DO } from 'dotdo'
+ *
+ * // Compose multiple capabilities
+ * const BaseDO = withBash(withFs(DO, fsExecutor), bashExecutor)
+ *
+ * class MyDO extends BaseDO {
+ *   async build() {
+ *     // Access both capabilities
+ *     await this.fs.write('config.json', JSON.stringify(config))
+ *     await this.bash.exec('npm', ['run', 'build'])
+ *   }
+ * }
+ * ```
  */
-export function withBash<T extends new (...args: any[]) => any>(
-  Base: T,
-  createExecutor: (instance: InstanceType<T>) => BashExecutor,
-): T & { new (...args: any[]): { bash: BashModule } } {
-  return class extends Base {
+export function withBash<TBase extends Constructor>(
+  Base: TBase,
+  createExecutor: (instance: InstanceType<TBase>) => BashExecutor,
+): TBase & Constructor<WithBashCapability> {
+  // Use abstract class to properly type the mixin
+  abstract class BashMixin extends Base implements WithBashCapability {
     private _bashModule?: BashModule
 
     get bash(): BashModule {
       if (!this._bashModule) {
-        this._bashModule = new BashModule(createExecutor(this as InstanceType<T>))
+        this._bashModule = new BashModule(createExecutor(this as InstanceType<TBase>))
       }
       return this._bashModule
     }
-  } as any
+  }
+
+  return BashMixin as TBase & Constructor<WithBashCapability>
 }
 
 // ============================================================================

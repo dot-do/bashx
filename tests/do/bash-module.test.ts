@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { BashModule, withBash, type BashExecutor } from '../../src/do/index.js'
+import { BashModule, withBash, type BashExecutor, type WithBashCapability, type Constructor } from '../../src/do/index.js'
 import type { BashResult } from '../../src/types.js'
 
 // Mock the parse and analyze imports since they throw NotImplemented
@@ -297,5 +297,176 @@ describe('withBash mixin', () => {
 
     expect(factoryFn).toHaveBeenCalledWith(instance)
     expect(factoryFn.mock.calls[0][0].config.endpoint).toBe('http://example.com')
+  })
+
+  it('should preserve constructor arguments', () => {
+    class BaseClass {
+      name: string
+      constructor(name: string) {
+        this.name = name
+      }
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, () => executor)
+
+    const instance = new MixedClass('test-instance')
+
+    expect(instance.name).toBe('test-instance')
+    expect(instance.bash).toBeInstanceOf(BashModule)
+  })
+
+  it('should work with classes that have methods', () => {
+    class BaseClass {
+      getValue() {
+        return 42
+      }
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, () => executor)
+
+    const instance = new MixedClass()
+
+    expect(instance.getValue()).toBe(42)
+    expect(instance.bash).toBeInstanceOf(BashModule)
+  })
+
+  it('should allow extending mixed classes', () => {
+    class BaseClass {
+      base = 'base-value'
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, () => executor)
+
+    class ExtendedClass extends MixedClass {
+      extended = 'extended-value'
+    }
+
+    const instance = new ExtendedClass()
+
+    expect(instance.base).toBe('base-value')
+    expect(instance.extended).toBe('extended-value')
+    expect(instance.bash).toBeInstanceOf(BashModule)
+  })
+
+  it('should support async executor creation', async () => {
+    class BaseClass {
+      env = { containerEndpoint: 'https://container.example.com' }
+    }
+
+    const executor = createMockExecutor({
+      'test-command': { stdout: 'async result', exitCode: 0 },
+    })
+
+    const MixedClass = withBash(BaseClass, (instance) => {
+      // Can access instance properties when creating executor
+      expect(instance.env.containerEndpoint).toBe('https://container.example.com')
+      return executor
+    })
+
+    const instance = new MixedClass()
+    const result = await instance.bash.exec('test-command')
+
+    expect(result.stdout).toBe('async result')
+  })
+
+  it('should create separate BashModule instances for different class instances', () => {
+    class BaseClass {}
+
+    const executor1 = createMockExecutor()
+    const executor2 = createMockExecutor()
+    let callCount = 0
+
+    const MixedClass = withBash(BaseClass, () => {
+      callCount++
+      return callCount === 1 ? executor1 : executor2
+    })
+
+    const instance1 = new MixedClass()
+    const instance2 = new MixedClass()
+
+    const bash1 = instance1.bash
+    const bash2 = instance2.bash
+
+    expect(bash1).not.toBe(bash2)
+    expect(bash1).toBeInstanceOf(BashModule)
+    expect(bash2).toBeInstanceOf(BashModule)
+  })
+
+  it('should work with inherited properties', () => {
+    class ParentClass {
+      parentProp = 'parent'
+    }
+
+    class ChildClass extends ParentClass {
+      childProp = 'child'
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(ChildClass, (instance) => {
+      expect(instance.parentProp).toBe('parent')
+      expect(instance.childProp).toBe('child')
+      return executor
+    })
+
+    const instance = new MixedClass()
+
+    expect(instance.parentProp).toBe('parent')
+    expect(instance.childProp).toBe('child')
+    expect(instance.bash).toBeInstanceOf(BashModule)
+  })
+})
+
+describe('withBash type exports', () => {
+  it('should export WithBashCapability interface', () => {
+    // Type test - verify the interface can be used for type checking
+    const checkCapability = (obj: WithBashCapability): BashModule => {
+      return obj.bash
+    }
+
+    class BaseClass {}
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, () => executor)
+    const instance = new MixedClass()
+
+    const bash = checkCapability(instance)
+    expect(bash).toBeInstanceOf(BashModule)
+  })
+
+  it('should export Constructor type', () => {
+    // Type test - verify the Constructor type works
+    const createInstance = <T extends Constructor>(ctor: T): InstanceType<T> => {
+      return new ctor()
+    }
+
+    class TestClass {
+      value = 'test'
+    }
+
+    const instance = createInstance(TestClass)
+    expect(instance.value).toBe('test')
+  })
+
+  it('should correctly type the result of withBash', () => {
+    class BaseClass {
+      baseMethod() {
+        return 'base'
+      }
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, () => executor)
+
+    // The mixed class should have both base methods and bash property
+    const instance = new MixedClass()
+
+    // Type assertion tests (these compile if types are correct)
+    const baseResult: string = instance.baseMethod()
+    const bashModule: BashModule = instance.bash
+
+    expect(baseResult).toBe('base')
+    expect(bashModule).toBeInstanceOf(BashModule)
   })
 })
