@@ -1,5 +1,5 @@
 {
-  "name": "bashx",
+  "name": "bashx.do",
   "version": "0.1.0",
   "description": "AI-enhanced bash execution with safety, intent understanding, and intelligent recovery",
   "type": "module",
