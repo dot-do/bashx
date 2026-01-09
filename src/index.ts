@@ -31,7 +31,7 @@
  * ```
  */
 
-import { createClient, type ClientOptions } from 'rpc.do'
+import { RPC, http, type Transport } from 'rpc.do'
 import type { BashResult, BashOptions, BashClient, BashClientExtended } from './types.js'
 
 export * from './types.js'
@@ -118,11 +118,20 @@ function isTemplateStringsArray(value: unknown): value is TemplateStringsArray {
  * await bash.with({ timeout: 5000 })`slow command`
  * ```
  */
-export function Bash(clientOptions?: ClientOptions): BashClientExtended {
-  const rpcClient = createClient<{ bash: (input: string, options?: BashOptions) => Promise<BashResult> }>(
-    'https://bashx.do',
-    clientOptions
-  )
+/**
+ * Options for creating a custom Bash client
+ */
+export interface BashClientOptions {
+  /** Custom base URL for the bashx service */
+  baseUrl?: string
+  /** Auth token for authenticated requests */
+  token?: string
+}
+
+export function Bash(clientOptions?: BashClientOptions): BashClientExtended {
+  const baseUrl = clientOptions?.baseUrl ?? 'https://bashx.do'
+  const transport = http(baseUrl, clientOptions?.token)
+  const rpcClient = RPC<{ bash: (input: string, options?: BashOptions) => Promise<BashResult> }>(transport)
 
   /**
    * Create tagged template handler with specific options

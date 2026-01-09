@@ -7,13 +7,13 @@
 import type { Program, BashNode, Command, Redirect } from '../types.js'
 
 /**
- * Visitor callbacks for AST traversal
+ * Visitor callbacks for AST traversal.
+ * Each callback receives the specific node type it's named for.
  */
 export interface Visitor {
   Program?: (node: Program) => void
   Command?: (node: Command) => void
-  // Add more as needed
-  [key: string]: ((node: BashNode) => void) | undefined
+  // Add more as needed when traversal is implemented
 }
 
 /**
