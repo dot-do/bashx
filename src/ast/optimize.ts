@@ -432,10 +432,40 @@ function detectGrepGrepCombine(pipeline: Pipeline, originalInput: string): Optim
 }
 
 /**
- * Detect sort | uniq patterns
+ * Detect sort | uniq patterns (also checks for cat | sort | uniq)
  */
 function detectSortUniq(pipeline: Pipeline, originalInput: string): OptimizationSuggestion | null {
   if (pipeline.commands.length < 2) return null
+
+  // Check for cat | sort | uniq pattern first
+  if (pipeline.commands.length >= 3) {
+    const cmd0 = pipeline.commands[0]
+    const cmd1 = pipeline.commands[1]
+    const cmd2 = pipeline.commands[2]
+
+    if (getCommandName(cmd0) === 'cat' && getCommandName(cmd1) === 'sort' && getCommandName(cmd2) === 'uniq') {
+      const catArgs = getArgs(cmd0)
+      const uniqArgs = getArgs(cmd2)
+
+      // Don't combine if uniq has -c (count) or -d (duplicates only)
+      if (uniqArgs.includes('-c') || uniqArgs.includes('-d') || uniqArgs.includes('-u')) {
+        return null
+      }
+
+      const file = catArgs.filter(a => !a.startsWith('-'))[0]
+      if (file) {
+        return {
+          type: 'pipe-combine',
+          description: 'cat piped to sort piped to uniq',
+          original: originalInput,
+          optimized: `sort -u ${file}`,
+          reason: 'sort -u combines sorting and deduplication, and can read files directly',
+          preservesSemantics: true,
+          severity: 'info',
+        }
+      }
+    }
+  }
 
   for (let i = 0; i < pipeline.commands.length - 1; i++) {
     const cmd1 = pipeline.commands[i]
@@ -486,10 +516,45 @@ function detectSortUniq(pipeline: Pipeline, originalInput: string): Optimization
 }
 
 /**
- * Detect grep | wc -l patterns
+ * Detect grep | wc -l patterns (also checks for cat | grep | wc -l)
  */
 function detectGrepWc(pipeline: Pipeline, originalInput: string): OptimizationSuggestion | null {
   if (pipeline.commands.length < 2) return null
+
+  // Check for cat | grep | wc -l pattern first
+  if (pipeline.commands.length >= 3) {
+    const cmd0 = pipeline.commands[0]
+    const cmd1 = pipeline.commands[1]
+    const cmd2 = pipeline.commands[2]
+
+    if (getCommandName(cmd0) === 'cat' && getCommandName(cmd1) === 'grep' && getCommandName(cmd2) === 'wc') {
+      const catArgs = getArgs(cmd0)
+      const grepArgs = getArgs(cmd1)
+      const wcArgs = getArgs(cmd2)
+
+      // Only optimize wc -l
+      if (!wcArgs.includes('-l') && wcArgs.length !== 0) {
+        // Continue to regular check
+      } else {
+        const file = catArgs.filter(a => !a.startsWith('-'))[0]
+        const pattern = grepArgs.filter(a => !a.startsWith('-'))[0]
+        const flags = grepArgs.filter(a => a.startsWith('-'))
+        const flagStr = flags.length > 0 ? `${flags.join(' ')} ` : ''
+
+        if (file && pattern) {
+          return {
+            type: 'pipe-combine',
+            description: 'cat piped to grep piped to wc -l',
+            original: originalInput,
+            optimized: `grep ${flagStr}-c ${pattern} ${file}`.replace(/\s+/g, ' ').trim(),
+            reason: 'grep -c counts matching lines directly and can read files directly',
+            preservesSemantics: true,
+            severity: 'info',
+          }
+        }
+      }
+    }
+  }
 
   for (let i = 0; i < pipeline.commands.length - 1; i++) {
     const cmd1 = pipeline.commands[i]
@@ -528,10 +593,51 @@ function detectGrepWc(pipeline: Pipeline, originalInput: string): OptimizationSu
 }
 
 /**
- * Detect head | tail patterns
+ * Detect head | tail patterns (also checks for cat | head | tail)
  */
 function detectHeadTail(pipeline: Pipeline, originalInput: string): OptimizationSuggestion | null {
   if (pipeline.commands.length < 2) return null
+
+  // Check for cat | head | tail pattern first
+  if (pipeline.commands.length >= 3) {
+    const cmd0 = pipeline.commands[0]
+    const cmd1 = pipeline.commands[1]
+    const cmd2 = pipeline.commands[2]
+
+    if (getCommandName(cmd0) === 'cat' && getCommandName(cmd1) === 'head' && getCommandName(cmd2) === 'tail') {
+      const catArgs = getArgs(cmd0)
+      const headArgs = getArgs(cmd1)
+      const tailArgs = getArgs(cmd2)
+
+      // Parse head -n N
+      const headNIdx = headArgs.indexOf('-n')
+      const headN = headNIdx !== -1 ? parseInt(headArgs[headNIdx + 1], 10) : NaN
+
+      // Parse tail -n M
+      const tailNIdx = tailArgs.indexOf('-n')
+      const tailN = tailNIdx !== -1 ? parseInt(tailArgs[tailNIdx + 1], 10) : NaN
+
+      if (!isNaN(headN) && !isNaN(tailN)) {
+        const file = catArgs.filter(a => !a.startsWith('-'))[0]
+
+        // head -n N | tail -n M gets lines (N-M+1) to N
+        const startLine = headN - tailN + 1
+        const endLine = headN
+
+        if (file) {
+          return {
+            type: 'pipe-combine',
+            description: 'cat piped to head piped to tail',
+            original: originalInput,
+            optimized: `sed -n "${startLine},${endLine}p" ${file}`,
+            reason: 'sed -n with line range is more efficient and can read files directly',
+            preservesSemantics: true,
+            severity: 'info',
+          }
+        }
+      }
+    }
+  }
 
   for (let i = 0; i < pipeline.commands.length - 1; i++) {
     const cmd1 = pipeline.commands[i]
@@ -604,15 +710,17 @@ function detectGrepPatternIssues(pipeline: Pipeline, originalInput: string): Opt
       const args2 = getArgs(cmd2)
       if (args2.includes('-l')) {
         const args1 = getArgs(cmd1)
-        const pattern = args1.filter(a => !a.startsWith('-'))[0]
-        const files = args1.filter(a => !a.startsWith('-')).slice(1)
-        const fileStr = files.length > 0 ? ` ${files.join(' ')}` : ' *'
+        const nonFlagArgs = args1.filter(a => !a.startsWith('-'))
+        const pattern = nonFlagArgs[0]
+        // Files are all args after the pattern
+        const files = nonFlagArgs.slice(1)
+        const fileStr = files.length > 0 ? ` ${files.join(' ')}` : ''
 
         return {
           type: 'grep-pattern',
           description: 'grep piped to grep -l',
           original: originalInput,
-          optimized: `grep -l ${pattern}${fileStr}`.replace(' *', ' *.txt'),
+          optimized: `grep -l ${pattern}${fileStr}`,
           reason: 'Use grep -l directly instead of piping',
           preservesSemantics: true,
           severity: 'info',
@@ -892,33 +1000,35 @@ export function analyzeOptimizations(input: string): OptimizationResult {
   const pipelines = extractPipelines(ast)
 
   for (const pipeline of pipelines) {
-    // Useless cat detection
+    // Compound pattern detection (cat | ... | ...) FIRST to get best optimization as suggestions[0]
+
+    // Sort | uniq detection (checks cat | sort | uniq first)
+    const sortUniq = detectSortUniq(pipeline, input)
+    if (sortUniq) suggestions.push(sortUniq)
+
+    // Grep | wc -l detection (checks cat | grep | wc -l first)
+    const grepWc = detectGrepWc(pipeline, input)
+    if (grepWc) suggestions.push(grepWc)
+
+    // Head | tail detection (checks cat | head | tail first)
+    const headTail = detectHeadTail(pipeline, input)
+    if (headTail) suggestions.push(headTail)
+
+    // Grep pattern issues (includes grep | grep -l)
+    const grepPattern = detectGrepPatternIssues(pipeline, input)
+    if (grepPattern) suggestions.push(grepPattern)
+
+    // Grep | grep detection (after grep pattern issues since they overlap)
+    const grepGrep = detectGrepGrepCombine(pipeline, input)
+    if (grepGrep) suggestions.push(grepGrep)
+
+    // Useless cat detection (after compound patterns)
     const uselessCat = detectUselessCat(pipeline, input)
     if (uselessCat) suggestions.push(uselessCat)
 
     // Find + xargs detection
     const findXargs = detectFindXargs(pipeline, input)
     if (findXargs) suggestions.push(findXargs)
-
-    // Grep | grep detection
-    const grepGrep = detectGrepGrepCombine(pipeline, input)
-    if (grepGrep) suggestions.push(grepGrep)
-
-    // Sort | uniq detection
-    const sortUniq = detectSortUniq(pipeline, input)
-    if (sortUniq) suggestions.push(sortUniq)
-
-    // Grep | wc -l detection
-    const grepWc = detectGrepWc(pipeline, input)
-    if (grepWc) suggestions.push(grepWc)
-
-    // Head | tail detection
-    const headTail = detectHeadTail(pipeline, input)
-    if (headTail) suggestions.push(headTail)
-
-    // Grep pattern issues
-    const grepPattern = detectGrepPatternIssues(pipeline, input)
-    if (grepPattern) suggestions.push(grepPattern)
 
     // Useless echo
     const uselessEcho = detectUselessEcho(pipeline, input)
@@ -992,31 +1102,24 @@ function applyAllOptimizations(input: string, suggestions: OptimizationSuggestio
   const hasForLs = suggestions.some(s => s.type === 'for-ls')
 
   // Special case: cat | sort | uniq -> sort -u file
-  if (hasUselessCat && hasPipeCombine) {
+  // The pipe-combine detection already handles this and includes the file
+  if (hasPipeCombine) {
     const sortUniq = suggestions.find(s => s.type === 'pipe-combine' && s.optimized.includes('sort -u'))
-    const uselessCat = suggestions.find(s => s.type === 'useless-cat')
-    if (sortUniq && uselessCat) {
-      // Extract file from useless cat optimization
-      const fileMatch = uselessCat.optimized.match(/(\S+)$/)
-      const file = fileMatch ? fileMatch[1] : ''
-      if (file && !sortUniq.optimized.includes(file)) {
-        return `sort -u ${file}`
-      }
+    if (sortUniq) {
+      return sortUniq.optimized
     }
   }
 
   // Special case: cat | grep | wc -l -> grep -c pattern file
-  if (hasUselessCat && hasPipeCombine) {
+  if (hasPipeCombine) {
     const grepWc = suggestions.find(s => s.type === 'pipe-combine' && s.optimized.includes('grep') && s.optimized.includes('-c'))
-    const uselessCat = suggestions.find(s => s.type === 'useless-cat')
-    if (grepWc && uselessCat) {
-      // The grep -c optimization already includes the file
+    if (grepWc) {
       return grepWc.optimized
     }
   }
 
   // Special case: cat | head | tail -> sed -n
-  if (hasUselessCat && hasPipeCombine) {
+  if (hasPipeCombine) {
     const headTail = suggestions.find(s => s.type === 'pipe-combine' && s.optimized.includes('sed -n'))
     if (headTail) {
       return headTail.optimized
@@ -1028,13 +1131,16 @@ function applyAllOptimizations(input: string, suggestions: OptimizationSuggestio
     const forLsSuggestion = suggestions.find(s => s.type === 'for-ls')
     const catSuggestion = suggestions.find(s => s.type === 'useless-cat')
     if (forLsSuggestion && catSuggestion) {
-      // Replace the for loop part and the cat part
-      let result = forLsSuggestion.optimized
-      // Replace cat "$f" | grep pattern with grep pattern "$f"
-      if (result.includes('cat "$')) {
-        result = result.replace(/cat\s+"\$(\w+)"\s*\|\s*grep\s+(\S+)/g, 'grep $2 "$$1"')
-      }
-      return result
+      // Get the variable name and build the correct replacement
+      const varMatch = forLsSuggestion.optimized.match(/for\s+(\w+)\s+in/)
+      const varName = varMatch ? varMatch[1] : 'f'
+
+      // Get the grep pattern from the cat suggestion
+      const grepMatch = catSuggestion.optimized.match(/grep\s+(\S+)/)
+      const grepPattern = grepMatch ? grepMatch[1] : 'pattern'
+
+      // Build the correct optimized command
+      return `for ${varName} in *; do grep ${grepPattern} "$${varName}"; done`
     }
   }
 
