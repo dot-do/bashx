@@ -19,70 +19,8 @@
 import { describe, it, expect } from 'vitest'
 import type { Program } from '../src/types.js'
 import { simpleCommand, program } from './utils/fixtures.js'
-
-// ============================================================================
-// Types for Optimization Suggestions
-// ============================================================================
-
-/**
- * An optimization suggestion for a bash command
- */
-interface OptimizationSuggestion {
-  /** The type of optimization */
-  type: 'useless-cat' | 'find-xargs' | 'for-ls' | 'pipe-combine' | 'grep-pattern' | 'other'
-  /** Human-readable description of the issue */
-  description: string
-  /** The original command pattern */
-  original: string
-  /** The suggested optimized command */
-  optimized: string
-  /** Why this optimization is beneficial */
-  reason: string
-  /** Whether the optimization preserves exact semantics */
-  preservesSemantics: boolean
-  /** Severity: info, warning, or error */
-  severity: 'info' | 'warning' | 'error'
-}
-
-/**
- * Result of optimization analysis
- */
-interface OptimizationResult {
-  /** Whether optimizations were found */
-  hasOptimizations: boolean
-  /** List of optimization suggestions */
-  suggestions: OptimizationSuggestion[]
-  /** The fully optimized command (if all suggestions applied) */
-  optimizedCommand?: string
-}
-
-// ============================================================================
-// Placeholder function - to be implemented in GREEN phase
-// ============================================================================
-
-/**
- * Analyze a command for optimization opportunities
- * TODO: Implement in GREEN phase
- */
-function analyzeOptimizations(_input: string): OptimizationResult {
-  // Placeholder - will be implemented in GREEN phase
-  return {
-    hasOptimizations: false,
-    suggestions: [],
-  }
-}
-
-/**
- * Analyze an AST for optimization opportunities
- * TODO: Implement in GREEN phase
- */
-function analyzeOptimizationsFromAst(_ast: Program): OptimizationResult {
-  // Placeholder - will be implemented in GREEN phase
-  return {
-    hasOptimizations: false,
-    suggestions: [],
-  }
-}
+import { analyzeOptimizations, analyzeOptimizationsFromAst } from '../src/ast/optimize.js'
+import type { OptimizationSuggestion, OptimizationResult } from '../src/ast/optimize.js'
 
 // ============================================================================
 // USELESS CAT (UUOC) OPTIMIZATIONS

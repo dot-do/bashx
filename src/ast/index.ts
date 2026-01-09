@@ -33,3 +33,7 @@ export { visit, extractCommands, extractFiles, extractRedirects } from './traver
 
 // Error detection and fixing
 export { detectErrors, suggestFixes } from './fix.js'
+
+// Command optimization suggestions
+export { analyzeOptimizations, analyzeOptimizationsFromAst } from './optimize.js'
+export type { OptimizationSuggestion, OptimizationResult } from './optimize.js'
