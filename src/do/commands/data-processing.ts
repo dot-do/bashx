@@ -422,13 +422,18 @@ function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext)
   }
 
   if (trimmed === 'values') {
+    // In jq, 'values' is a filter that removes nulls and passes through everything else
+    // When applied to objects, it returns the values
+    // When applied to arrays, it returns the array
+    // When applied to scalar values, it passes them through if non-null
+    if (data === null || data === undefined) {
+      return undefined // Filter out null/undefined values
+    }
     if (data && typeof data === 'object' && !Array.isArray(data)) {
       return Object.values(data)
     }
-    if (Array.isArray(data)) {
-      return data
-    }
-    throw new JqError('values requires an object or array')
+    // For arrays and scalar values, just pass through
+    return data
   }
 
   if (trimmed === 'type') {
@@ -954,15 +959,7 @@ function parseYamlLines(lines: string[], startIndent: number, anchors: Record<st
         valueStr = valueStr.slice(anchorMatch[0].length)
       }
 
-      // Handle alias: *anchorName
-      const aliasMatch = valueStr.match(/^\*(\w+)$/)
-      if (aliasMatch) {
-        result[key] = anchors[aliasMatch[1]]
-        i++
-        continue
-      }
-
-      // Handle merge: <<: *anchorName
+      // Handle merge: <<: *anchorName (must be checked before alias handler)
       if (key === '<<') {
         const mergeAliasMatch = valueStr.match(/^\*(\w+)$/)
         if (mergeAliasMatch) {
@@ -971,6 +968,14 @@ function parseYamlLines(lines: string[], startIndent: number, anchors: Record<st
             Object.assign(result, merged)
           }
         }
+        i++
+        continue
+      }
+
+      // Handle alias: *anchorName
+      const aliasMatch = valueStr.match(/^\*(\w+)$/)
+      if (aliasMatch) {
+        result[key] = anchors[aliasMatch[1]]
         i++
         continue
       }
@@ -1023,11 +1028,22 @@ function parseYamlValue(str: string, anchors: Record<string, unknown>): unknown 
     return trimmed.slice(1, -1)
   }
 
+  // Detect unclosed quotes - invalid YAML
+  if ((trimmed.startsWith('"') && !trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && !trimmed.endsWith("'"))) {
+    throw new Error(`Unclosed quote in YAML value: ${trimmed}`)
+  }
+
   // Handle inline array
   if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
     const inner = trimmed.slice(1, -1)
     if (!inner.trim()) return []
     return inner.split(',').map((s) => parseYamlValue(s.trim(), anchors))
+  }
+
+  // Detect unclosed bracket - invalid YAML
+  if (trimmed.startsWith('[') && !trimmed.endsWith(']')) {
+    throw new Error(`Unclosed bracket in YAML value: ${trimmed}`)
   }
 
   // Handle inline object
@@ -1043,6 +1059,11 @@ function parseYamlValue(str: string, anchors: Record<string, unknown>): unknown 
       }
     }
     return obj
+  }
+
+  // Detect unclosed brace - invalid YAML
+  if (trimmed.startsWith('{') && !trimmed.endsWith('}')) {
+    throw new Error(`Unclosed brace in YAML value: ${trimmed}`)
   }
 
   // Handle numbers

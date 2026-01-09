@@ -473,9 +473,6 @@ describe('jq - JSON Processor', () => {
         'jq --arg name "alice" --argjson minAge 20 ".[] | select(.name == $name and .age > $minAge)" /data/users.json'
       )
 
-      console.log('DEBUG stdout:', JSON.stringify(result.stdout))
-      console.log('DEBUG stderr:', result.stderr)
-      console.log('DEBUG exitCode:', result.exitCode)
       expect(result.exitCode).toBe(0)
       const parsed = JSON.parse(result.stdout)
       expect(parsed.name).toBe('alice')
@@ -817,8 +814,10 @@ describe('yq - YAML Processor', () => {
 
   describe('Error Handling', () => {
     it('handles invalid YAML', async () => {
+      // Use truly invalid YAML - tabs mixed with spaces for indentation causes issues
+      // and unclosed quotes/brackets are definitely invalid
       const result = await executor.execute('yq "."', {
-        stdin: 'invalid: yaml: content: :',
+        stdin: 'key: [\ninvalid unclosed bracket',
       })
 
       expect(result.exitCode).not.toBe(0)
