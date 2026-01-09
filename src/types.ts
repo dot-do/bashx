@@ -665,6 +665,103 @@ export interface BashClient {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<BashResult>
 }
 
+/**
+ * Tagged template function type for bash commands.
+ */
+export type BashTaggedTemplate = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<BashResult>
+
+/**
+ * Extended bash client with additional tagged template capabilities.
+ * Provides shell-safe interpolation by default, with escape utilities.
+ *
+ * @example
+ * ```typescript
+ * import { bash } from 'bashx'
+ *
+ * // Basic tagged template (values are escaped)
+ * const file = 'my file.txt'
+ * await bash`cat ${file}`  // → cat 'my file.txt'
+ *
+ * // Options as factory
+ * await bash({ cwd: '/tmp' })`ls -la`
+ *
+ * // Raw mode (no escaping - dangerous!)
+ * await bash.raw`echo ${userInput}`
+ *
+ * // Reusable configured template
+ * const tmpBash = bash.with({ cwd: '/tmp', timeout: 5000 })
+ * await tmpBash`ls`
+ *
+ * // Direct escape utility
+ * const escaped = bash.escape('file; rm -rf /')
+ * ```
+ */
+export interface BashClientExtended {
+  /**
+   * Execute a bash command with options.
+   */
+  (input: string, options?: ExecOptions): Promise<BashResult>
+
+  /**
+   * Execute a bash command using tagged template.
+   * Interpolated values are automatically shell-escaped for safety.
+   */
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<BashResult>
+
+  /**
+   * Create a tagged template with bound options.
+   * Returns a template function that uses the specified options.
+   *
+   * @example
+   * ```typescript
+   * await bash({ cwd: '/tmp' })`ls -la`
+   * await bash({ confirm: true })`rm -rf old/`
+   * ```
+   */
+  (options: ExecOptions): BashTaggedTemplate
+
+  /**
+   * Raw tagged template - NO escaping.
+   * Use with extreme caution for trusted input only.
+   *
+   * @example
+   * ```typescript
+   * // Glob patterns need raw mode
+   * const pattern = '*.ts'
+   * await bash.raw`find . -name ${pattern}`
+   * ```
+   */
+  raw: BashTaggedTemplate
+
+  /**
+   * Create a reusable tagged template with bound options.
+   * Unlike calling bash(options), this returns a reusable function.
+   *
+   * @example
+   * ```typescript
+   * const tmpBash = bash.with({ cwd: '/tmp' })
+   * await tmpBash`ls`
+   * await tmpBash`pwd`
+   * ```
+   */
+  with(options: ExecOptions): BashTaggedTemplate
+
+  /**
+   * Escape a value for safe shell use.
+   * Uses single-quote escaping.
+   *
+   * @example
+   * ```typescript
+   * bash.escape('file; rm -rf /')  // → 'file; rm -rf /'
+   * bash.escape("it's fine")       // → 'it'"'"'s fine'
+   * ```
+   */
+  escape(value: unknown): string
+}
+
 // ============================================================================
 // BashCapability Interface
 // ============================================================================

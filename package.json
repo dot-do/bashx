@@ -17,6 +17,10 @@
     "./safety": {
       "types": "./dist/safety/index.d.ts",
       "import": "./dist/safety/index.js"
+    },
+    "./do": {
+      "types": "./dist/do/index.d.ts",
+      "import": "./dist/do/index.js"
     }
   },
   "files": [
@@ -32,9 +36,14 @@
     "lint": "eslint src",
     "clean": "rm -rf dist"
   },
-  "dependencies": {
-    "mcp.do": "workspace:*",
-    "rpc.do": "workspace:*"
+  "dependencies": {},
+  "peerDependencies": {
+    "mcp.do": "*",
+    "rpc.do": "*"
+  },
+  "peerDependenciesMeta": {
+    "mcp.do": { "optional": true },
+    "rpc.do": { "optional": true }
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.7.4",
