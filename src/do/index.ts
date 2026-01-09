@@ -222,6 +222,12 @@ export class BashModule implements BashCapability {
   /**
    * Execute a command and wait for completion.
    *
+   * This method performs AST-based safety analysis before execution:
+   * 1. Parses the command into an AST
+   * 2. Analyzes the AST for safety classification
+   * 3. Blocks critical/high impact commands unless confirm: true is passed
+   * 4. Executes the command if it passes the safety gate
+   *
    * When FsCapability is available and the command is a native file operation
    * (cat, head, tail, ls, test), it will be executed natively without spawning
    * a subprocess. This is faster and works in pure Workers environments.
@@ -245,11 +251,26 @@ export class BashModule implements BashCapability {
    *   timeout: 60000
    * })
    *
+   * // Dangerous commands are blocked by default
+   * const result = await bash.exec('rm', ['-rf', '/'])
+   * // result.blocked === true, result.requiresConfirm === true
+   *
+   * // Use confirm: true to execute dangerous commands
+   * const result = await bash.exec('rm', ['-rf', 'temp/'], { confirm: true })
+   *
    * // With FsCapability, this uses $.fs.read() instead of spawning cat
    * const result = await bash.exec('cat', ['file.txt'])
    * ```
    */
   async exec(command: string, args?: string[], options?: ExecOptions): Promise<BashResult> {
+    const fullCommand = args && args.length > 0 ? `${command} ${args.join(' ')}` : command
+
+    // Perform AST-based safety analysis
+    const safetyResult = this.performSafetyAnalysis(fullCommand, options)
+    if (safetyResult) {
+      return safetyResult
+    }
+
     // Try native operation if FsCapability is available
     if (this.hasFsCapability && NATIVE_FS_COMMANDS.has(command)) {
       const nativeResult = await this.tryNativeExec(command, args || [], options)
@@ -258,9 +279,65 @@ export class BashModule implements BashCapability {
       }
     }
 
-    // Fall back to executor for non-native commands or if native failed
-    const fullCommand = args && args.length > 0 ? `${command} ${args.join(' ')}` : command
+    // Execute via executor
     return this.executor.execute(fullCommand, options)
+  }
+
+  /**
+   * Perform AST-based safety analysis on a command.
+   * Returns a blocked result if the command should not be executed,
+   * or null if execution should proceed.
+   */
+  private performSafetyAnalysis(command: string, options?: ExecOptions): BashResult | null {
+    try {
+      // Parse and analyze the command
+      const ast = parse(command)
+      const { classification, intent } = analyze(ast)
+      const dangerCheck = isDangerous(ast)
+
+      // Check if command requires confirmation
+      const requiresConfirm = classification.impact === 'critical' || classification.impact === 'high'
+
+      // If dangerous and not confirmed, block execution
+      if (requiresConfirm && !options?.confirm) {
+        return this.createBlockedResult(command, classification, intent, dangerCheck.reason)
+      }
+
+      // Command is safe or confirmed - allow execution
+      return null
+    } catch {
+      // If AST analysis fails (e.g., parse error), allow executor to handle
+      // This ensures backward compatibility and allows the executor to
+      // provide its own error handling
+      return null
+    }
+  }
+
+  /**
+   * Create a blocked result for dangerous commands.
+   */
+  private createBlockedResult(
+    command: string,
+    classification: SafetyClassification,
+    intent: Intent,
+    reason?: string,
+  ): BashResult {
+    const blockReason = reason || classification.reason || 'Command blocked due to safety concerns'
+
+    return {
+      input: command,
+      command,
+      valid: true,
+      generated: false,
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+      intent,
+      classification,
+      blocked: true,
+      requiresConfirm: true,
+      blockReason,
+    }
   }
 
   /**
@@ -515,6 +592,9 @@ export class BashModule implements BashCapability {
    * Run a shell script.
    * Executes a multi-line bash script with full shell features.
    *
+   * This method performs AST-based safety analysis before execution,
+   * blocking dangerous scripts unless confirm: true is passed.
+   *
    * @param script - The bash script to execute
    * @param options - Optional execution options
    * @returns Promise resolving to the execution result
@@ -535,7 +615,13 @@ export class BashModule implements BashCapability {
    * ```
    */
   async run(script: string, options?: ExecOptions): Promise<BashResult> {
-    // Execute script as a bash -c command
+    // Perform AST-based safety analysis
+    const safetyResult = this.performSafetyAnalysis(script, options)
+    if (safetyResult) {
+      return safetyResult
+    }
+
+    // Execute script via executor
     return this.executor.execute(script, options)
   }
 

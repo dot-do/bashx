@@ -139,6 +139,99 @@ describe('BashModule', () => {
     })
   })
 
+  describe('safety gate', () => {
+    it('should block critical commands without confirmation', async () => {
+      // Override mock to return critical classification
+      const { analyze, isDangerous } = await import('../../src/ast/analyze.js')
+      vi.mocked(analyze).mockReturnValueOnce({
+        classification: { type: 'delete', impact: 'critical', reversible: false, reason: 'Deletes entire filesystem' },
+        intent: { commands: ['rm'], reads: [], writes: [], deletes: ['/'], network: false, elevated: true },
+      })
+      vi.mocked(isDangerous).mockReturnValueOnce({ dangerous: true, reason: 'Recursive delete of root filesystem' })
+
+      const executor = createMockExecutor()
+      const bash = new BashModule(executor)
+
+      const result = await bash.exec('rm', ['-rf', '/'])
+
+      expect(result.blocked).toBe(true)
+      expect(result.requiresConfirm).toBe(true)
+      expect(result.blockReason).toContain('Recursive delete')
+      expect(executor.execute).not.toHaveBeenCalled()
+    })
+
+    it('should block high impact commands without confirmation', async () => {
+      const { analyze, isDangerous } = await import('../../src/ast/analyze.js')
+      vi.mocked(analyze).mockReturnValueOnce({
+        classification: { type: 'delete', impact: 'high', reversible: false, reason: 'Recursive delete' },
+        intent: { commands: ['rm'], reads: [], writes: [], deletes: ['directory/'], network: false, elevated: false },
+      })
+      vi.mocked(isDangerous).mockReturnValueOnce({ dangerous: true, reason: 'Recursive directory delete' })
+
+      const executor = createMockExecutor()
+      const bash = new BashModule(executor)
+
+      const result = await bash.exec('rm', ['-r', 'directory/'])
+
+      expect(result.blocked).toBe(true)
+      expect(result.requiresConfirm).toBe(true)
+      expect(executor.execute).not.toHaveBeenCalled()
+    })
+
+    it('should allow critical commands with confirm: true', async () => {
+      const { analyze, isDangerous } = await import('../../src/ast/analyze.js')
+      vi.mocked(analyze).mockReturnValueOnce({
+        classification: { type: 'delete', impact: 'critical', reversible: false, reason: 'Deletes directory' },
+        intent: { commands: ['rm'], reads: [], writes: [], deletes: ['temp/'], network: false, elevated: false },
+      })
+      vi.mocked(isDangerous).mockReturnValueOnce({ dangerous: true, reason: 'Recursive delete' })
+
+      const executor = createMockExecutor({
+        'rm -rf temp/': { stdout: '', exitCode: 0 },
+      })
+      const bash = new BashModule(executor)
+
+      const result = await bash.exec('rm', ['-rf', 'temp/'], { confirm: true })
+
+      expect(result.blocked).toBeUndefined()
+      expect(result.exitCode).toBe(0)
+      expect(executor.execute).toHaveBeenCalledWith('rm -rf temp/', { confirm: true })
+    })
+
+    it('should allow safe commands without confirmation', async () => {
+      // Default mock returns safe classification
+      const executor = createMockExecutor({
+        'ls -la': { stdout: 'file1.txt', exitCode: 0 },
+      })
+      const bash = new BashModule(executor)
+
+      const result = await bash.exec('ls', ['-la'])
+
+      expect(result.blocked).toBeUndefined()
+      expect(result.stdout).toBe('file1.txt')
+      expect(executor.execute).toHaveBeenCalled()
+    })
+
+    it('should allow medium impact commands without confirmation', async () => {
+      const { analyze, isDangerous } = await import('../../src/ast/analyze.js')
+      vi.mocked(analyze).mockReturnValueOnce({
+        classification: { type: 'write', impact: 'medium', reversible: true, reason: 'Moves file' },
+        intent: { commands: ['mv'], reads: ['old.txt'], writes: ['new.txt'], deletes: [], network: false, elevated: false },
+      })
+      vi.mocked(isDangerous).mockReturnValueOnce({ dangerous: false })
+
+      const executor = createMockExecutor({
+        'mv old.txt new.txt': { stdout: '', exitCode: 0 },
+      })
+      const bash = new BashModule(executor)
+
+      const result = await bash.exec('mv', ['old.txt', 'new.txt'])
+
+      expect(result.blocked).toBeUndefined()
+      expect(executor.execute).toHaveBeenCalled()
+    })
+  })
+
   describe('run', () => {
     it('should run a script', async () => {
       const script = 'echo "hello"\necho "world"'
