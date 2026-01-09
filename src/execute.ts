@@ -101,7 +101,7 @@ function parseCommandList(input: string): BashNode[] {
     // Check for list operators (&&, ||, ;, &)
     const listMatch = splitByListOperators(trimmedLine)
     if (listMatch.length > 1) {
-      let current = parseSimpleCommand(listMatch[0].cmd)
+      let current: BashNode = parseSimpleCommand(listMatch[0].cmd)
       for (let i = 1; i < listMatch.length; i++) {
         const next = parseSimpleCommand(listMatch[i].cmd)
         const op = listMatch[i].op as '&&' | '||' | ';' | '&'

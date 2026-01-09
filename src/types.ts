@@ -526,6 +526,19 @@ export interface ExecOptions {
  */
 export type BashOptions = ExecOptions
 
+/**
+ * Result of executing a bash command.
+ * This is a simplified alias for BashResult that focuses on execution output.
+ *
+ * @example
+ * ```typescript
+ * const result: ExecResult = await bash.exec('ls', ['-la'])
+ * console.log(result.stdout)
+ * console.log('Exit code:', result.exitCode)
+ * ```
+ */
+export type ExecResult = BashResult
+
 // ============================================================================
 // Streaming Types
 // ============================================================================
@@ -638,6 +651,40 @@ export interface SafetyClassification {
  * Alias for SafetyClassification for backwards compatibility.
  */
 export type CommandClassification = SafetyClassification
+
+/**
+ * Operation type classification.
+ * Describes the primary category of operation a command performs.
+ */
+export type OperationType = SafetyClassification['type']
+
+/**
+ * Impact level classification.
+ * Describes the potential impact of executing a command.
+ */
+export type ImpactLevel = SafetyClassification['impact']
+
+/**
+ * Safety analysis result combining classification and intent.
+ * Returned by BashCapability.analyze() method.
+ */
+export interface SafetyAnalysis {
+  /** Safety classification of the command */
+  classification: SafetyClassification
+  /** Semantic intent extracted from the command */
+  intent: Intent
+}
+
+/**
+ * Danger check result.
+ * Returned by BashCapability.isDangerous() method.
+ */
+export interface DangerCheck {
+  /** Whether the command is considered dangerous */
+  dangerous: boolean
+  /** Explanation of why the command is dangerous, if applicable */
+  reason?: string
+}
 
 // ============================================================================
 // Client Types
@@ -884,8 +931,16 @@ export interface BashCapability {
    *
    * @param input - The command or script to analyze
    * @returns Analysis result with classification and intent
+   *
+   * @example
+   * ```typescript
+   * const analysis = $.bash.analyze('rm -rf /tmp/old-files')
+   * console.log(analysis.classification.impact) // 'high'
+   * console.log(analysis.classification.type)   // 'delete'
+   * console.log(analysis.intent.deletes)        // ['/tmp/old-files']
+   * ```
    */
-  analyze(input: string): { classification: SafetyClassification; intent: Intent }
+  analyze(input: string): SafetyAnalysis
 
   /**
    * Check if a command is dangerous.
@@ -893,8 +948,16 @@ export interface BashCapability {
    *
    * @param input - The command to check
    * @returns Object indicating if dangerous and why
+   *
+   * @example
+   * ```typescript
+   * const check = $.bash.isDangerous('rm -rf /')
+   * if (check.dangerous) {
+   *   console.error('Blocked:', check.reason)
+   * }
+   * ```
    */
-  isDangerous(input: string): { dangerous: boolean; reason?: string }
+  isDangerous(input: string): DangerCheck
 }
 
 // ============================================================================

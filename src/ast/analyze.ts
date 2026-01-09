@@ -965,7 +965,9 @@ function extractCommandIntent(cmd: Command): Partial<ExtendedIntent> {
         const mtimeVal = args[mtimeIdx + 1]
         if (mtimeVal.startsWith('+')) {
           const days = mtimeVal.slice(1)
-          intent.modifiers.push(`older than ${days} days`)
+          if (intent.modifiers) {
+            intent.modifiers.push(`older than ${days} days`)
+          }
           intent.object = 'old files'
         }
       }
