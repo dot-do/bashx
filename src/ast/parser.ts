@@ -135,6 +135,9 @@ class Lexer {
         if (this.pos < this.input.length) {
           result += this.advance()
         }
+      } else if (ch === '$' && quote === '"') {
+        // Handle parameter expansion and command/arithmetic substitution inside double quotes
+        result += this.readParameterExpansion()
       } else {
         result += this.advance()
       }
@@ -149,6 +152,35 @@ class Lexer {
       suggestion: `Add closing ${quote} at the end`,
     })
 
+    return result
+  }
+
+  /**
+   * Read a quoted string inside a parameter expansion - doesn't report errors itself
+   */
+  private readQuotedStringInExpansion(quote: string): string {
+    let result = quote
+    this.advance() // consume opening quote
+
+    while (this.pos < this.input.length) {
+      const ch = this.peek()
+
+      if (ch === quote) {
+        result += this.advance()
+        return result
+      }
+
+      if (ch === '\\' && quote === '"') {
+        result += this.advance()
+        if (this.pos < this.input.length) {
+          result += this.advance()
+        }
+      } else {
+        result += this.advance()
+      }
+    }
+
+    // Return without the closing quote - parent will detect
     return result
   }
 
@@ -234,11 +266,18 @@ class Lexer {
 
       let depth = 1
       let foundClosing = false
+      let hasUnclosedQuote = false
 
       while (this.pos < this.input.length) {
         const ch = this.peek()
         if (ch === '"' || ch === "'") {
-          result += this.readQuotedString(ch)
+          const quoteStart = this.pos
+          const quotedStr = this.readQuotedStringInExpansion(ch)
+          result += quotedStr
+          // Check if quote was unclosed (doesn't end with the same quote char it started with)
+          if (!quotedStr.endsWith(ch)) {
+            hasUnclosedQuote = true
+          }
         } else if (ch === '{') {
           depth++
           result += this.advance()
@@ -255,12 +294,21 @@ class Lexer {
       }
 
       if (!foundClosing) {
-        this.errors.push({
-          message: 'Unclosed brace in parameter expansion ${',
-          line: startLine,
-          column: startColumn,
-          suggestion: 'Add closing } at the end',
-        })
+        if (hasUnclosedQuote) {
+          this.errors.push({
+            message: 'Unclosed quote in parameter expansion',
+            line: startLine,
+            column: startColumn,
+            suggestion: 'Add closing quote and } at the end',
+          })
+        } else {
+          this.errors.push({
+            message: 'Unclosed brace in parameter expansion ${',
+            line: startLine,
+            column: startColumn,
+            suggestion: 'Add closing } at the end',
+          })
+        }
       }
     } else {
       // Simple variable $VAR
@@ -528,7 +576,7 @@ class Parser {
 
   private peek(offset: number = 0): Token {
     const idx = this.pos + offset
-    if (idx >= this.tokens.length) {
+    if (idx < 0 || idx >= this.tokens.length) {
       return { type: 'EOF', value: '', line: 0, column: 0 }
     }
     return this.tokens[idx]
@@ -593,6 +641,18 @@ class Parser {
     this.skipWhitespaceTokens()
 
     const targetToken = this.peek()
+
+    // Check for consecutive redirects (like > >)
+    if (this.isRedirectToken(targetToken)) {
+      this.errors.push({
+        message: `Consecutive redirects: unexpected ${targetToken.value} after ${token.value}`,
+        line: targetToken.line,
+        column: targetToken.column,
+        suggestion: 'Remove one of the redirect operators',
+      })
+      return null
+    }
+
     if (targetToken.type !== 'WORD' && targetToken.type !== 'ASSIGNMENT') {
       this.errors.push({
         message: `Redirect incomplete: missing file after ${token.value}`,
@@ -668,11 +728,56 @@ class Parser {
       }
     }
 
+    // Handle single [ test command
+    if (this.peek().type === 'LBRACKET') {
+      const startToken = this.advance()
+      name = { type: 'Word', value: '[' }
+
+      // Parse test expression arguments until ]
+      while (this.peek().type !== 'RBRACKET' && this.peek().type !== 'EOF' &&
+        !this.isCommandTerminator(this.peek())) {
+        const token = this.peek()
+        if (token.type === 'WORD') {
+          const word = this.parseWord()
+          if (word) {
+            args.push(word)
+          }
+        } else {
+          break
+        }
+      }
+
+      // Expect closing ]
+      if (this.peek().type !== 'RBRACKET') {
+        this.errors.push({
+          message: 'Unclosed [ test bracket: missing ]',
+          line: startToken.line,
+          column: startToken.column,
+          suggestion: 'Add ] to close the test bracket',
+        })
+      } else {
+        this.advance() // consume ]
+        args.push({ type: 'Word', value: ']' })
+      }
+
+      return { type: 'Command', name, prefix, args, redirects }
+    }
+
     // Parse command name and arguments
     while (true) {
       const token = this.peek()
 
       if (this.isRedirectToken(token)) {
+        // Check for consecutive redirects (like > >)
+        const prevToken = this.peek(-1)
+        if (prevToken && this.isRedirectToken(prevToken)) {
+          this.errors.push({
+            message: `Consecutive redirects: unexpected ${token.value} after ${prevToken.value}`,
+            line: token.line,
+            column: token.column,
+            suggestion: 'Remove one of the redirect operators',
+          })
+        }
         const redirect = this.parseRedirect()
         if (redirect) {
           redirects.push(redirect)
@@ -795,12 +900,18 @@ class Parser {
     const body: BashNode[] = []
 
     // Parse condition
-    const condition = this.parseCompoundList()
+    const condition = this.parseCondition()
     if (condition) {
       body.push(condition)
     }
 
     this.skipNewlines()
+
+    // Skip semicolon before 'then' (common in one-line if statements)
+    if (this.peek().type === 'SEMICOLON') {
+      this.advance()
+      this.skipNewlines()
+    }
 
     // Expect 'then'
     if (this.peek().type !== 'THEN') {
@@ -839,11 +950,16 @@ class Parser {
 
       if (this.peek(-1).type === 'ELIF') {
         // Parse elif condition
-        const elifCondition = this.parseCompoundList()
+        const elifCondition = this.parseCondition()
         if (elifCondition) {
           body.push(elifCondition)
         }
         this.skipNewlines()
+        // Skip semicolon before 'then'
+        if (this.peek().type === 'SEMICOLON') {
+          this.advance()
+          this.skipNewlines()
+        }
         if (this.peek().type === 'THEN') {
           this.advance()
         }
@@ -975,7 +1091,7 @@ class Parser {
     const body: BashNode[] = []
 
     // Parse condition
-    const condition = this.parseCompoundList()
+    const condition = this.parseCondition()
     if (condition) {
       body.push(condition)
     }
@@ -1304,6 +1420,16 @@ class Parser {
     return left
   }
 
+  /**
+   * Parse a condition for if/while/until statements.
+   * Unlike parseCompoundList, this doesn't report "unexpected semicolon" errors
+   * since conditions are typically followed by semicolons in one-line syntax.
+   */
+  private parseCondition(): BashNode | null {
+    this.skipNewlines()
+    return this.parseAndOr()
+  }
+
   private parseCompoundList(): BashNode | null {
     this.skipNewlines()
 
@@ -1353,14 +1479,6 @@ class Parser {
       body,
       errors: this.errors.length > 0 ? this.errors : undefined,
     }
-  }
-
-  private peek(offset: number = 0): Token {
-    const idx = this.pos + offset
-    if (idx < 0 || idx >= this.tokens.length) {
-      return { type: 'EOF', value: '', line: 0, column: 0 }
-    }
-    return this.tokens[idx]
   }
 }
 
