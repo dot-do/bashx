@@ -1155,6 +1155,3 @@ function applyAllOptimizations(input: string, suggestions: OptimizationSuggestio
 
   return input
 }
-
-// Export types for use by tests
-export type { OptimizationSuggestion, OptimizationResult }
