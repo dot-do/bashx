@@ -34,6 +34,11 @@ const READ_ONLY_COMMANDS = new Set([
   'basename', 'dirname', 'realpath', 'readlink', 'md5sum', 'sha256sum',
   'git', 'npm', 'node', 'python', 'python3', 'ruby', 'perl',
   'man', 'help', 'info', 'apropos', 'whatis',
+  // Shell builtins that don't modify filesystem
+  'cd', 'pushd', 'popd', 'dirs', 'alias', 'unalias', 'export', 'set', 'unset',
+  'read', 'declare', 'local', 'typeset', 'readonly', 'shift', 'wait', 'jobs',
+  'fg', 'bg', 'disown', 'builtin', 'command', 'enable', 'hash', 'history',
+  'let', 'logout', 'mapfile', 'readarray', 'return', 'trap', 'ulimit', 'umask',
 ])
 
 /**
@@ -174,8 +179,11 @@ function extractPaths(args: string[]): string[] {
 function hasCriticalPath(paths: string[]): boolean {
   return paths.some(p => {
     const normalized = p.replace(/\/+$/, '')
-    return normalized === '/' || normalized === '/*' ||
+    // Handle root path (/ or empty after stripping trailing slashes)
+    // Also handle /* and ~/
+    return normalized === '' || normalized === '/' || normalized === '/*' ||
            normalized === '~' || normalized === '~/' ||
+           p === '/' || // Direct check before normalization
            isDevicePath(p)
   })
 }
@@ -552,10 +560,12 @@ function combineClassifications(classifications: CommandClassification[]): Comma
   const typeOrder = ['read', 'write', 'delete', 'execute', 'network', 'system', 'mixed']
 
   let maxImpact = 'none'
-  let hasMultipleTypes = false
   let mainType = classifications[0].type
   let mainReason = classifications[0].reason
   let anyIrreversible = false
+
+  // Collect all non-read types to determine if truly mixed
+  const nonReadTypes = new Set<string>()
 
   for (const classification of classifications) {
     // Track maximum impact
@@ -564,9 +574,9 @@ function combineClassifications(classifications: CommandClassification[]): Comma
       mainReason = classification.reason
     }
 
-    // Track if we have multiple different types
-    if (classification.type !== mainType && classification.type !== 'read') {
-      hasMultipleTypes = true
+    // Track non-read types
+    if (classification.type !== 'read') {
+      nonReadTypes.add(classification.type)
     }
 
     // Update main type if this one is more severe
@@ -579,6 +589,11 @@ function combineClassifications(classifications: CommandClassification[]): Comma
       anyIrreversible = true
     }
   }
+
+  // Only return 'mixed' if there are truly multiple different non-read types
+  // (e.g., write + network, delete + system)
+  // Don't count read as it's semantically included in other operations
+  const hasMultipleTypes = nonReadTypes.size > 1
 
   return {
     type: hasMultipleTypes ? 'mixed' : mainType,
@@ -626,14 +641,22 @@ function extractIntent(commands: Command[]): Intent {
     // Categorize paths
     if (DELETE_COMMANDS.has(name)) {
       intent.deletes.push(...paths)
+    } else if (name === 'mv') {
+      // mv reads source, writes to destination, and deletes source
+      if (paths.length >= 2) {
+        // All but last are sources (reads and deletes)
+        const sources = paths.slice(0, -1)
+        const dest = paths[paths.length - 1]
+        intent.reads.push(...sources)
+        intent.writes.push(dest)
+        intent.deletes.push(...sources) // mv removes from source
+      } else if (paths.length === 1) {
+        // Single arg mv (unusual, but handle it)
+        intent.reads.push(paths[0])
+        intent.deletes.push(paths[0])
+      }
     } else if (WRITE_COMMANDS.has(name) || name === 'chmod' || name === 'chown') {
       intent.writes.push(...paths)
-    } else if (name === 'mv') {
-      if (paths.length >= 2) {
-        intent.reads.push(paths[0])
-        intent.writes.push(paths[paths.length - 1])
-        intent.deletes.push(paths[0]) // mv removes from source
-      }
     } else if (READ_ONLY_COMMANDS.has(name)) {
       if (paths.length > 0) {
         intent.reads.push(...paths)
