@@ -20,6 +20,91 @@ await bash`rm -rf /`  // → { blocked: true, requiresConfirm: true }
 await bash('rm -rf /', { confirm: true })  // → executes
 ```
 
+## DO Integration
+
+bashx provides the `$.bash` capability for dotdo Durable Objects:
+
+```typescript
+import { DO } from 'dotdo/bash'
+
+class MySite extends DO {
+  async build() {
+    // $.bash is lazy-loaded from bashx
+    await this.$.bash`npm install && npm run build`
+    const result = await this.$.bash.exec('npm', ['run', 'test'])
+  }
+}
+```
+
+### Execution Tiers
+
+bashx uses a **tiered execution model** for optimal performance:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Tier 1: Native In-Worker (<1ms)                   │
+├─────────────────────────────────────────────────────────────────────┤
+│  • fetch/ofetch (curl equivalent)     • JSON operations              │
+│  • Node.js APIs (nodejs_compat_v2)    • Text processing              │
+│  • Path, crypto, streams, zlib        • Basic file ops via $.fs      │
+└─────────────────────────────────────────────────────────────────────┘
+                                ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                 Tier 2: RPC Bindings (<5ms)                          │
+├─────────────────────────────────────────────────────────────────────┤
+│  • $.jq → jq.do (jqjs as a service)                                  │
+│  • $.npm → npm.do (package resolution/execution)                     │
+│  • Heavy operations as separate Workers (keep bundle small)          │
+└─────────────────────────────────────────────────────────────────────┘
+                                ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│              Tier 3: worker_loaders (<10ms cold)                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  • Dynamic npm packages (fetch from esm.sh, run in isolate)          │
+│  • User-provided code (sandboxed V8 isolate)                         │
+│  • ai-evaluate pattern for code execution                            │
+└─────────────────────────────────────────────────────────────────────┘
+                                ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│              Tier 4: Sandbox SDK (2-3s cold)                         │
+├─────────────────────────────────────────────────────────────────────┤
+│  Only for things that truly need Linux:                              │
+│  • Shell scripts with bash-specific features                         │
+│  • Python with native C extensions (numpy, pandas)                   │
+│  • Binary executables (ffmpeg, imagemagick)                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Native Command Mappings
+
+Most Unix commands map to native Workers APIs:
+
+| Command | Native Equivalent | Tier |
+|---------|-------------------|------|
+| `curl` | `ofetch`/`fetch` | 1 |
+| `cat`, `head`, `tail` | `$.fs.read()` | 1 |
+| `ls`, `find` | `$.fs.list()` | 1 |
+| `jq` | RPC to jq.do or inline jqjs | 2 |
+| `node` | nodejs_compat_v2 | 1 |
+| `npm install` | esm.sh + worker_loaders | 3 |
+| `bash script.sh` | Sandbox SDK | 4 |
+
+### As an RPC Service
+
+For heavy bash operations, bashx can run as a separate Worker:
+
+```toml
+# wrangler.toml
+[[services]]
+binding = "BASHX"
+service = "bashx-do"
+```
+
+```typescript
+// Heavy operations go through RPC
+const result = await env.BASHX.exec('complex-script.sh')
+```
+
 ## The Insight
 
 ```
