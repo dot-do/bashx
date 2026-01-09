@@ -43,6 +43,28 @@ export interface ExecuteResult extends BashResult {
   dryRun?: boolean
 }
 
+/**
+ * Error type for child_process exec errors.
+ * Extends the standard Error with process-specific fields.
+ */
+interface ExecError extends Error {
+  /** Exit code from the process */
+  code?: number
+  /** Whether the process was killed */
+  killed?: boolean
+  /** Standard output captured before error */
+  stdout?: Buffer | string
+  /** Standard error captured */
+  stderr?: Buffer | string
+}
+
+/**
+ * Type guard to check if an error is an ExecError from child_process.
+ */
+function isExecError(error: unknown): error is ExecError {
+  return error instanceof Error
+}
+
 // ============================================================================
 // Simple Parser (lightweight, no tree-sitter dependency)
 // ============================================================================
@@ -321,7 +343,7 @@ function parseCommandParts(input: string): Command {
       if (i + 1 < parts.length) {
         redirects.push({
           type: 'Redirect',
-          op: part as any,
+          op: part,
           target: { type: 'Word', value: parts[i + 1] },
         })
         i++ // Skip the target
@@ -353,7 +375,7 @@ function parseCommandParts(input: string): Command {
     name: name ? { type: 'Word', value: name } : null,
     prefix: [],
     args: args.map(arg => ({ type: 'Word', value: arg })),
-    redirects: redirects as any,
+    redirects,
   }
 }
 
@@ -778,9 +800,11 @@ export async function execute(command: string, options?: ExecOptions): Promise<E
       exitCode: 0,
       undo: undoInfo?.undoCommand,
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const execError = isExecError(error) ? error : null
+
     // Handle timeout
-    if (error.message === 'Command timed out' || error.killed) {
+    if (execError?.message === 'Command timed out' || execError?.killed) {
       return {
         input: command,
         valid: true,
@@ -805,9 +829,9 @@ export async function execute(command: string, options?: ExecOptions): Promise<E
       classification: finalClassification,
       command,
       generated: false,
-      stdout: error.stdout?.toString() || '',
-      stderr: error.stderr?.toString() || error.message || 'Execution error',
-      exitCode: error.code || 1,
+      stdout: execError?.stdout?.toString() || '',
+      stderr: execError?.stderr?.toString() || execError?.message || 'Execution error',
+      exitCode: execError?.code || 1,
       // No undo for failed commands
     }
   }

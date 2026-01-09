@@ -681,13 +681,13 @@ export type Constructor<T = object> = new (...args: any[]) => T
 /**
  * Configuration for the withBash mixin.
  */
-export interface WithBashConfig<TBase> {
+export interface WithBashConfig<TBase extends Constructor> {
   /**
    * Factory function to create the executor.
    * Receives the instance as its argument, allowing access to instance
    * properties like `env` for configuring the executor.
    */
-  executor: (instance: InstanceType<TBase extends Constructor ? TBase : never>) => BashExecutor
+  executor: (instance: InstanceType<TBase>) => BashExecutor
 
   /**
    * Optional factory function to get FsCapability from the instance.
@@ -701,7 +701,7 @@ export interface WithBashConfig<TBase> {
    * })
    * ```
    */
-  fs?: (instance: InstanceType<TBase extends Constructor ? TBase : never>) => FsCapability | undefined
+  fs?: (instance: InstanceType<TBase>) => FsCapability | undefined
 
   /**
    * Whether to use native operations when FsCapability is available.
@@ -806,7 +806,7 @@ export function withBash<TBase extends Constructor>(
 ): TBase & Constructor<WithBashCapability> {
   // Normalize config to object form
   const normalizedConfig: WithBashConfig<TBase> =
-    typeof config === 'function' ? { executor: config as any } : config
+    typeof config === 'function' ? { executor: config } : config
 
   // Use abstract class to properly type the mixin
   abstract class BashMixin extends Base implements WithBashCapability {

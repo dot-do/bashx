@@ -18,6 +18,26 @@ import type { BashResult, SafetyClassification } from './types.js'
 
 const execAsync = promisify(exec)
 
+/**
+ * Error type for child_process exec errors.
+ * Extends the standard Error with process-specific fields.
+ */
+interface ExecError extends Error {
+  /** Exit code from the process */
+  code?: number
+  /** Standard output captured before error */
+  stdout?: Buffer | string
+  /** Standard error captured */
+  stderr?: Buffer | string
+}
+
+/**
+ * Type guard to check if an error is an ExecError from child_process.
+ */
+function isExecError(error: unknown): error is ExecError {
+  return error instanceof Error
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -549,7 +569,8 @@ export async function undo(entryId?: string): Promise<BashResult> {
       stderr: stderr.toString(),
       exitCode: 0,
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const execError = isExecError(error) ? error : null
     return {
       input: entry.undoCommand,
       valid: true,
@@ -569,9 +590,9 @@ export async function undo(entryId?: string): Promise<BashResult> {
       },
       command: entry.undoCommand,
       generated: false,
-      stdout: error.stdout?.toString() || '',
-      stderr: error.stderr?.toString() || error.message,
-      exitCode: error.code || 1,
+      stdout: execError?.stdout?.toString() || '',
+      stderr: execError?.stderr?.toString() || execError?.message || 'Undo failed',
+      exitCode: execError?.code || 1,
     }
   }
 }
