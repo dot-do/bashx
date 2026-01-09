@@ -96,10 +96,10 @@ export function executeJq(query: string, input: string, options: JqOptions = {})
   }
 
   // Execute query
-  const result = evaluateJq(query, data, context)
+  const result = evaluateJqWithMeta(query, data, context)
 
   // Format output
-  return formatJqOutput(result, options)
+  return formatJqOutput(result.value, options, result.isIterator)
 }
 
 /**
@@ -132,9 +132,25 @@ interface JqResult {
 }
 
 /**
- * Evaluate a jq expression
+ * Evaluate a jq expression (internal use, returns raw value)
  */
-function evaluateJq(query: string, data: unknown, context: JqContext): JqResult {
+function evaluateJq(query: string, data: unknown, context: JqContext): unknown {
+  const trimmedQuery = query.trim()
+
+  // Handle empty/identity query
+  if (trimmedQuery === '.' || trimmedQuery === '') {
+    return data
+  }
+
+  // Parse and execute the query
+  const tokens = tokenizeJq(trimmedQuery)
+  return executeJqTokens(tokens, data, context).value
+}
+
+/**
+ * Evaluate a jq expression with iterator metadata (for top-level formatting)
+ */
+function evaluateJqWithMeta(query: string, data: unknown, context: JqContext): JqResult {
   const trimmedQuery = query.trim()
 
   // Handle empty/identity query
@@ -212,7 +228,7 @@ function tokenizeJq(query: string): string[] {
  * Handles iterator semantics: when a filter produces multiple outputs,
  * subsequent filters are applied to each output independently.
  */
-function executeJqTokens(tokens: string[], data: unknown, context: JqContext): unknown {
+function executeJqTokens(tokens: string[], data: unknown, context: JqContext): JqResult {
   let result: unknown = data
   let isIterator = false
 
@@ -224,7 +240,7 @@ function executeJqTokens(tokens: string[], data: unknown, context: JqContext): u
     if (isIterator && Array.isArray(result)) {
       const filtered: unknown[] = []
       for (const item of result) {
-        const itemResult = executeJqExpression(token, item, context)
+        const itemResult = executeJqExpressionRaw(token, item, context)
         // select returns undefined for non-matches
         if (itemResult !== undefined) {
           filtered.push(itemResult)
@@ -234,19 +250,19 @@ function executeJqTokens(tokens: string[], data: unknown, context: JqContext): u
       // Keep iterator mode for subsequent filters
       isIterator = true
     } else {
-      result = executeJqExpression(token, result, context)
+      result = executeJqExpressionRaw(token, result, context)
       // Check if this is an iterator expression
       isIterator = token === '.[]' || /^\.[a-zA-Z_]\w*\[\]$/.test(token)
     }
   }
 
-  return result
+  return { value: result, isIterator }
 }
 
 /**
- * Execute a single jq expression
+ * Execute a single jq expression (raw, returns value directly)
  */
-function executeJqExpression(expr: string, data: unknown, context: JqContext): unknown {
+function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext): unknown {
   const trimmed = expr.trim()
 
   // Identity
@@ -630,14 +646,10 @@ function executeJqExpression(expr: string, data: unknown, context: JqContext): u
 function evaluateCondition(condition: string, data: unknown, context: JqContext): boolean {
   const trimmed = condition.trim()
 
-  // DEBUG - remove later
-  console.error('DEBUG evaluateCondition:', JSON.stringify({ condition: trimmed, data, vars: context.vars, argjson: context.argjson }))
-
   // Handle compound conditions first (and/or) - split on first instance
   // This must be done before comparison to handle: .name == $name and .age > $minAge
   if (trimmed.includes(' and ')) {
     const parts = trimmed.split(' and ')
-    console.error('DEBUG and parts:', parts)
     return parts.every((part) => evaluateCondition(part.trim(), data, context))
   }
 
@@ -653,23 +665,18 @@ function evaluateCondition(condition: string, data: unknown, context: JqContext)
     const op = compMatch[2]
     let right: unknown = compMatch[3].trim()
 
-    console.error('DEBUG compMatch before parse:', { leftExpr: compMatch[1], op, rightExpr: compMatch[3], left, rightRaw: right })
-
     // Parse right side
     if (/^-?\d+(\.\d+)?$/.test(right as string)) {
       right = parseFloat(right as string)
     } else if ((right as string).startsWith('$')) {
       const varName = (right as string).slice(1)
       right = context.argjson[varName] ?? context.vars[varName]
-      console.error('DEBUG variable lookup:', { varName, result: right, argjson: context.argjson, vars: context.vars })
     } else if ((right as string).startsWith('.')) {
       right = evaluateJq(right as string, data, context)
     } else if ((right as string).startsWith('"') && (right as string).endsWith('"')) {
       // Handle quoted strings
       right = (right as string).slice(1, -1)
     }
-
-    console.error('DEBUG comparison:', { left, op, right, result: left === right })
 
     switch (op) {
       case '>':
