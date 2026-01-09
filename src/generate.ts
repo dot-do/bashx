@@ -140,7 +140,7 @@ const intentPatterns: IntentPattern[] = [
   // ============================================
   {
     patterns: [
-      /^show\s+(?:the\s+)?current\s+directory$/i,
+      /^show\s+(?:me\s+)?(?:the\s+)?current\s+directory$/i,
       /^where\s+am\s+I$/i,
       /^pwd$/i,
       /^print\s+working\s+directory$/i,
@@ -370,6 +370,17 @@ const intentPatterns: IntentPattern[] = [
       confidence: 0.85,
       explanation: `Finds files larger than ${match[1]}${match[2].toUpperCase()}`,
       alternatives: [],
+    }),
+  },
+
+  // Generic "find large files"
+  {
+    patterns: [/^find\s+large\s+files?$/i],
+    handler: () => ({
+      command: 'find . -size +100M',
+      confidence: 0.85,
+      explanation: 'Finds files larger than 100MB',
+      alternatives: ['find . -size +10M', 'find . -size +1G', 'du -ah . | sort -rh | head -20'],
     }),
   },
 

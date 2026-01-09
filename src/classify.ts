@@ -66,7 +66,7 @@ export interface InputClassification {
 const BASH_COMMANDS = new Set([
   // Filesystem
   'ls', 'cd', 'pwd', 'mkdir', 'rmdir', 'rm', 'cp', 'mv', 'touch', 'cat', 'head', 'tail',
-  'less', 'more', 'find', 'locate', 'du', 'df', 'ln', 'chmod', 'chown', 'chgrp',
+  'less', 'more', 'find', 'locate', 'du', 'df', 'ln', 'chmod', 'chown', 'chgrp', 'dd',
   // Text processing
   'grep', 'awk', 'sed', 'sort', 'uniq', 'wc', 'cut', 'tr', 'diff', 'comm',
   // System
@@ -392,6 +392,28 @@ export async function classifyInput(input: string): Promise<InputClassification>
         confidence: 0.8,
         input: trimmed,
         reason: `Starts with command "${firstCommand}" but rest appears to be natural language`,
+        ambiguous: false,
+        suggestedCommand: suggested,
+      }
+    }
+
+    // Check if arguments look like natural language rather than command args
+    // Natural language args: adjectives like "large", "big", "small", "old", "new"
+    // Natural language args: plural nouns like "files", "directories", "folders"
+    // Command args: flags like "-l", paths like ".", or filenames
+    const naturalLanguageArgs = /\b(large|big|small|old|new|recent|latest|oldest|newest|empty|hidden|modified|changed|created|deleted)\b/i
+    const looksLikePath = /^[.~\/]|\/|\.[a-z]+$/i
+    const restWords = words.slice(1)
+    const hasNaturalArgs = naturalLanguageArgs.test(restOfInput)
+    const hasPathLikeArgs = restWords.some(w => looksLikePath.test(w) || w.startsWith('-'))
+
+    if (hasNaturalArgs && !hasPathLikeArgs) {
+      const suggested = suggestCommand(trimmed)
+      return {
+        type: 'intent',
+        confidence: 0.85,
+        input: trimmed,
+        reason: `Starts with command "${firstCommand}" but arguments appear to be natural language`,
         ambiguous: false,
         suggestedCommand: suggested,
       }

@@ -100,11 +100,11 @@ describe('MCP Tool Execution', () => {
       expect(typeof handleBash).toBe('function')
       const result = handleBash({ input: 'ls' })
       expect(result).toBeInstanceOf(Promise)
-      // Handle the rejection to avoid unhandled rejection error
-      await expect(result).rejects.toThrow()
+      // Verify the promise resolves successfully with the implementation
+      await expect(result).resolves.toBeDefined()
     })
 
-    it.skip('should execute simple read-only commands', async () => {
+    it('should execute simple read-only commands', async () => {
       // This test should pass once backend is implemented
       const result = await handleBash({ input: 'ls' })
 
@@ -114,7 +114,7 @@ describe('MCP Tool Execution', () => {
       expect(result.exitCode).toBe(0)
     })
 
-    it.skip('should return BashResult structure', async () => {
+    it('should return BashResult structure', async () => {
       const result = await handleBash({ input: 'pwd' })
 
       // Verify all required BashResult properties
@@ -129,7 +129,7 @@ describe('MCP Tool Execution', () => {
       expect(result).toHaveProperty('exitCode')
     })
 
-    it.skip('should parse command into AST', async () => {
+    it('should parse command into AST', async () => {
       const result = await handleBash({ input: 'echo hello' })
 
       expect(result.ast).toBeDefined()
@@ -137,14 +137,14 @@ describe('MCP Tool Execution', () => {
       expect(result.ast?.body.length).toBeGreaterThan(0)
     })
 
-    it.skip('should handle commands with arguments', async () => {
+    it('should handle commands with arguments', async () => {
       const result = await handleBash({ input: 'ls -la /tmp' })
 
       expect(result.valid).toBe(true)
       expect(result.command).toBe('ls -la /tmp')
     })
 
-    it.skip('should handle pipelines', async () => {
+    it('should handle pipelines', async () => {
       const result = await handleBash({ input: 'cat package.json | grep name' })
 
       expect(result.valid).toBe(true)
@@ -152,7 +152,7 @@ describe('MCP Tool Execution', () => {
       expect(result.intent.commands).toContain('grep')
     })
 
-    it.skip('should handle command lists (&&)', async () => {
+    it('should handle command lists (&&)', async () => {
       const result = await handleBash({ input: 'mkdir test && cd test' })
 
       expect(result.valid).toBe(true)
@@ -162,7 +162,7 @@ describe('MCP Tool Execution', () => {
   })
 
   describe('handleBash() Error Handling', () => {
-    it.skip('should handle invalid bash syntax', async () => {
+    it('should handle invalid bash syntax', async () => {
       const result = await handleBash({ input: 'echo "unclosed' })
 
       expect(result.valid).toBe(false)
@@ -170,28 +170,28 @@ describe('MCP Tool Execution', () => {
       expect(result.errors!.length).toBeGreaterThan(0)
     })
 
-    it.skip('should provide error suggestions', async () => {
+    it('should provide error suggestions', async () => {
       const result = await handleBash({ input: 'echo "test' })
 
       expect(result.errors).toBeDefined()
       expect(result.errors![0].suggestion).toBeDefined()
     })
 
-    it.skip('should handle empty input', async () => {
+    it('should handle empty input', async () => {
       const result = await handleBash({ input: '' })
 
       expect(result.valid).toBe(true)
       expect(result.command).toBe('')
     })
 
-    it.skip('should handle whitespace-only input', async () => {
+    it('should handle whitespace-only input', async () => {
       const result = await handleBash({ input: '   ' })
 
       expect(result.valid).toBe(true)
       expect(result.command).toBe('')
     })
 
-    it.skip('should handle command execution errors', async () => {
+    it('should handle command execution errors', async () => {
       const result = await handleBash({ input: 'cat nonexistent-file-12345.txt' })
 
       expect(result.exitCode).not.toBe(0)
@@ -207,7 +207,7 @@ describe('MCP Tool Execution', () => {
 
 describe('MCP Tool Safety Analysis', () => {
   describe('Pre-execution Safety Check', () => {
-    it.skip('should analyze command before execution', async () => {
+    it('should analyze command before execution', async () => {
       const result = await handleBash({ input: 'ls' })
 
       expect(result.classification).toBeDefined()
@@ -217,7 +217,7 @@ describe('MCP Tool Safety Analysis', () => {
       expect(result.classification.reason).toBeDefined()
     })
 
-    it.skip('should classify read-only commands as safe', async () => {
+    it('should classify read-only commands as safe', async () => {
       const result = await handleBash({ input: 'cat package.json' })
 
       expect(result.classification.type).toBe('read')
@@ -225,21 +225,21 @@ describe('MCP Tool Safety Analysis', () => {
       expect(result.classification.reversible).toBe(true)
     })
 
-    it.skip('should classify delete commands appropriately', async () => {
+    it('should classify delete commands appropriately', async () => {
       const result = await handleBash({ input: 'rm file.txt' })
 
       expect(result.classification.type).toBe('delete')
       expect(result.classification.reversible).toBe(false)
     })
 
-    it.skip('should classify recursive delete as high impact', async () => {
+    it('should classify recursive delete as high impact', async () => {
       const result = await handleBash({ input: 'rm -r directory/' })
 
       expect(result.classification.type).toBe('delete')
       expect(result.classification.impact).toBe('high')
     })
 
-    it.skip('should classify network commands appropriately', async () => {
+    it('should classify network commands appropriately', async () => {
       const result = await handleBash({ input: 'curl https://example.com' })
 
       expect(result.classification.type).toBe('network')
@@ -247,7 +247,7 @@ describe('MCP Tool Safety Analysis', () => {
   })
 
   describe('Critical Command Blocking', () => {
-    it.skip('should block critical commands by default', async () => {
+    it('should block critical commands by default', async () => {
       const result = await handleBash({ input: 'rm -rf /' })
 
       expect(result.blocked).toBe(true)
@@ -256,21 +256,21 @@ describe('MCP Tool Safety Analysis', () => {
       expect(result.classification.impact).toBe('critical')
     })
 
-    it.skip('should block chmod on root with recursive', async () => {
+    it('should block chmod on root with recursive', async () => {
       const result = await handleBash({ input: 'chmod -R 777 /' })
 
       expect(result.blocked).toBe(true)
       expect(result.classification.impact).toBe('critical')
     })
 
-    it.skip('should block dd to device paths', async () => {
+    it('should block dd to device paths', async () => {
       const result = await handleBash({ input: 'dd if=/dev/zero of=/dev/sda' })
 
       expect(result.blocked).toBe(true)
       expect(result.classification.impact).toBe('critical')
     })
 
-    it.skip('should allow critical commands with confirm=true', async () => {
+    it('should allow critical commands with confirm=true', async () => {
       const result = await handleBash({
         input: 'rm -rf /tmp/safe-to-delete',
         confirm: true,
@@ -279,7 +279,7 @@ describe('MCP Tool Safety Analysis', () => {
       expect(result.blocked).not.toBe(true)
     })
 
-    it.skip('should not block safe commands', async () => {
+    it('should not block safe commands', async () => {
       const result = await handleBash({ input: 'ls -la' })
 
       expect(result.blocked).toBeUndefined()
@@ -288,7 +288,7 @@ describe('MCP Tool Safety Analysis', () => {
   })
 
   describe('Intent Extraction', () => {
-    it.skip('should extract intent from commands', async () => {
+    it('should extract intent from commands', async () => {
       const result = await handleBash({ input: 'cat file.txt' })
 
       expect(result.intent).toBeDefined()
@@ -296,31 +296,31 @@ describe('MCP Tool Safety Analysis', () => {
       expect(result.intent.reads).toContain('file.txt')
     })
 
-    it.skip('should detect file reads', async () => {
+    it('should detect file reads', async () => {
       const result = await handleBash({ input: 'head -n 10 log.txt' })
 
       expect(result.intent.reads).toContain('log.txt')
     })
 
-    it.skip('should detect file writes from redirects', async () => {
+    it('should detect file writes from redirects', async () => {
       const result = await handleBash({ input: 'echo "test" > output.txt' })
 
       expect(result.intent.writes).toContain('output.txt')
     })
 
-    it.skip('should detect deletes', async () => {
+    it('should detect deletes', async () => {
       const result = await handleBash({ input: 'rm old-file.txt' })
 
       expect(result.intent.deletes).toContain('old-file.txt')
     })
 
-    it.skip('should detect network operations', async () => {
+    it('should detect network operations', async () => {
       const result = await handleBash({ input: 'wget https://example.com/file.tar.gz' })
 
       expect(result.intent.network).toBe(true)
     })
 
-    it.skip('should detect elevated operations', async () => {
+    it('should detect elevated operations', async () => {
       const result = await handleBash({ input: 'sudo rm file.txt' })
 
       expect(result.intent.elevated).toBe(true)
@@ -334,26 +334,26 @@ describe('MCP Tool Safety Analysis', () => {
 
 describe('MCP Tool Result Formatting', () => {
   describe('Successful Execution Result', () => {
-    it.skip('should include stdout', async () => {
+    it('should include stdout', async () => {
       const result = await handleBash({ input: 'echo "hello world"' })
 
       expect(result.stdout).toBeDefined()
       expect(result.stdout).toContain('hello world')
     })
 
-    it.skip('should include exit code 0 for success', async () => {
+    it('should include exit code 0 for success', async () => {
       const result = await handleBash({ input: 'true' })
 
       expect(result.exitCode).toBe(0)
     })
 
-    it.skip('should include empty stderr for success', async () => {
+    it('should include empty stderr for success', async () => {
       const result = await handleBash({ input: 'echo test' })
 
       expect(result.stderr).toBe('')
     })
 
-    it.skip('should mark command as not generated for direct input', async () => {
+    it('should mark command as not generated for direct input', async () => {
       const result = await handleBash({ input: 'ls' })
 
       expect(result.generated).toBe(false)
@@ -361,13 +361,13 @@ describe('MCP Tool Result Formatting', () => {
   })
 
   describe('Failed Execution Result', () => {
-    it.skip('should include non-zero exit code for failure', async () => {
+    it('should include non-zero exit code for failure', async () => {
       const result = await handleBash({ input: 'exit 1' })
 
       expect(result.exitCode).toBe(1)
     })
 
-    it.skip('should include stderr for failures', async () => {
+    it('should include stderr for failures', async () => {
       const result = await handleBash({ input: 'ls nonexistent-directory-xyz' })
 
       expect(result.exitCode).not.toBe(0)
@@ -376,26 +376,26 @@ describe('MCP Tool Result Formatting', () => {
   })
 
   describe('Blocked Result', () => {
-    it.skip('should include blocked flag', async () => {
+    it('should include blocked flag', async () => {
       const result = await handleBash({ input: 'rm -rf /' })
 
       expect(result.blocked).toBe(true)
     })
 
-    it.skip('should include requiresConfirm flag', async () => {
+    it('should include requiresConfirm flag', async () => {
       const result = await handleBash({ input: 'rm -rf /' })
 
       expect(result.requiresConfirm).toBe(true)
     })
 
-    it.skip('should include blockReason', async () => {
+    it('should include blockReason', async () => {
       const result = await handleBash({ input: 'rm -rf /' })
 
       expect(result.blockReason).toBeDefined()
       expect(result.blockReason!.length).toBeGreaterThan(0)
     })
 
-    it.skip('should not execute blocked commands', async () => {
+    it('should not execute blocked commands', async () => {
       const result = await handleBash({ input: 'rm -rf /' })
 
       expect(result.blocked).toBe(true)
@@ -405,14 +405,14 @@ describe('MCP Tool Result Formatting', () => {
   })
 
   describe('Undo Capability', () => {
-    it.skip('should include undo for reversible operations', async () => {
+    it('should include undo for reversible operations', async () => {
       const result = await handleBash({ input: 'mv old.txt new.txt' })
 
       expect(result.undo).toBeDefined()
       expect(result.undo).toBe('mv new.txt old.txt')
     })
 
-    it.skip('should include undo for cp operations', async () => {
+    it('should include undo for cp operations', async () => {
       const result = await handleBash({ input: 'cp source.txt dest.txt' })
 
       expect(result.undo).toBeDefined()
@@ -420,13 +420,13 @@ describe('MCP Tool Result Formatting', () => {
       expect(result.undo).toContain('dest.txt')
     })
 
-    it.skip('should not include undo for irreversible operations', async () => {
+    it('should not include undo for irreversible operations', async () => {
       const result = await handleBash({ input: 'rm file.txt', confirm: true })
 
       expect(result.undo).toBeUndefined()
     })
 
-    it.skip('should not include undo for read-only operations', async () => {
+    it('should not include undo for read-only operations', async () => {
       const result = await handleBash({ input: 'cat file.txt' })
 
       expect(result.undo).toBeUndefined()
@@ -434,14 +434,14 @@ describe('MCP Tool Result Formatting', () => {
   })
 
   describe('Suggestions', () => {
-    it.skip('should include suggestions for syntax errors', async () => {
+    it('should include suggestions for syntax errors', async () => {
       const result = await handleBash({ input: 'if true' })
 
       expect(result.suggestions).toBeDefined()
       expect(result.suggestions!.length).toBeGreaterThan(0)
     })
 
-    it.skip('should include fix suggestions for unclosed quotes', async () => {
+    it('should include fix suggestions for unclosed quotes', async () => {
       const result = await handleBash({ input: 'echo "test' })
 
       expect(result.fixed).toBeDefined()
@@ -456,13 +456,13 @@ describe('MCP Tool Result Formatting', () => {
 
 describe('MCP Tool Natural Language Input', () => {
   describe('Intent Detection', () => {
-    it.skip('should detect natural language input', async () => {
+    it('should detect natural language input', async () => {
       const result = await handleBash({ input: 'list all files' })
 
       expect(result.generated).toBe(true)
     })
 
-    it.skip('should generate command from natural language', async () => {
+    it('should generate command from natural language', async () => {
       const result = await handleBash({ input: 'show me the current directory' })
 
       expect(result.generated).toBe(true)
@@ -472,21 +472,21 @@ describe('MCP Tool Natural Language Input', () => {
   })
 
   describe('Command Generation', () => {
-    it.skip('should generate ls for "list files"', async () => {
+    it('should generate ls for "list files"', async () => {
       const result = await handleBash({ input: 'list files' })
 
       expect(result.generated).toBe(true)
       expect(result.command).toContain('ls')
     })
 
-    it.skip('should generate find for "find large files"', async () => {
+    it('should generate find for "find large files"', async () => {
       const result = await handleBash({ input: 'find large files' })
 
       expect(result.generated).toBe(true)
       expect(result.command).toContain('find')
     })
 
-    it.skip('should generate git status for "show git status"', async () => {
+    it('should generate git status for "show git status"', async () => {
       const result = await handleBash({ input: 'show git status' })
 
       expect(result.generated).toBe(true)
@@ -494,7 +494,7 @@ describe('MCP Tool Natural Language Input', () => {
       expect(result.command).toContain('status')
     })
 
-    it.skip('should still perform safety analysis on generated commands', async () => {
+    it('should still perform safety analysis on generated commands', async () => {
       const result = await handleBash({ input: 'delete everything' })
 
       expect(result.generated).toBe(true)
@@ -510,7 +510,7 @@ describe('MCP Tool Natural Language Input', () => {
 
 describe('MCP Tool Full Flow Integration', () => {
   describe('Parse -> Classify -> Execute Flow', () => {
-    it.skip('should complete full flow for safe command', async () => {
+    it('should complete full flow for safe command', async () => {
       const result = await handleBash({ input: 'ls -la' })
 
       // Step 1: Parse
@@ -529,7 +529,7 @@ describe('MCP Tool Full Flow Integration', () => {
       expect(result.stdout.length).toBeGreaterThan(0)
     })
 
-    it.skip('should complete flow for blocked command', async () => {
+    it('should complete flow for blocked command', async () => {
       const result = await handleBash({ input: 'rm -rf /' })
 
       // Step 1: Parse
@@ -548,7 +548,7 @@ describe('MCP Tool Full Flow Integration', () => {
       expect(result.stdout).toBe('')
     })
 
-    it.skip('should complete flow for confirmed dangerous command', async () => {
+    it('should complete flow for confirmed dangerous command', async () => {
       const result = await handleBash({
         input: 'rm -rf /tmp/test-directory',
         confirm: true,
@@ -569,7 +569,7 @@ describe('MCP Tool Full Flow Integration', () => {
   })
 
   describe('Error Recovery Flow', () => {
-    it.skip('should auto-fix syntax errors when possible', async () => {
+    it('should auto-fix syntax errors when possible', async () => {
       const result = await handleBash({ input: 'echo "hello' })
 
       expect(result.valid).toBe(false)
@@ -577,7 +577,7 @@ describe('MCP Tool Full Flow Integration', () => {
       expect(result.fixed?.command).toBe('echo "hello"')
     })
 
-    it.skip('should provide suggestions when auto-fix is not possible', async () => {
+    it('should provide suggestions when auto-fix is not possible', async () => {
       const result = await handleBash({ input: 'if true' })
 
       expect(result.valid).toBe(false)
@@ -591,40 +591,40 @@ describe('MCP Tool Full Flow Integration', () => {
 // ============================================================================
 
 describe('MCP Tool Edge Cases', () => {
-  it.skip('should handle very long commands', async () => {
+  it('should handle very long commands', async () => {
     const longArg = 'a'.repeat(10000)
     const result = await handleBash({ input: `echo "${longArg}"` })
 
     expect(result.valid).toBe(true)
   })
 
-  it.skip('should handle special characters in input', async () => {
+  it('should handle special characters in input', async () => {
     const result = await handleBash({ input: "echo 'hello $world'" })
 
     expect(result.valid).toBe(true)
     expect(result.stdout).toContain('hello $world')
   })
 
-  it.skip('should handle unicode in input', async () => {
+  it('should handle unicode in input', async () => {
     const result = await handleBash({ input: 'echo "Hello, World!"' })
 
     expect(result.valid).toBe(true)
   })
 
-  it.skip('should handle newlines in input', async () => {
+  it('should handle newlines in input', async () => {
     const result = await handleBash({ input: 'echo "line1\nline2"' })
 
     expect(result.valid).toBe(true)
   })
 
-  it.skip('should handle command with environment variables', async () => {
+  it('should handle command with environment variables', async () => {
     const result = await handleBash({ input: 'echo $HOME' })
 
     expect(result.valid).toBe(true)
     expect(result.stdout.length).toBeGreaterThan(0)
   })
 
-  it.skip('should handle heredocs', async () => {
+  it('should handle heredocs', async () => {
     const result = await handleBash({
       input: `cat <<EOF
 test content
@@ -634,21 +634,21 @@ EOF`,
     expect(result.valid).toBe(true)
   })
 
-  it.skip('should handle subshells', async () => {
+  it('should handle subshells', async () => {
     const result = await handleBash({ input: '(cd /tmp && pwd)' })
 
     expect(result.valid).toBe(true)
     expect(result.stdout).toContain('/tmp')
   })
 
-  it.skip('should handle command substitution', async () => {
+  it('should handle command substitution', async () => {
     const result = await handleBash({ input: 'echo $(date)' })
 
     expect(result.valid).toBe(true)
     expect(result.stdout.length).toBeGreaterThan(0)
   })
 
-  it.skip('should handle background jobs correctly', async () => {
+  it('should handle background jobs correctly', async () => {
     const result = await handleBash({ input: 'sleep 1 &' })
 
     expect(result.valid).toBe(true)

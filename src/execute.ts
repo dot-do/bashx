@@ -579,13 +579,11 @@ function requiresConfirmation(command: string, classification: SafetyClassificat
     if (classification.type === 'write' && !classification.reversible) {
       return true
     }
-    // mv command is medium impact write
-    if (classification.type === 'write') {
-      return true
-    }
   }
 
   // Check for dangerous patterns - but only outside of quotes
+  // Note: mv and cp are not in this list because they are handled by classification
+  // (only require confirmation if targeting system paths)
   const dangerousPatterns = [
     { pattern: /\brm\b/, name: 'rm' },
     { pattern: /\bsudo\b/, name: 'sudo' },
@@ -593,7 +591,6 @@ function requiresConfirmation(command: string, classification: SafetyClassificat
     { pattern: /\bchown\b/, name: 'chown' },
     { pattern: /\bgit\s+push\b/, name: 'git push' },
     { pattern: /\bcurl\s+.*-X\s+(POST|PUT|DELETE|PATCH)\b/i, name: 'curl write' },
-    { pattern: /\bmv\b/, name: 'mv' },
   ]
 
   for (const { pattern } of dangerousPatterns) {
