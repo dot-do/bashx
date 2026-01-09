@@ -603,10 +603,895 @@ function combineClassifications(classifications: CommandClassification[]): Comma
   }
 }
 
+// ============================================================================
+// Intent Extraction from AST
+// ============================================================================
+
+/**
+ * Extended intent with rich semantic information
+ */
+export interface ExtendedIntent extends Intent {
+  /** Primary action verb (list, read, delete, create, etc.) */
+  action: string
+  /** Object being acted upon (files, directory, etc.) */
+  object: string
+  /** Human-readable description */
+  description: string
+  /** Primary target path/file */
+  target?: string
+  /** Multiple targets */
+  targets?: string[]
+  /** Source path for copy/move operations */
+  source?: string
+  /** Search path for find operations */
+  searchPath?: string
+  /** Pattern for search/find operations */
+  pattern?: string
+  /** Message (e.g., commit message) */
+  message?: string
+  /** URL for network operations */
+  url?: string
+  /** HTTP method for network operations */
+  method?: string
+  /** Remote name for git operations */
+  remote?: string
+  /** Branch name for git operations */
+  branch?: string
+  /** Modifiers extracted from flags */
+  modifiers: string[]
+  /** High-level action type classification */
+  actionType: 'read' | 'write' | 'delete' | 'network' | 'execute' | 'system'
+  /** Object type classification */
+  objectType?: 'file' | 'directory' | 'process' | 'url' | 'pattern'
+}
+
+/**
+ * Maps file extensions to human-readable descriptions
+ */
+const FILE_TYPE_DESCRIPTIONS: Record<string, string> = {
+  '.js': 'JavaScript files',
+  '.ts': 'TypeScript files',
+  '.py': 'Python files',
+  '.md': 'Markdown files',
+  '.json': 'JSON files',
+  '.log': 'log files',
+  '.txt': 'text files',
+  '.tmp': 'temporary files',
+  '.sh': 'shell scripts',
+  '.yaml': 'YAML files',
+  '.yml': 'YAML files',
+  '.css': 'CSS files',
+  '.html': 'HTML files',
+  '.xml': 'XML files',
+}
+
+/**
+ * Extract file type description from a pattern like "*.js"
+ */
+function getFileTypeDescription(pattern: string): string {
+  // Extract extension from pattern like "*.js" or "*.log"
+  const extMatch = pattern.match(/\*(\.[a-zA-Z0-9]+)$/)
+  if (extMatch) {
+    const ext = extMatch[1]
+    return FILE_TYPE_DESCRIPTIONS[ext] || `${ext.slice(1)} files`
+  }
+  return 'files'
+}
+
+/**
+ * Extract modifiers from command flags
+ */
+function extractModifiers(args: string[]): string[] {
+  const modifiers: string[] = []
+
+  for (const arg of args) {
+    if (!arg.startsWith('-')) continue
+
+    // Handle combined flags like -rfv
+    const flags = arg.startsWith('--') ? [arg] : arg.slice(1).split('')
+
+    for (const flag of flags) {
+      switch (flag) {
+        case 'r':
+        case 'R':
+        case 'recursive':
+        case '-recursive':
+          modifiers.push('recursive')
+          break
+        case 'f':
+        case '-force':
+          modifiers.push('force')
+          break
+        case 'v':
+        case '-verbose':
+          modifiers.push('verbose')
+          break
+        case 'a':
+          modifiers.push('all')
+          break
+        case 'l':
+          modifiers.push('long')
+          break
+        case 'i':
+        case '-ignore-case':
+          modifiers.push('case-insensitive')
+          break
+        case 'n':
+        case '-dry-run':
+          if (arg === '-n' || arg === '--dry-run') {
+            modifiers.push('dry-run')
+          }
+          break
+      }
+    }
+  }
+
+  return [...new Set(modifiers)] // Remove duplicates
+}
+
+/**
+ * Get action type classification
+ */
+function getActionType(commandName: string, args: string[]): ExtendedIntent['actionType'] {
+  const name = commandName.toLowerCase()
+
+  if (DELETE_COMMANDS.has(name)) return 'delete'
+  if (NETWORK_COMMANDS.has(name)) return 'network'
+  if (name === 'git' && args.length > 0 && GIT_NETWORK_SUBCOMMANDS.has(args[0])) return 'network'
+  if (WRITE_COMMANDS.has(name) || name === 'chmod' || name === 'chown' || name === 'touch' || name === 'mkdir') return 'write'
+  if (READ_ONLY_COMMANDS.has(name)) return 'read'
+  if (EXECUTE_COMMANDS.has(name)) return 'execute'
+  if (CRITICAL_SYSTEM_COMMANDS.has(name) || name === 'kill' || name === 'killall' || name === 'pkill') return 'system'
+
+  return 'execute'
+}
+
+/**
+ * Extract intent from a single command
+ */
+function extractCommandIntent(cmd: Command): Partial<ExtendedIntent> {
+  const name = getCommandName(cmd.name)
+  const args = getArgs(cmd.args)
+  const paths = extractPaths(args)
+  const modifiers = extractModifiers(args)
+
+  const intent: Partial<ExtendedIntent> = {
+    modifiers,
+    actionType: getActionType(name, args),
+  }
+
+  // Basic file operations
+  switch (name.toLowerCase()) {
+    case 'ls': {
+      intent.action = 'list'
+      intent.object = 'files'
+      intent.objectType = 'directory'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        intent.description = `list files in ${paths[0]}`
+      } else {
+        intent.description = 'list files'
+      }
+      if (modifiers.includes('all') && modifiers.includes('long')) {
+        intent.description = 'list files: all with details'
+      }
+      break
+    }
+
+    case 'cat': {
+      intent.action = 'read'
+      intent.objectType = 'file'
+      if (paths.length === 1) {
+        intent.object = 'file'
+        intent.target = paths[0]
+        intent.description = `read file ${paths[0]}`
+      } else if (paths.length > 1) {
+        intent.object = 'files'
+        intent.targets = paths
+        intent.description = `read files ${paths.join(', ')}`
+      } else {
+        intent.object = 'stdin'
+        intent.description = 'read from stdin'
+      }
+      break
+    }
+
+    case 'head':
+    case 'tail':
+    case 'less':
+    case 'more': {
+      intent.action = 'read'
+      intent.object = 'file'
+      intent.objectType = 'file'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        intent.description = `read file ${paths[0]}`
+      }
+      break
+    }
+
+    case 'pwd': {
+      intent.action = 'show'
+      intent.object = 'working directory'
+      intent.description = 'show working directory'
+      break
+    }
+
+    case 'echo':
+    case 'printf': {
+      intent.action = 'print'
+      intent.object = 'text'
+      intent.description = 'print text'
+      break
+    }
+
+    case 'rm': {
+      intent.action = 'delete'
+      intent.objectType = 'file'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        // Detect directory from -r flag or trailing slash
+        if (modifiers.includes('recursive') || paths[0].endsWith('/')) {
+          intent.object = 'directory'
+          if (modifiers.includes('recursive') && modifiers.includes('force')) {
+            intent.description = `recursively delete directory ${paths[0]}`
+          } else {
+            intent.description = `delete directory ${paths[0]}`
+          }
+        } else {
+          intent.object = 'file'
+          intent.description = `delete file ${paths[0]}`
+        }
+      }
+      break
+    }
+
+    case 'rmdir': {
+      intent.action = 'delete'
+      intent.object = 'directory'
+      intent.objectType = 'directory'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        intent.description = `delete directory ${paths[0]}`
+      }
+      break
+    }
+
+    case 'mkdir': {
+      intent.action = 'create'
+      intent.object = 'directory'
+      intent.objectType = 'directory'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        intent.description = `create directory ${paths[0]}`
+      }
+      break
+    }
+
+    case 'touch': {
+      intent.action = 'create'
+      intent.object = 'file'
+      intent.objectType = 'file'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        intent.description = `create file ${paths[0]}`
+      }
+      break
+    }
+
+    case 'cp': {
+      intent.action = 'copy'
+      intent.object = 'file'
+      intent.objectType = 'file'
+      if (paths.length >= 2) {
+        intent.source = paths[0]
+        intent.target = paths[paths.length - 1]
+        intent.description = `copy file from ${paths[0]} to ${paths[paths.length - 1]}`
+      }
+      break
+    }
+
+    case 'mv': {
+      intent.action = 'move'
+      intent.object = 'file'
+      intent.objectType = 'file'
+      if (paths.length >= 2) {
+        intent.source = paths[0]
+        intent.target = paths[paths.length - 1]
+        intent.description = `move file from ${paths[0]} to ${paths[paths.length - 1]}`
+      }
+      break
+    }
+
+    case 'chmod': {
+      intent.action = 'modify'
+      intent.object = 'permissions'
+      intent.objectType = 'file'
+      if (paths.length > 0) {
+        intent.target = paths[paths.length - 1]
+        intent.description = `modify permissions of ${paths[paths.length - 1]}`
+      }
+      break
+    }
+
+    case 'chown':
+    case 'chgrp': {
+      intent.action = 'modify'
+      intent.object = 'ownership'
+      intent.objectType = 'file'
+      if (paths.length > 0) {
+        intent.target = paths[paths.length - 1]
+        intent.description = `modify ownership of ${paths[paths.length - 1]}`
+      }
+      break
+    }
+
+    case 'find': {
+      intent.action = 'find'
+      intent.objectType = 'file'
+
+      // Extract search path (first non-flag argument)
+      intent.searchPath = paths[0] || '.'
+
+      // Extract -name pattern
+      const nameIdx = args.indexOf('-name')
+      if (nameIdx !== -1 && args[nameIdx + 1]) {
+        const pattern = args[nameIdx + 1].replace(/^["']|["']$/g, '')
+        intent.pattern = pattern
+        intent.object = getFileTypeDescription(pattern)
+      } else {
+        intent.object = 'files'
+      }
+
+      // Check for -exec with delete
+      const execIdx = args.indexOf('-exec')
+      if (execIdx !== -1) {
+        const execCmd = args[execIdx + 1]
+        if (execCmd === 'rm') {
+          intent.action = 'find and delete'
+          intent.description = `find and delete ${intent.object}`
+        }
+      }
+
+      // Check for -delete flag
+      if (args.includes('-delete')) {
+        intent.action = 'delete'
+        intent.actionType = 'delete'
+      }
+
+      // Check for -mtime
+      const mtimeIdx = args.indexOf('-mtime')
+      if (mtimeIdx !== -1 && args[mtimeIdx + 1]) {
+        const mtimeVal = args[mtimeIdx + 1]
+        if (mtimeVal.startsWith('+')) {
+          const days = mtimeVal.slice(1)
+          intent.modifiers.push(`older than ${days} days`)
+          intent.object = 'old files'
+        }
+      }
+
+      if (!intent.description) {
+        if (intent.searchPath !== '.' && intent.searchPath !== './') {
+          intent.description = `find ${intent.object} in ${intent.searchPath}`
+        } else {
+          intent.description = `find ${intent.object}`
+        }
+      }
+
+      if (intent.action === 'delete' && intent.object === 'old files') {
+        intent.description = `delete old files`
+      }
+
+      break
+    }
+
+    case 'grep': {
+      intent.action = 'search'
+      intent.object = 'pattern'
+      intent.objectType = 'pattern'
+
+      // Extract pattern (first non-flag argument)
+      const nonFlags = args.filter(a => !a.startsWith('-'))
+      if (nonFlags.length > 0) {
+        intent.pattern = nonFlags[0].replace(/^["']|["']$/g, '')
+      }
+      if (nonFlags.length > 1) {
+        intent.target = nonFlags[1]
+      }
+
+      if (modifiers.includes('recursive')) {
+        intent.description = `recursively search for "${intent.pattern}" in ${intent.target || '.'}`
+      } else if (modifiers.includes('case-insensitive')) {
+        intent.description = `case-insensitive search for "${intent.pattern}" in ${intent.target || 'files'}`
+      } else if (intent.target) {
+        intent.description = `search for "${intent.pattern}" in ${intent.target}`
+      } else {
+        intent.description = `search for "${intent.pattern}"`
+      }
+      break
+    }
+
+    case 'git': {
+      const subCommand = args[0]?.toLowerCase()
+
+      switch (subCommand) {
+        case 'status': {
+          intent.action = 'show'
+          intent.object = 'repository status'
+          intent.description = 'show repository status'
+          break
+        }
+        case 'commit': {
+          intent.action = 'create'
+          intent.object = 'commit'
+          const mIdx = args.indexOf('-m')
+          if (mIdx !== -1 && args[mIdx + 1]) {
+            intent.message = args[mIdx + 1].replace(/^["']|["']$/g, '')
+            intent.description = `create commit with message "${intent.message}"`
+          } else {
+            intent.description = 'create commit'
+          }
+          break
+        }
+        case 'push': {
+          intent.action = 'push'
+          intent.object = 'commits'
+          intent.actionType = 'network'
+          if (args[1]) intent.remote = args[1]
+          if (args[2]) intent.branch = args[2]
+          if (intent.remote && intent.branch) {
+            intent.description = `push commits to ${intent.remote}/${intent.branch}`
+          } else {
+            intent.description = 'push commits'
+          }
+          break
+        }
+        case 'pull': {
+          intent.action = 'pull'
+          intent.object = 'changes'
+          intent.actionType = 'network'
+          if (args[1]) intent.remote = args[1]
+          if (args[2]) intent.branch = args[2]
+          if (intent.remote && intent.branch) {
+            intent.description = `pull changes from ${intent.remote}/${intent.branch}`
+          } else {
+            intent.description = 'pull changes'
+          }
+          break
+        }
+        case 'checkout': {
+          intent.action = 'switch'
+          intent.object = 'branch'
+          if (args[1]) {
+            intent.target = args[1]
+            intent.description = `switch to branch ${args[1]}`
+          } else {
+            intent.description = 'switch branch'
+          }
+          break
+        }
+        default: {
+          intent.action = subCommand || 'git'
+          intent.object = 'repository'
+          intent.description = `git ${subCommand || ''}`
+        }
+      }
+      break
+    }
+
+    case 'curl': {
+      intent.action = 'fetch'
+      intent.object = 'URL'
+      intent.objectType = 'url'
+      intent.method = 'GET'
+
+      // Check for explicit method
+      const xIdx = args.findIndex(a => a === '-X' || a === '--request')
+      if (xIdx !== -1 && args[xIdx + 1]) {
+        intent.method = args[xIdx + 1].toUpperCase()
+        if (intent.method === 'POST' || intent.method === 'PUT' || intent.method === 'PATCH') {
+          intent.action = 'send'
+        }
+      }
+
+      // Extract URL (first non-flag argument that looks like a URL)
+      for (const arg of args) {
+        if (arg.startsWith('http://') || arg.startsWith('https://')) {
+          intent.url = arg
+          break
+        }
+      }
+
+      if (intent.action === 'send') {
+        intent.description = `send ${intent.method} request to ${intent.url || 'URL'}`
+      } else {
+        intent.description = `fetch data from ${intent.url || 'URL'}`
+      }
+      break
+    }
+
+    case 'wget': {
+      intent.action = 'download'
+      intent.object = 'file'
+      intent.objectType = 'url'
+
+      // Extract URL
+      for (const arg of args) {
+        if (arg.startsWith('http://') || arg.startsWith('https://')) {
+          intent.url = arg
+          break
+        }
+      }
+
+      intent.description = `download file from ${intent.url || 'URL'}`
+      break
+    }
+
+    case 'ssh': {
+      intent.action = 'connect'
+      intent.object = 'remote server'
+      intent.objectType = 'url'
+
+      // Get target (user@host)
+      const target = paths[0]
+      if (target) {
+        intent.target = target
+        intent.description = `connect to remote server ${target}`
+      } else {
+        intent.description = 'connect to remote server'
+      }
+      break
+    }
+
+    case 'scp': {
+      intent.action = 'copy'
+      intent.object = 'file'
+      intent.objectType = 'file'
+      intent.actionType = 'network'
+      intent.description = 'copy file over SSH'
+      break
+    }
+
+    case 'rsync': {
+      intent.action = 'sync'
+      intent.object = 'files'
+      intent.objectType = 'file'
+      if (paths.length >= 2) {
+        intent.source = paths[0]
+        intent.target = paths[1]
+        intent.description = `sync files from ${paths[0]} to ${paths[1]}`
+      }
+      break
+    }
+
+    case 'kill':
+    case 'killall':
+    case 'pkill': {
+      intent.action = 'terminate'
+      intent.object = 'process'
+      intent.objectType = 'process'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+      }
+      intent.description = `terminate process`
+      break
+    }
+
+    case 'cd': {
+      intent.action = 'change'
+      intent.object = 'directory'
+      intent.objectType = 'directory'
+      if (paths.length > 0) {
+        intent.target = paths[0]
+        intent.description = `change to directory ${paths[0]}`
+      }
+      break
+    }
+
+    case 'test': {
+      intent.action = 'test'
+      intent.object = 'condition'
+      intent.description = 'test condition'
+      break
+    }
+
+    case 'sort': {
+      intent.action = 'sort'
+      intent.object = 'lines'
+      intent.description = 'sort lines'
+      break
+    }
+
+    case 'uniq': {
+      intent.action = 'filter'
+      intent.object = 'unique lines'
+      intent.description = 'filter unique lines'
+      break
+    }
+
+    case 'wc': {
+      intent.action = 'count'
+      intent.object = 'lines'
+      intent.description = 'count lines'
+      break
+    }
+
+    case 'jq': {
+      intent.action = 'parse'
+      intent.object = 'JSON'
+      intent.description = 'parse JSON data'
+      break
+    }
+
+    default: {
+      intent.action = name
+      intent.object = paths[0] || 'output'
+      intent.description = `${name}${paths.length > 0 ? ' ' + paths[0] : ''}`
+    }
+  }
+
+  return intent
+}
+
+/**
+ * Extract intent from pipeline
+ */
+function extractPipelineIntent(pipeline: Pipeline): Partial<ExtendedIntent> {
+  const commands = pipeline.commands.map(cmd => ({
+    name: getCommandName(cmd.name),
+    args: getArgs(cmd.args),
+    intent: extractCommandIntent(cmd),
+  }))
+
+  const commandNames = commands.map(c => c.name)
+  const firstCmd = commands[0]
+  const lastCmd = commands[commands.length - 1]
+
+  // Determine overall action based on pipeline structure
+  let action = firstCmd.intent.action || firstCmd.name
+  let description = ''
+
+  // Common patterns
+  if (commandNames.includes('grep')) {
+    const grepIdx = commandNames.indexOf('grep')
+    const grepCmd = commands[grepIdx]
+    const pattern = grepCmd.intent.pattern
+
+    if (commandNames.includes('wc')) {
+      action = 'count'
+      description = `count lines matching "${pattern}"`
+      if (firstCmd.name === 'cat' && firstCmd.intent.target) {
+        description = `count "${pattern}" lines in ${firstCmd.intent.target}`
+      }
+    } else {
+      action = 'filter'
+      if (firstCmd.name === 'cat' && firstCmd.intent.target) {
+        description = `filter "${pattern}" from ${firstCmd.intent.target}`
+      } else {
+        description = `filter for pattern "${pattern}"`
+      }
+    }
+  } else if (commandNames.includes('sort') && commandNames.includes('uniq')) {
+    action = 'sort and deduplicate'
+    description = 'sort and get unique lines'
+    if (firstCmd.intent.target) {
+      description = `sort ${firstCmd.intent.target} and get unique lines`
+    }
+  }
+
+  // Get reads/writes from pipeline
+  const reads: string[] = []
+  const writes: string[] = []
+
+  // First command reads
+  if (firstCmd.intent.target) {
+    reads.push(firstCmd.intent.target)
+  }
+
+  // Last command redirects write
+  const lastCmdAst = pipeline.commands[pipeline.commands.length - 1]
+  for (const redirect of lastCmdAst.redirects) {
+    if (redirect.op === '>' || redirect.op === '>>') {
+      writes.push(redirect.target.value)
+    }
+  }
+
+  return {
+    action,
+    description: description || `${action} via pipeline`,
+    commands: commandNames,
+    modifiers: firstCmd.intent.modifiers || [],
+    actionType: lastCmd.intent.actionType || 'read',
+    reads,
+    writes,
+  }
+}
+
+/**
+ * Extract intent from List (&&, ||)
+ */
+function extractListIntent(list: List): Partial<ExtendedIntent> {
+  const leftIntent = extractNodeIntent(list.left)
+  const rightIntent = extractNodeIntent(list.right)
+
+  const commands = [
+    ...(leftIntent.commands || []),
+    ...(rightIntent.commands || []),
+  ]
+
+  let description = ''
+
+  if (list.operator === '&&') {
+    // Sequential execution
+    if (leftIntent.action === 'create' && rightIntent.action === 'change') {
+      description = `create directory and change into it`
+    } else if (leftIntent.action === 'test' && rightIntent.action === 'create') {
+      description = `create ${rightIntent.object} if not exists`
+    } else {
+      description = `${leftIntent.description || leftIntent.action} then ${rightIntent.description || rightIntent.action}`
+    }
+  } else if (list.operator === '||') {
+    // Conditional execution
+    if (leftIntent.action === 'test') {
+      description = `${rightIntent.description || rightIntent.action} if not exists`
+    } else {
+      description = `${leftIntent.description || leftIntent.action} or ${rightIntent.description || rightIntent.action}`
+    }
+  }
+
+  return {
+    action: leftIntent.action,
+    object: leftIntent.object,
+    description,
+    commands,
+    reads: [...(leftIntent.reads || []), ...(rightIntent.reads || [])],
+    writes: [...(leftIntent.writes || []), ...(rightIntent.writes || [])],
+    deletes: [...(leftIntent.deletes || []), ...(rightIntent.deletes || [])],
+    modifiers: [...(leftIntent.modifiers || []), ...(rightIntent.modifiers || [])],
+    actionType: rightIntent.actionType || leftIntent.actionType || 'execute',
+    network: leftIntent.network || rightIntent.network,
+    elevated: leftIntent.elevated || rightIntent.elevated,
+  }
+}
+
+/**
+ * Extract intent from any AST node
+ */
+function extractNodeIntent(node: BashNode): Partial<ExtendedIntent> {
+  switch (node.type) {
+    case 'Command':
+      return extractCommandIntent(node)
+    case 'Pipeline':
+      return extractPipelineIntent(node)
+    case 'List':
+      return extractListIntent(node)
+    default:
+      return {
+        action: 'execute',
+        object: 'command',
+        description: 'execute command',
+        modifiers: [],
+        actionType: 'execute',
+      }
+  }
+}
+
+/**
+ * Extract intent from a parsed AST Program
+ *
+ * @param ast - The parsed Program AST
+ * @returns Extended intent with semantic information
+ */
+export function extractIntentFromAST(ast: Program): ExtendedIntent {
+  // Get all commands for basic intent
+  const allCommands = extractAllCommands(ast)
+  const basicIntent = extractIntent(allCommands)
+
+  // Get semantic intent from first statement
+  const firstNode = ast.body[0]
+  let semanticIntent: Partial<ExtendedIntent> = {
+    action: 'execute',
+    object: 'command',
+    description: 'execute command',
+    modifiers: [],
+    actionType: 'read',
+  }
+
+  if (firstNode) {
+    semanticIntent = extractNodeIntent(firstNode)
+
+    // Aggregate from all nodes for compound commands
+    if (ast.body.length > 1) {
+      for (let i = 1; i < ast.body.length; i++) {
+        const nodeIntent = extractNodeIntent(ast.body[i])
+        semanticIntent.commands = [
+          ...(semanticIntent.commands || []),
+          ...(nodeIntent.commands || []),
+        ]
+      }
+    }
+  }
+
+  // Merge basic and semantic intent
+  return {
+    ...basicIntent,
+    action: semanticIntent.action || 'execute',
+    object: semanticIntent.object || 'command',
+    description: semanticIntent.description || 'execute command',
+    target: semanticIntent.target,
+    targets: semanticIntent.targets,
+    source: semanticIntent.source,
+    searchPath: semanticIntent.searchPath,
+    pattern: semanticIntent.pattern,
+    message: semanticIntent.message,
+    url: semanticIntent.url,
+    method: semanticIntent.method,
+    remote: semanticIntent.remote,
+    branch: semanticIntent.branch,
+    modifiers: semanticIntent.modifiers || [],
+    actionType: semanticIntent.actionType || 'read',
+    objectType: semanticIntent.objectType,
+    // Override with aggregated values from semantic analysis
+    commands: semanticIntent.commands?.length ? semanticIntent.commands : basicIntent.commands,
+    reads: semanticIntent.reads?.length ? semanticIntent.reads : basicIntent.reads,
+    writes: semanticIntent.writes?.length ? semanticIntent.writes : basicIntent.writes,
+  }
+}
+
+/**
+ * Generate a human-readable description from an Intent object
+ *
+ * @param intent - The Intent to describe
+ * @returns Human-readable description string
+ */
+export function describeIntent(intent: Intent): string {
+  const parts: string[] = []
+
+  // Describe elevated operations
+  if (intent.elevated) {
+    parts.push('(elevated/privileged)')
+  }
+
+  // Detect move operation: when reads, writes, and deletes overlap (source is read, deleted, dest is written)
+  const isMoveOperation = intent.commands.includes('mv') ||
+    (intent.writes.length > 0 && intent.reads.length > 0 &&
+     intent.deletes.length > 0 && intent.reads.some(r => intent.deletes.includes(r)))
+
+  // Describe main operation
+  if (isMoveOperation && intent.reads.length > 0 && intent.writes.length > 0) {
+    // Move operation
+    parts.push(`move ${intent.reads[0]} to ${intent.writes[0]}`)
+  } else if (intent.deletes.length > 0) {
+    parts.push(`delete ${intent.deletes.join(', ')}`)
+  } else if (intent.writes.length > 0) {
+    parts.push(`write to ${intent.writes.join(', ')}`)
+  } else if (intent.reads.length > 0) {
+    parts.push(`read ${intent.reads.join(', ')}`)
+  }
+
+  // Describe network operations
+  if (intent.network) {
+    if (intent.commands.includes('curl')) {
+      parts.push('fetch from network')
+    } else if (intent.commands.includes('wget')) {
+      parts.push('download from network')
+    } else {
+      parts.push('perform network operation')
+    }
+  }
+
+  // Fallback to command names
+  if (parts.length === 0 && intent.commands.length > 0) {
+    parts.push(`execute ${intent.commands.join(', ')}`)
+  }
+
+  return parts.join('; ')
+}
+
 /**
  * Extract intent from commands
  */
-function extractIntent(commands: Command[]): Intent {
+export function extractIntent(commands: Command[]): Intent {
   const intent: Intent = {
     commands: [],
     reads: [],
