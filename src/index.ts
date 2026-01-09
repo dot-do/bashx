@@ -39,6 +39,20 @@ export * from './types.js'
 // Re-export escape utilities
 export { shellEscape, shellEscapeArg } from './escape.js'
 
+// Re-export undo tracking utilities
+export {
+  getUndoHistory,
+  clearUndoHistory,
+  setUndoOptions,
+  undo,
+  generateUndoInfo,
+  isReversible,
+  trackForUndo,
+  recordUndoEntry,
+  type UndoEntry,
+  type UndoOptions,
+} from './undo.js'
+
 /**
  * Escape a value for safe shell interpolation.
  * Uses single quotes and escapes any internal single quotes.

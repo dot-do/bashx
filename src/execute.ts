@@ -24,6 +24,12 @@ import type {
   Word,
 } from './types.js'
 import { analyze, classifyCommand } from './ast/analyze.js'
+import {
+  trackForUndo,
+  recordUndoEntry,
+  isReversible,
+  type UndoEntry,
+} from './undo.js'
 
 const execAsync = promisify(exec)
 
@@ -738,6 +744,18 @@ export async function execute(command: string, options?: ExecOptions): Promise<E
     }
   }
 
+  // Track for undo BEFORE execution (to capture original state)
+  const undoInfo = trackForUndo(command, classification)
+
+  // Determine reversibility based on undo tracking capability
+  const commandIsReversible = undoInfo !== null || isReversible(command, classification)
+
+  // Update classification with reversibility info
+  const finalClassification: SafetyClassification = {
+    ...classification,
+    reversible: commandIsReversible,
+  }
+
   // Execute the command
   try {
     const { stdout, stderr } = await Promise.race([
@@ -747,16 +765,22 @@ export async function execute(command: string, options?: ExecOptions): Promise<E
       ),
     ])
 
+    // Record successful execution for undo
+    if (undoInfo) {
+      recordUndoEntry(command, undoInfo)
+    }
+
     return {
       input: command,
       valid: true,
       intent,
-      classification,
+      classification: finalClassification,
       command,
       generated: false,
       stdout: stdout.toString(),
       stderr: stderr.toString(),
       exitCode: 0,
+      undo: undoInfo?.undoCommand,
     }
   } catch (error: any) {
     // Handle timeout
@@ -765,27 +789,30 @@ export async function execute(command: string, options?: ExecOptions): Promise<E
         input: command,
         valid: true,
         intent,
-        classification,
+        classification: finalClassification,
         command,
         generated: false,
         stdout: '',
         stderr: 'Command timed out: timeout exceeded',
         exitCode: 124,
         timedOut: true,
+        // Don't include undo for timed out commands
       }
     }
 
-    // Handle execution errors
+    // Handle execution errors - don't record undo for failed commands
+    // Also don't include undo command in result for failed operations
     return {
       input: command,
       valid: true,
       intent,
-      classification,
+      classification: finalClassification,
       command,
       generated: false,
       stdout: error.stdout?.toString() || '',
       stderr: error.stderr?.toString() || error.message || 'Execution error',
       exitCode: error.code || 1,
+      // No undo for failed commands
     }
   }
 }
