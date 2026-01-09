@@ -10,6 +10,94 @@
 import type { FsCapability } from '../../types.js'
 
 // ============================================================================
+// SHARED UTILITIES
+// ============================================================================
+
+/**
+ * LRU cache for compiled regular expressions.
+ * Improves performance when the same pattern is used multiple times.
+ */
+class RegexCache {
+  private cache = new Map<string, RegExp>()
+  private maxSize: number
+
+  constructor(maxSize = 100) {
+    this.maxSize = maxSize
+  }
+
+  /**
+   * Get or compile a regex pattern with caching
+   * @param pattern - The regex pattern string
+   * @param flags - Optional regex flags
+   * @returns Compiled RegExp object
+   */
+  get(pattern: string, flags = ''): RegExp {
+    const key = `${pattern}:${flags}`
+    let regex = this.cache.get(key)
+    if (!regex) {
+      regex = new RegExp(pattern, flags)
+      // Evict oldest entry if cache is full
+      if (this.cache.size >= this.maxSize) {
+        const firstKey = this.cache.keys().next().value
+        if (firstKey) this.cache.delete(firstKey)
+      }
+      this.cache.set(key, regex)
+    }
+    return regex
+  }
+
+  /**
+   * Clear the cache
+   */
+  clear(): void {
+    this.cache.clear()
+  }
+}
+
+// Global regex cache instance
+const regexCache = new RegexCache()
+
+/**
+ * Split input text into lines, handling trailing newlines consistently.
+ * @param text - Input text to split
+ * @returns Array of lines (without trailing empty line from split)
+ */
+function splitLines(text: string): string[] {
+  const lines = text.split('\n')
+  const hasTrailingNewline = text.endsWith('\n')
+  if (hasTrailingNewline && lines[lines.length - 1] === '') {
+    lines.pop()
+  }
+  return lines
+}
+
+/**
+ * Escape special regex characters in a string.
+ * @param str - String to escape
+ * @returns Escaped string safe for use in regex
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Evaluate simple arithmetic expressions safely (Workers-compatible).
+ * @param left - Left operand
+ * @param op - Operator (+, -, *, /)
+ * @param right - Right operand
+ * @returns Result of the operation
+ */
+function evalArithmetic(left: number, op: string, right: number): number {
+  switch (op) {
+    case '+': return left + right
+    case '-': return left - right
+    case '*': return left * right
+    case '/': return right !== 0 ? left / right : 0
+    default: return left
+  }
+}
+
+// ============================================================================
 // SED Implementation
 // ============================================================================
 
@@ -70,7 +158,11 @@ function parseSedArgs(args: string[]): { options: SedOptions; script: string; fi
 }
 
 /**
- * Parse a sed substitution command (s/pattern/replacement/flags)
+ * Parse a sed substitution command (s/pattern/replacement/flags).
+ * Supports various delimiters and converts sed regex syntax to JavaScript.
+ *
+ * @param script - The sed substitution command (e.g., 's/foo/bar/g')
+ * @returns Parsed substitution object or null if not a valid substitution
  */
 function parseSedSubstitution(script: string): { pattern: RegExp; replacement: string; global: boolean } | null {
   // Match s/pattern/replacement/flags with various delimiters
@@ -78,8 +170,8 @@ function parseSedSubstitution(script: string): { pattern: RegExp; replacement: s
   if (!delimMatch) return null
 
   const delim = delimMatch[1]
-  const escapedDelim = delim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const regex = new RegExp(`^s${escapedDelim}((?:[^${escapedDelim}\\\\]|\\\\.)*)${escapedDelim}((?:[^${escapedDelim}\\\\]|\\\\.)*)${escapedDelim}([gip]*)$`)
+  const escapedDelim = escapeRegex(delim)
+  const regex = regexCache.get(`^s${escapedDelim}((?:[^${escapedDelim}\\\\]|\\\\.)*)${escapedDelim}((?:[^${escapedDelim}\\\\]|\\\\.)*)${escapedDelim}([gip]*)$`)
   const match = script.match(regex)
 
   if (!match) return null
@@ -92,18 +184,11 @@ function parseSedSubstitution(script: string): { pattern: RegExp; replacement: s
   // Replace sed escape sequences with JS equivalents
   // \\( -> ( (grouping in sed basic regex)
   // \\) -> ) (grouping in sed basic regex)
+  // Note: In patterns, \1 stays as \1 for backreferences (JS regex uses \1 in pattern)
+  // Only in replacements, \1 becomes $1 (JS uses $1 in replacement strings)
   let jsPattern = pattern
     .replace(/\\\(/g, '(')
     .replace(/\\\)/g, ')')
-    .replace(/\\1/g, '$1')
-    .replace(/\\2/g, '$2')
-    .replace(/\\3/g, '$3')
-    .replace(/\\4/g, '$4')
-    .replace(/\\5/g, '$5')
-    .replace(/\\6/g, '$6')
-    .replace(/\\7/g, '$7')
-    .replace(/\\8/g, '$8')
-    .replace(/\\9/g, '$9')
 
   let jsReplacement = replacement
     .replace(/\\1/g, '$1')
@@ -162,7 +247,20 @@ function parseSedDelete(script: string): { start?: number; end?: number; pattern
 }
 
 /**
- * Execute sed command
+ * Execute sed (stream editor) command.
+ *
+ * Supports substitution (s/pattern/replacement/flags), line printing with -n and p,
+ * line deletion with d, and multiple -e expressions.
+ *
+ * @param args - Command arguments (e.g., ['-e', 's/foo/bar/', '/path/to/file'])
+ * @param input - Input text to process (used when no file is specified)
+ * @param fs - Optional filesystem capability for in-place editing
+ * @returns Object with stdout, stderr, and exitCode
+ *
+ * @example
+ * // Basic substitution
+ * executeSed(['s/hello/world/g'], 'hello hello')
+ * // => { stdout: 'world world\n', stderr: '', exitCode: 0 }
  */
 export function executeSed(args: string[], input: string, fs?: FsCapability): { stdout: string; stderr: string; exitCode: number } {
   const { options, script, files } = parseSedArgs(args)
@@ -220,13 +318,7 @@ export function executeSed(args: string[], input: string, fs?: FsCapability): { 
     return result
   }
 
-  const lines = content.split('\n')
-  // Handle trailing empty line from split
-  const hasTrailingNewline = content.endsWith('\n')
-  if (hasTrailingNewline && lines[lines.length - 1] === '') {
-    lines.pop()
-  }
-
+  const lines = splitLines(content)
   const totalLines = lines.length
   const outputLines: string[] = []
 
@@ -395,20 +487,27 @@ function evaluateAwkExpression(
   }
 
   // Handle arithmetic expressions like sum/count or 100/4
-  // Match numbers with optional operators and more numbers
+  // Use the shared evalArithmetic helper (Workers-compatible, no eval/Function)
   result = result.trim()
-  if (result.match(/^[\d.]+\s*[+\-*/]\s*[\d.]+$/)) {
-    try {
-      // Simple arithmetic evaluation
-      // eslint-disable-next-line no-eval
-      const evalResult = Function(`"use strict"; return (${result})`)()
-      result = String(evalResult)
-    } catch {
-      // Keep as is if evaluation fails
+  const arithMatch = result.match(/^([\d.]+)\s*([+\-*/])\s*([\d.]+)$/)
+  if (arithMatch) {
+    const [, leftStr, op, rightStr] = arithMatch
+    const left = parseFloat(leftStr)
+    const right = parseFloat(rightStr)
+    if (!isNaN(left) && !isNaN(right)) {
+      result = String(evalArithmetic(left, op, right))
     }
   }
 
   return result
+}
+
+/**
+ * Result of an awk action execution
+ */
+interface AwkActionResult {
+  output: string
+  isPrintf: boolean  // printf handles its own newlines
 }
 
 /**
@@ -419,8 +518,9 @@ function executeAwkAction(
   fields: string[],
   variables: Record<string, string | number>,
   options: AwkOptions
-): string {
-  const output: string[] = []
+): AwkActionResult {
+  const outputParts: string[] = []
+  let hasPrintf = false
 
   // Split multiple statements by semicolon
   const statements = action.split(/;/).map(s => s.trim()).filter(Boolean)
@@ -431,13 +531,14 @@ function executeAwkAction(
       const printArgs = stmt.slice(5).trim()
       if (!printArgs) {
         // print with no args prints $0
-        output.push(fields.join(options.outputFieldSeparator))
+        outputParts.push(fields.join(options.outputFieldSeparator))
       } else {
         // Parse print arguments
         const parts: string[] = []
 
         // Handle printf-style
         if (stmt.startsWith('printf')) {
+          hasPrintf = true
           const printfMatch = stmt.match(/printf\s+"([^"]*)"(?:\s*,\s*(.+))?/)
           if (printfMatch) {
             let format = printfMatch[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t')
@@ -453,7 +554,7 @@ function executeAwkAction(
                 return val
               })
             }
-            output.push(format)
+            outputParts.push(format)
           }
           continue
         }
@@ -465,10 +566,29 @@ function executeAwkAction(
           const evaluated = evaluateAwkExpression(part, fields, variables, options)
           parts.push(evaluated)
         }
-        output.push(parts.join(options.outputFieldSeparator))
+        outputParts.push(parts.join(options.outputFieldSeparator))
       }
     }
-    // Handle variable assignments
+    // Handle if statements (must come before general assignment check)
+    else if (stmt.startsWith('if')) {
+      const ifMatch = stmt.match(/if\s*\(([^)]+)\)\s*(\w+)\s*=\s*(.+)/)
+      if (ifMatch) {
+        const [, condition, varName, value] = ifMatch
+        const condResult = evaluateAwkCondition(condition, fields, variables, options)
+        if (condResult) {
+          const evaluated = evaluateAwkExpression(value, fields, variables, options)
+          variables[varName] = parseFloat(evaluated) || evaluated
+        }
+      }
+    }
+    // Handle variable increment (count++)
+    else if (stmt.match(/(\w+)\+\+/)) {
+      const match = stmt.match(/(\w+)\+\+/)
+      if (match) {
+        variables[match[1]] = (Number(variables[match[1]]) || 0) + 1
+      }
+    }
+    // Handle variable assignments (after if statement check)
     else if (stmt.includes('=') && !stmt.includes('==')) {
       const assignMatch = stmt.match(/(\w+)\s*([+\-*/]?=)\s*(.+)/)
       if (assignMatch) {
@@ -489,28 +609,15 @@ function executeAwkAction(
         }
       }
     }
-    // Handle variable increment (count++)
-    else if (stmt.match(/(\w+)\+\+/)) {
-      const match = stmt.match(/(\w+)\+\+/)
-      if (match) {
-        variables[match[1]] = (Number(variables[match[1]]) || 0) + 1
-      }
-    }
-    // Handle if statements
-    else if (stmt.startsWith('if')) {
-      const ifMatch = stmt.match(/if\s*\(([^)]+)\)\s*(\w+)\s*=\s*(.+)/)
-      if (ifMatch) {
-        const [, condition, varName, value] = ifMatch
-        const condResult = evaluateAwkCondition(condition, fields, variables, options)
-        if (condResult) {
-          const evaluated = evaluateAwkExpression(value, fields, variables, options)
-          variables[varName] = parseFloat(evaluated) || evaluated
-        }
-      }
-    }
   }
 
-  return output.join(options.outputRecordSeparator)
+  // For printf, join without additional separators since printf controls its own newlines
+  // For regular print, use ORS as separator
+  const output = hasPrintf
+    ? outputParts.join('')
+    : outputParts.join(options.outputRecordSeparator)
+
+  return { output, isPrintf: hasPrintf }
 }
 
 /**
@@ -577,7 +684,24 @@ function evaluateAwkCondition(
 }
 
 /**
- * Execute awk command
+ * Execute awk (pattern scanning and processing) command.
+ *
+ * Supports field extraction ($1, $2, $NF), pattern matching, BEGIN/END blocks,
+ * custom field separators (-F), variables, arithmetic, and control flow.
+ *
+ * @param args - Command arguments (e.g., ['-F:', '{print $1}', '/path/to/file'])
+ * @param input - Input text to process
+ * @returns Object with stdout, stderr, and exitCode
+ *
+ * @example
+ * // Print first field
+ * executeAwk(['{print $1}'], 'hello world')
+ * // => { stdout: 'hello\n', stderr: '', exitCode: 0 }
+ *
+ * @example
+ * // Sum a column
+ * executeAwk(['{sum+=$1} END {print sum}'], '10\n20\n30')
+ * // => { stdout: '60\n', stderr: '', exitCode: 0 }
  */
 export function executeAwk(args: string[], input: string): { stdout: string; stderr: string; exitCode: number } {
   const { options, program } = parseAwkArgs(args)
@@ -590,7 +714,7 @@ export function executeAwk(args: string[], input: string): { stdout: string; std
     OFS: options.outputFieldSeparator,
   }
 
-  const output: string[] = []
+  const output: AwkActionResult[] = []
 
   // Execute BEGIN block
   if (parsed.begin) {
@@ -612,20 +736,16 @@ export function executeAwk(args: string[], input: string): { stdout: string; std
   }
 
   // Process input lines
-  const lines = input.split('\n')
-  const hasTrailingNewline = input.endsWith('\n')
-  if (hasTrailingNewline && lines[lines.length - 1] === '') {
-    lines.pop()
-  }
+  const lines = splitLines(input)
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     variables.NR = i + 1
 
-    // Split into fields
+    // Split into fields using cached regex
     const fieldSep = options.fieldSeparator === /\s+/.source
       ? /\s+/
-      : new RegExp(options.fieldSeparator.replace(/([.*+?^${}()|[\]\\])/g, '\\$1'))
+      : regexCache.get(escapeRegex(options.fieldSeparator))
     const fields = ['', ...line.split(fieldSep)] // $0 is handled specially, but fields[1] = $1
     fields[0] = line // $0 is the whole line
     variables.NF = fields.length - 1
@@ -639,7 +759,7 @@ export function executeAwk(args: string[], input: string): { stdout: string; std
 
       if (shouldExecute) {
         const result = executeAwkAction(parsed.main.action, fields.slice(1), variables, options)
-        if (result) {
+        if (result.output) {
           output.push(result)
         }
       }
@@ -650,13 +770,23 @@ export function executeAwk(args: string[], input: string): { stdout: string; std
   if (parsed.end) {
     const fields = ['']
     const result = executeAwkAction(parsed.end, fields, variables, options)
-    if (result) {
+    if (result.output) {
       output.push(result)
     }
   }
 
-  let stdout = output.join(options.outputRecordSeparator)
-  if (output.length > 0 && !stdout.endsWith('\n') && options.outputRecordSeparator === '\n') {
+  // Build final output - printf handles its own newlines, print uses ORS
+  let stdout = ''
+  for (let i = 0; i < output.length; i++) {
+    const item = output[i]
+    stdout += item.output
+    // Only add ORS after non-printf outputs that don't already end with newline
+    if (!item.isPrintf && !item.output.endsWith('\n')) {
+      stdout += options.outputRecordSeparator
+    }
+  }
+  // Add final ORS if needed (for non-empty output not ending in newline)
+  if (stdout.length > 0 && !stdout.endsWith('\n') && options.outputRecordSeparator === '\n') {
     stdout += '\n'
   }
 
@@ -1034,7 +1164,22 @@ function parseDiffArgs(args: string[]): { options: DiffOptions; files: string[] 
 }
 
 /**
- * Execute diff command
+ * Execute diff (file comparison) command.
+ *
+ * Compares two text files and outputs the differences. Implements Myers diff
+ * algorithm for efficient comparison. Supports normal, unified (-u), and
+ * context (-c) output formats.
+ *
+ * @param file1Content - Content of the first (original) file
+ * @param file2Content - Content of the second (new) file
+ * @param file1Path - Path of the first file (for output headers)
+ * @param file2Path - Path of the second file (for output headers)
+ * @param options - Diff options (unified, context, contextLines)
+ * @returns Object with stdout (diff output), stderr, and exitCode (0 if same, 1 if different)
+ *
+ * @example
+ * // Unified diff format
+ * executeDiff('line1\n', 'line1\nline2\n', 'a.txt', 'b.txt', { unified: true })
  */
 export function executeDiff(
   file1Content: string,
@@ -1331,7 +1476,20 @@ function parsePatchArgs(args: string[]): { options: PatchOptions; patchFile?: st
 }
 
 /**
- * Execute patch command
+ * Execute patch (apply diffs) command.
+ *
+ * Applies a unified diff patch to content. Supports reverse patching (-R),
+ * dry-run mode (--dry-run), and path stripping (-p).
+ *
+ * @param original - Original file content to patch
+ * @param patchContent - The patch content (unified diff format)
+ * @param options - Patch options (reverse, dryRun, stripLevel)
+ * @returns Object with stdout, stderr, exitCode, and optionally result (patched content)
+ *
+ * @example
+ * // Apply a patch
+ * const patch = '--- a.txt\n+++ b.txt\n@@ -1,1 +1,2 @@\n line1\n+line2\n'
+ * executePatch('line1\n', patch, { dryRun: true })
  */
 export function executePatch(
   original: string,
@@ -1389,7 +1547,20 @@ function parseTeeArgs(args: string[]): { options: TeeOptions; files: string[] } 
 }
 
 /**
- * Execute tee command
+ * Execute tee (write to multiple outputs) command.
+ *
+ * Reads from input and writes to both stdout and specified files.
+ * Supports append mode (-a).
+ *
+ * @param input - Input text to process
+ * @param args - Command arguments (e.g., ['-a', 'file1.txt', 'file2.txt'])
+ * @param fs - Optional filesystem capability for file writing
+ * @returns Promise resolving to object with stdout, stderr, and exitCode
+ *
+ * @example
+ * // Write to files while passing through
+ * await executeTee('hello\n', ['output.txt'], fs)
+ * // => { stdout: 'hello\n', stderr: '', exitCode: 0 }
  */
 export async function executeTee(
   input: string,
@@ -1504,7 +1675,24 @@ function splitXargsInput(input: string, delimiter?: string): string[] {
 }
 
 /**
- * Execute xargs command
+ * Execute xargs (build and execute command lines) command.
+ *
+ * Builds and executes command lines from standard input. Supports:
+ * - -n (max arguments per command)
+ * - -I (placeholder replacement)
+ * - -0 (null delimiter for filenames with spaces)
+ * - -P (parallel execution)
+ * - -s (max command length)
+ *
+ * @param input - Input containing arguments (one per line or whitespace-separated)
+ * @param args - Command arguments (e.g., ['-n', '1', 'echo'])
+ * @param executor - Function to execute subcommands
+ * @returns Promise resolving to object with stdout, stderr, and exitCode
+ *
+ * @example
+ * // Process one argument at a time
+ * await executeXargs('a\nb\nc', ['-n', '1', 'echo'], cmd => exec(cmd))
+ * // => { stdout: 'a\nb\nc\n', stderr: '', exitCode: 0 }
  */
 export async function executeXargs(
   input: string,
@@ -1606,7 +1794,14 @@ export async function executeXargs(
 export const TEXT_PROCESSING_COMMANDS = new Set(['sed', 'awk', 'diff', 'patch', 'tee', 'xargs'])
 
 /**
- * Check if a command is a text processing command
+ * Check if a command is a text processing command handled by this module.
+ *
+ * @param cmd - Command name to check
+ * @returns True if the command is handled by this module
+ *
+ * @example
+ * isTextProcessingCommand('sed')  // => true
+ * isTextProcessingCommand('ls')   // => false
  */
 export function isTextProcessingCommand(cmd: string): boolean {
   return TEXT_PROCESSING_COMMANDS.has(cmd)

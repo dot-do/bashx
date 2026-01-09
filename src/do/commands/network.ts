@@ -8,81 +8,447 @@
  * - nc / netcat (limited port checking)
  * - curl/wget enhancements (headers, timing, spider)
  *
+ * Features:
+ * - DNS response caching with TTL support for improved performance
+ * - Connection keep-alive hints for multiple requests to same host
+ * - Comprehensive statistics calculation for ping results
+ * - Output formatting matching real command-line tools
+ *
  * @packageDocumentation
  */
+
+// ============================================================================
+// DNS CACHE
+// ============================================================================
+
+/**
+ * DNS cache entry with TTL tracking.
+ * Stores cached DNS responses with expiration time.
+ */
+interface DnsCacheEntry {
+  /** The cached DNS result */
+  result: DnsResult
+  /** Timestamp when this entry expires (ms since epoch) */
+  expiresAt: number
+  /** Original TTL from DNS response (seconds) */
+  ttl: number
+}
+
+/**
+ * DNS response cache for improved performance.
+ *
+ * Implements TTL-based caching with automatic expiration.
+ * Supports negative caching for NXDOMAIN responses.
+ *
+ * @example
+ * ```typescript
+ * // Cache automatically used by executeDig
+ * const result1 = await executeDig('example.com') // Network request
+ * const result2 = await executeDig('example.com') // Served from cache
+ *
+ * // Manual cache control
+ * dnsCache.clear() // Clear all cached entries
+ * dnsCache.delete('example.com:A') // Remove specific entry
+ * ```
+ */
+class DnsCache {
+  private cache = new Map<string, DnsCacheEntry>()
+
+  /** Default TTL for responses without explicit TTL (5 minutes) */
+  private readonly defaultTtl = 300
+
+  /** TTL for negative responses like NXDOMAIN (1 minute) */
+  private readonly negativeTtl = 60
+
+  /** Maximum cache size to prevent memory issues */
+  private readonly maxEntries = 1000
+
+  /**
+   * Generate cache key from domain and record type.
+   * @param domain - Domain name to lookup
+   * @param type - DNS record type (A, AAAA, MX, etc.)
+   * @returns Cache key string
+   */
+  private key(domain: string, type: string): string {
+    return `${domain.toLowerCase()}:${type.toUpperCase()}`
+  }
+
+  /**
+   * Retrieve a cached DNS result if available and not expired.
+   * @param domain - Domain name
+   * @param type - DNS record type
+   * @returns Cached result or undefined if not found/expired
+   */
+  get(domain: string, type: string): DnsResult | undefined {
+    const key = this.key(domain, type)
+    const entry = this.cache.get(key)
+
+    if (!entry) return undefined
+
+    // Check expiration
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key)
+      return undefined
+    }
+
+    // Return a copy with adjusted TTLs
+    const elapsed = Math.floor((Date.now() - (entry.expiresAt - entry.ttl * 1000)) / 1000)
+    const remainingTtl = Math.max(0, entry.ttl - elapsed)
+
+    return {
+      ...entry.result,
+      answer: entry.result.answer.map((a) => ({
+        ...a,
+        ttl: Math.max(0, a.ttl - elapsed),
+      })),
+      // Mark as cached for debugging
+      queryTime: 0,
+    }
+  }
+
+  /**
+   * Store a DNS result in the cache.
+   * @param domain - Domain name
+   * @param type - DNS record type
+   * @param result - DNS result to cache
+   */
+  set(domain: string, type: string, result: DnsResult): void {
+    // Enforce max cache size with LRU-like eviction
+    if (this.cache.size >= this.maxEntries) {
+      // Delete oldest entry (first in map)
+      const firstKey = this.cache.keys().next().value
+      if (firstKey) this.cache.delete(firstKey)
+    }
+
+    const key = this.key(domain, type)
+
+    // Determine TTL from response or use defaults
+    let ttl: number
+    if (result.status === 3) {
+      // NXDOMAIN - use shorter TTL for negative caching
+      ttl = this.negativeTtl
+    } else if (result.answer.length > 0) {
+      // Use minimum TTL from answer records
+      ttl = Math.min(...result.answer.map((a) => a.ttl))
+    } else {
+      ttl = this.defaultTtl
+    }
+
+    // Don't cache errors (except NXDOMAIN)
+    if (result.status !== 0 && result.status !== 3) {
+      return
+    }
+
+    this.cache.set(key, {
+      result,
+      expiresAt: Date.now() + ttl * 1000,
+      ttl,
+    })
+  }
+
+  /**
+   * Remove a specific entry from the cache.
+   * @param domain - Domain name
+   * @param type - DNS record type
+   * @returns true if entry was deleted, false if not found
+   */
+  delete(domain: string, type: string): boolean {
+    return this.cache.delete(this.key(domain, type))
+  }
+
+  /**
+   * Clear all cached entries.
+   */
+  clear(): void {
+    this.cache.clear()
+  }
+
+  /**
+   * Get current cache size.
+   * @returns Number of cached entries
+   */
+  get size(): number {
+    return this.cache.size
+  }
+
+  /**
+   * Prune expired entries from cache.
+   * Called periodically to free memory.
+   */
+  prune(): void {
+    const now = Date.now()
+    for (const [key, entry] of this.cache) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key)
+      }
+    }
+  }
+}
+
+/** Global DNS cache instance */
+export const dnsCache = new DnsCache()
+
+// ============================================================================
+// CONNECTION POOL
+// ============================================================================
+
+/**
+ * Connection pool configuration for HTTP requests.
+ * Provides hints for connection reuse when making multiple requests.
+ */
+interface ConnectionPoolConfig {
+  /** Keep connections alive for reuse */
+  keepAlive: boolean
+  /** Maximum idle time for connections (ms) */
+  keepAliveTimeout: number
+  /** Maximum requests per connection */
+  maxRequestsPerConnection: number
+}
+
+/**
+ * Default connection pool configuration.
+ * Optimized for typical network diagnostic workloads.
+ */
+const defaultConnectionConfig: ConnectionPoolConfig = {
+  keepAlive: true,
+  keepAliveTimeout: 30000, // 30 seconds
+  maxRequestsPerConnection: 100,
+}
+
+/**
+ * Create fetch options with connection keep-alive hints.
+ *
+ * Note: In Cloudflare Workers, connection pooling is managed by the runtime,
+ * but these hints can improve performance for repeated requests.
+ *
+ * @param config - Connection configuration
+ * @returns Fetch options with keep-alive headers
+ */
+function createFetchOptions(config: ConnectionPoolConfig = defaultConnectionConfig): RequestInit {
+  return {
+    headers: {
+      Connection: config.keepAlive ? 'keep-alive' : 'close',
+      'Keep-Alive': `timeout=${Math.floor(config.keepAliveTimeout / 1000)}, max=${config.maxRequestsPerConnection}`,
+    },
+  }
+}
+
+// ============================================================================
+// STATISTICS HELPERS
+// ============================================================================
+
+/**
+ * Statistical summary of numeric values.
+ */
+interface Statistics {
+  /** Minimum value */
+  min: number
+  /** Maximum value */
+  max: number
+  /** Arithmetic mean */
+  avg: number
+  /** Standard deviation */
+  mdev: number
+}
+
+/**
+ * Calculate comprehensive statistics for a set of numeric values.
+ *
+ * Used for ping RTT statistics and other timing measurements.
+ * Returns zeros for empty arrays to handle packet loss gracefully.
+ *
+ * @param values - Array of numeric values
+ * @returns Statistical summary with min, max, avg, and mdev
+ *
+ * @example
+ * ```typescript
+ * const stats = calculateStatistics([10, 20, 30, 40])
+ * // { min: 10, max: 40, avg: 25, mdev: ~11.18 }
+ * ```
+ */
+function calculateStatistics(values: number[]): Statistics {
+  if (values.length === 0) {
+    return { min: 0, max: 0, avg: 0, mdev: 0 }
+  }
+
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const sum = values.reduce((a, b) => a + b, 0)
+  const avg = sum / values.length
+
+  // Calculate standard deviation (mdev)
+  const squaredDiffs = values.map((v) => Math.pow(v - avg, 2))
+  const variance = squaredDiffs.reduce((a, b) => a + b, 0) / values.length
+  const mdev = Math.sqrt(variance)
+
+  return { min, max, avg, mdev }
+}
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 /**
- * Result of a ping operation
+ * Result of a ping operation.
+ *
+ * Contains both individual timing data and aggregate statistics.
+ * Mimics the output format of the standard ping command.
+ *
+ * @example
+ * ```typescript
+ * const result: PingResult = {
+ *   host: 'example.com',
+ *   transmitted: 4,
+ *   received: 4,
+ *   packetLoss: 0,
+ *   times: [45.2, 42.1, 48.7, 44.3],
+ *   min: 42.1,
+ *   avg: 45.075,
+ *   max: 48.7,
+ *   mdev: 2.34
+ * }
+ * ```
  */
 export interface PingResult {
+  /** Target hostname or IP address */
   host: string
+  /** Number of ping requests transmitted */
   transmitted: number
+  /** Number of successful responses received */
   received: number
-  packetLoss: number // percentage 0-100
-  times: number[] // round-trip times in ms
+  /** Packet loss percentage (0-100) */
+  packetLoss: number
+  /** Individual round-trip times in milliseconds */
+  times: number[]
+  /** Minimum round-trip time in ms */
   min: number
+  /** Average round-trip time in ms */
   avg: number
+  /** Maximum round-trip time in ms */
   max: number
-  mdev: number // standard deviation
+  /** Mean deviation (standard deviation) in ms */
+  mdev: number
 }
 
 /**
- * DNS record structure
+ * Individual DNS record from a lookup response.
+ *
+ * Represents a single resource record in the DNS answer section.
  */
 export interface DnsRecord {
+  /** Fully qualified domain name */
   name: string
+  /** Record type (A, AAAA, MX, TXT, etc.) */
   type: string
+  /** Time-to-live in seconds */
   ttl: number
+  /** Record data (format depends on type) */
   data: string
 }
 
 /**
- * Result of a DNS lookup
+ * Result of a DNS lookup operation.
+ *
+ * Contains the full DNS response including question, answer,
+ * authority, and additional sections.
+ *
+ * @example
+ * ```typescript
+ * const result: DnsResult = {
+ *   question: { name: 'example.com', type: 'A' },
+ *   answer: [{ name: 'example.com', type: 'A', ttl: 300, data: '93.184.216.34' }],
+ *   status: 0, // NOERROR
+ *   queryTime: 45
+ * }
+ * ```
  */
 export interface DnsResult {
+  /** The DNS question that was asked */
   question: { name: string; type: string }
+  /** Answer records returned by the resolver */
   answer: DnsRecord[]
+  /** Authority section (nameserver records) */
   authority?: DnsRecord[]
+  /** Additional section (glue records) */
   additional?: DnsRecord[]
-  status: number // DNS response code (0 = NOERROR, 2 = SERVFAIL, 3 = NXDOMAIN)
-  queryTime?: number // ms
+  /**
+   * DNS response code:
+   * - 0 = NOERROR (success)
+   * - 1 = FORMERR (format error)
+   * - 2 = SERVFAIL (server failure)
+   * - 3 = NXDOMAIN (domain does not exist)
+   * - 4 = NOTIMP (not implemented)
+   * - 5 = REFUSED (query refused)
+   */
+  status: number
+  /** Query time in milliseconds (0 if served from cache) */
+  queryTime?: number
 }
 
 /**
- * Result of a host/nslookup operation
+ * Result of a host or nslookup operation.
+ *
+ * Simplified DNS lookup result containing just the
+ * resolved addresses.
  */
 export interface HostResult {
+  /** Hostname that was looked up */
   hostname: string
+  /** Resolved addresses (IPv4 or IPv6) */
   addresses: string[]
+  /** CNAME aliases if any */
   aliases?: string[]
 }
 
 /**
- * Result of a port check (nc -z)
+ * Result of a port check operation (nc -z).
+ *
+ * Indicates whether a TCP port is accepting connections.
+ *
+ * @example
+ * ```typescript
+ * const result: PortCheckResult = {
+ *   host: 'example.com',
+ *   port: 443,
+ *   open: true,
+ *   latency: 45.2
+ * }
+ * ```
  */
 export interface PortCheckResult {
+  /** Target hostname or IP address */
   host: string
+  /** Port number checked */
   port: number
+  /** Whether the port is open and accepting connections */
   open: boolean
-  latency?: number // ms
+  /** Connection latency in milliseconds (only if open) */
+  latency?: number
 }
 
 /**
- * Result of an HTTP check (wget --spider, curl -I)
+ * Result of an HTTP existence check (wget --spider, curl -I).
+ *
+ * Contains HTTP response metadata and optional timing information.
  */
 export interface HttpCheckResult {
+  /** URL that was checked */
   url: string
+  /** Whether the URL exists (HTTP 2xx response) */
   exists: boolean
+  /** HTTP status code */
   status?: number
+  /** Response headers (lowercase keys) */
   headers?: Record<string, string>
+  /** Detailed timing breakdown */
   timing?: {
+    /** DNS lookup time in ms */
     dns: number
+    /** TCP connection time in ms */
     connect: number
-    ttfb: number // time to first byte
+    /** Time to first byte in ms */
+    ttfb: number
+    /** Total request time in ms */
     total: number
   }
 }
@@ -92,7 +458,10 @@ export interface HttpCheckResult {
 // ============================================================================
 
 /**
- * DNS record type codes to names
+ * Mapping of DNS record type numeric codes to their string names.
+ * Used for parsing DoH JSON responses.
+ *
+ * @see https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
  */
 const DNS_TYPE_CODES: Record<number, string> = {
   1: 'A',
@@ -108,7 +477,10 @@ const DNS_TYPE_CODES: Record<number, string> = {
 }
 
 /**
- * DNS record type names to codes
+ * Mapping of DNS record type string names to their numeric codes.
+ * Used for constructing DoH queries.
+ *
+ * @see https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
  */
 const DNS_TYPE_NAMES: Record<string, number> = {
   A: 1,
@@ -124,14 +496,34 @@ const DNS_TYPE_NAMES: Record<string, number> = {
 }
 
 /**
- * Get DNS type name from code
+ * Convert a DNS type numeric code to its string name.
+ *
+ * @param code - Numeric DNS type code (e.g., 1, 28, 15)
+ * @returns String type name (e.g., 'A', 'AAAA', 'MX') or 'TYPE{code}' for unknown types
+ *
+ * @example
+ * ```typescript
+ * getTypeName(1)   // 'A'
+ * getTypeName(28)  // 'AAAA'
+ * getTypeName(999) // 'TYPE999'
+ * ```
  */
 export function getTypeName(code: number): string {
   return DNS_TYPE_CODES[code] || `TYPE${code}`
 }
 
 /**
- * Get DNS type code from name
+ * Convert a DNS type string name to its numeric code.
+ *
+ * @param name - String DNS type name (e.g., 'A', 'MX', 'TXT')
+ * @returns Numeric type code (e.g., 1, 15, 16) or 1 (A) for unknown types
+ *
+ * @example
+ * ```typescript
+ * getTypeCode('A')    // 1
+ * getTypeCode('aaaa') // 28 (case-insensitive)
+ * getTypeCode('UNKNOWN') // 1 (defaults to A)
+ * ```
  */
 export function getTypeCode(name: string): number {
   return DNS_TYPE_NAMES[name.toUpperCase()] || 1
@@ -142,41 +534,70 @@ export function getTypeCode(name: string): number {
 // ============================================================================
 
 /**
- * Known DoH resolver endpoints
+ * Mapping of DNS resolver identifiers to their DoH (DNS over HTTPS) endpoints.
+ *
+ * Supports both IP addresses (like traditional DNS) and friendly names.
+ * All resolvers support the DNS JSON API format.
+ *
+ * @see https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/
+ * @see https://developers.google.com/speed/public-dns/docs/doh
  */
 const DOH_RESOLVERS: Record<string, string> = {
+  // Cloudflare DNS (1.1.1.1) - fastest, privacy-focused
   '1.1.1.1': 'https://cloudflare-dns.com/dns-query',
   '1.0.0.1': 'https://cloudflare-dns.com/dns-query',
+  cloudflare: 'https://cloudflare-dns.com/dns-query',
+
+  // Google Public DNS (8.8.8.8) - reliable, widely used
   '8.8.8.8': 'https://dns.google/dns-query',
   '8.8.4.4': 'https://dns.google/dns-query',
-  '9.9.9.9': 'https://dns.quad9.net/dns-query',
-  cloudflare: 'https://cloudflare-dns.com/dns-query',
   google: 'https://dns.google/dns-query',
+
+  // Quad9 (9.9.9.9) - security-focused, blocks malware domains
+  '9.9.9.9': 'https://dns.quad9.net/dns-query',
   quad9: 'https://dns.quad9.net/dns-query',
 }
 
 /**
- * Default DoH endpoint
+ * Default DoH endpoint used when no resolver is specified.
+ * Cloudflare DNS is the default due to its performance and
+ * reliability within the Cloudflare Workers ecosystem.
  */
 const DEFAULT_DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query'
 
 /**
- * Get DoH endpoint URL from resolver specification
+ * Resolve a DNS resolver specification to its DoH endpoint URL.
+ *
+ * Supports multiple formats:
+ * - IP addresses: '8.8.8.8', '1.1.1.1', '9.9.9.9'
+ * - Friendly names: 'cloudflare', 'google', 'quad9'
+ * - Full URLs: 'https://custom-doh.example.com/dns-query'
+ *
+ * @param resolver - Resolver specification (IP, name, or URL)
+ * @returns DoH endpoint URL
+ *
+ * @example
+ * ```typescript
+ * getDoHEndpoint()                    // 'https://cloudflare-dns.com/dns-query'
+ * getDoHEndpoint('8.8.8.8')           // 'https://dns.google/dns-query'
+ * getDoHEndpoint('cloudflare')        // 'https://cloudflare-dns.com/dns-query'
+ * getDoHEndpoint('https://custom.com') // 'https://custom.com'
+ * ```
  */
 function getDoHEndpoint(resolver?: string): string {
   if (!resolver) return DEFAULT_DOH_ENDPOINT
 
-  // Check if it's a known resolver
+  // Check if it's a known resolver (case-insensitive for names)
   const known = DOH_RESOLVERS[resolver.toLowerCase()]
   if (known) return known
 
   // Check if it's already a URL
   if (resolver.startsWith('https://')) return resolver
 
-  // Check if it's a known IP
+  // Check if it's a known IP (exact match)
   if (DOH_RESOLVERS[resolver]) return DOH_RESOLVERS[resolver]
 
-  // Default to Cloudflare
+  // Default to Cloudflare for unknown resolvers
   return DEFAULT_DOH_ENDPOINT
 }
 
@@ -185,30 +606,50 @@ function getDoHEndpoint(resolver?: string): string {
 // ============================================================================
 
 /**
+ * Ping options for customizing behavior.
+ */
+export interface PingOptions {
+  /** Number of ping requests to send (default: 4) */
+  count?: number
+  /** Timeout per request in milliseconds (default: 5000) */
+  timeout?: number
+  /** Interval between requests in milliseconds (default: 1000) */
+  interval?: number
+  /** Suppress per-packet output, only show summary (default: false) */
+  quiet?: boolean
+}
+
+/**
  * Execute an HTTP-based ping simulation.
  *
- * Since ICMP is not available in Workers, this performs HTTP HEAD requests
- * to simulate ping behavior.
+ * Since ICMP is not available in Cloudflare Workers, this performs HTTP HEAD
+ * requests to simulate ping behavior. This approach:
+ * - Measures round-trip time similar to ICMP ping
+ * - Calculates packet loss from failed requests
+ * - Provides min/avg/max/mdev statistics
  *
- * @param host - Target host to ping
- * @param options - Ping options
+ * Uses connection keep-alive for improved performance on multiple pings.
+ *
+ * @param host - Target host to ping (with or without protocol)
+ * @param options - Ping configuration options
  * @returns PingResult with timing statistics
  *
  * @example
  * ```typescript
+ * // Basic ping
  * const result = await executePing('example.com', { count: 4 })
  * console.log(`${result.received}/${result.transmitted} packets, ${result.packetLoss}% loss`)
+ *
+ * // Quick connectivity check
+ * const quick = await executePing('api.example.com', { count: 1, timeout: 2000 })
+ * if (quick.received === 0) console.log('Host unreachable')
+ *
+ * // Detailed timing
+ * const detailed = await executePing('cdn.example.com', { count: 10, interval: 500 })
+ * console.log(`Latency: ${detailed.avg.toFixed(1)}ms (${detailed.mdev.toFixed(1)}ms jitter)`)
  * ```
  */
-export async function executePing(
-  host: string,
-  options: {
-    count?: number
-    timeout?: number
-    interval?: number
-    quiet?: boolean
-  } = {}
-): Promise<PingResult> {
+export async function executePing(host: string, options: PingOptions = {}): Promise<PingResult> {
   const count = options.count ?? 4
   const timeout = options.timeout ?? 5000
   const interval = options.interval ?? 1000
@@ -216,6 +657,9 @@ export async function executePing(
 
   // Ensure host has protocol
   const url = host.startsWith('http') ? host : `https://${host}`
+
+  // Use connection keep-alive for better performance on multiple pings
+  const fetchOptions = createFetchOptions()
 
   for (let i = 0; i < count; i++) {
     if (i > 0 && interval > 0) {
@@ -230,6 +674,7 @@ export async function executePing(
       await fetch(url, {
         method: 'HEAD',
         signal: controller.signal,
+        ...fetchOptions,
         // @ts-ignore - mode: 'no-cors' may not be available in all environments
         mode: 'no-cors',
       })
@@ -245,21 +690,8 @@ export async function executePing(
   const received = times.length
   const packetLoss = ((count - received) / count) * 100
 
-  // Calculate statistics
-  let min = 0
-  let max = 0
-  let avg = 0
-  let mdev = 0
-
-  if (times.length > 0) {
-    min = Math.min(...times)
-    max = Math.max(...times)
-    avg = times.reduce((a, b) => a + b, 0) / times.length
-
-    // Calculate standard deviation
-    const squaredDiffs = times.map((t) => Math.pow(t - avg, 2))
-    mdev = Math.sqrt(squaredDiffs.reduce((a, b) => a + b, 0) / times.length)
-  }
+  // Use consolidated statistics calculation
+  const stats = calculateStatistics(times)
 
   return {
     host,
@@ -267,31 +699,54 @@ export async function executePing(
     received,
     packetLoss,
     times,
-    min,
-    avg,
-    max,
-    mdev,
+    ...stats,
   }
 }
 
 /**
- * Format ping output like real ping command
+ * Format ping result as human-readable output.
+ *
+ * Produces output similar to the standard `ping` command, including:
+ * - Header with packet count
+ * - Per-packet timing (icmp_seq style)
+ * - Statistics summary
+ *
+ * @param result - PingResult to format
+ * @returns Multi-line string formatted like real ping output
+ *
+ * @example
+ * ```typescript
+ * const result = await executePing('example.com', { count: 3 })
+ * console.log(formatPingOutput(result))
+ * // PING example.com: 3 packets transmitted
+ * // example.com: icmp_seq=0 time=42.123 ms
+ * // example.com: icmp_seq=1 time=45.678 ms
+ * // example.com: icmp_seq=2 time=41.234 ms
+ * //
+ * // --- example.com ping statistics ---
+ * // 3 packets transmitted, 3 received, 0% packet loss
+ * // rtt min/avg/max/mdev = 41.234/43.012/45.678/1.876 ms
+ * ```
  */
 export function formatPingOutput(result: PingResult): string {
   const lines: string[] = []
 
+  // Header
   lines.push(`PING ${result.host}: ${result.transmitted} packets transmitted`)
 
+  // Per-packet timing
   result.times.forEach((time, i) => {
     lines.push(`${result.host}: icmp_seq=${i} time=${time.toFixed(3)} ms`)
   })
 
+  // Statistics section
   lines.push('')
   lines.push(`--- ${result.host} ping statistics ---`)
   lines.push(
     `${result.transmitted} packets transmitted, ${result.received} received, ${result.packetLoss.toFixed(0)}% packet loss`
   )
 
+  // RTT statistics (only if we have successful responses)
   if (result.received > 0) {
     lines.push(
       `rtt min/avg/max/mdev = ${result.min.toFixed(3)}/${result.avg.toFixed(3)}/${result.max.toFixed(3)}/${result.mdev.toFixed(3)} ms`
@@ -302,7 +757,25 @@ export function formatPingOutput(result: PingResult): string {
 }
 
 /**
- * Parse ping command arguments
+ * Parse a ping command string into structured options.
+ *
+ * Supports common ping flags:
+ * - `-c N`: Number of packets to send
+ * - `-W N`: Timeout in seconds per packet
+ * - `-i N`: Interval in seconds between packets
+ * - `-q`: Quiet mode (summary only)
+ *
+ * @param cmd - Full ping command string (e.g., "ping -c 4 example.com")
+ * @returns Parsed options with host and flags
+ *
+ * @example
+ * ```typescript
+ * parsePingCommand('ping -c 4 example.com')
+ * // { host: 'example.com', count: 4 }
+ *
+ * parsePingCommand('ping -c 1 -W 5 -q example.com')
+ * // { host: 'example.com', count: 1, timeout: 5000, quiet: true }
+ * ```
  */
 export function parsePingCommand(cmd: string): {
   host?: string
@@ -338,28 +811,52 @@ export function parsePingCommand(cmd: string): {
 // ============================================================================
 
 /**
- * Execute a DNS lookup via DNS over HTTPS.
+ * Dig command options for customizing DNS lookup behavior.
+ */
+export interface DigOptions {
+  /** DNS record type to query (A, AAAA, MX, TXT, NS, etc.) */
+  type?: string
+  /** Return only answer data without headers (like dig +short) */
+  short?: boolean
+  /** DNS resolver to use (IP, name, or DoH URL) */
+  resolver?: string
+  /** Skip cache and force network lookup */
+  noCache?: boolean
+}
+
+/**
+ * Execute a DNS lookup via DNS over HTTPS (DoH).
  *
- * Supports multiple record types and DoH resolvers.
+ * Implements the `dig` command functionality using DoH for DNS resolution.
+ * Results are cached with TTL-based expiration for improved performance.
+ *
+ * Features:
+ * - Supports all common DNS record types (A, AAAA, MX, TXT, NS, CNAME, etc.)
+ * - Multiple DoH resolvers (Cloudflare, Google, Quad9)
+ * - Automatic response caching with TTL
+ * - Negative caching for NXDOMAIN responses
  *
  * @param domain - Domain name to look up
- * @param options - Dig options
- * @returns DnsResult with answer records
+ * @param options - Dig configuration options
+ * @returns DnsResult with answer records and metadata
  *
  * @example
  * ```typescript
- * const result = await executeDig('example.com', { type: 'MX' })
- * console.log(result.answer)
+ * // Basic A record lookup
+ * const result = await executeDig('example.com')
+ * console.log(result.answer[0].data) // '93.184.216.34'
+ *
+ * // Query specific record type
+ * const mxResult = await executeDig('example.com', { type: 'MX' })
+ *
+ * // Use specific resolver
+ * const googleResult = await executeDig('example.com', { resolver: '8.8.8.8' })
+ *
+ * // Force network lookup (skip cache)
+ * const freshResult = await executeDig('example.com', { noCache: true })
  * ```
  */
-export async function executeDig(
-  domain: string,
-  options: {
-    type?: string
-    short?: boolean
-    resolver?: string
-  } = {}
-): Promise<DnsResult> {
+export async function executeDig(domain: string, options: DigOptions = {}): Promise<DnsResult> {
   const type = options.type?.toUpperCase() || 'A'
   const endpoint = getDoHEndpoint(options.resolver)
 
@@ -372,6 +869,14 @@ export async function executeDig(
     }
   }
 
+  // Check cache first (unless noCache is set)
+  if (!options.noCache) {
+    const cached = dnsCache.get(domain, type)
+    if (cached) {
+      return cached
+    }
+  }
+
   const startTime = performance.now()
 
   try {
@@ -380,6 +885,7 @@ export async function executeDig(
       headers: {
         Accept: 'application/dns-json',
       },
+      ...createFetchOptions(),
     })
 
     if (!response.ok) {
@@ -414,7 +920,7 @@ export async function executeDig(
 
     const queryTime = performance.now() - startTime
 
-    return {
+    const result: DnsResult = {
       question: { name: domain, type },
       answer:
         data.Answer?.map((a) => ({
@@ -440,6 +946,11 @@ export async function executeDig(
       status: data.Status,
       queryTime,
     }
+
+    // Cache the result
+    dnsCache.set(domain, type, result)
+
+    return result
   } catch {
     return {
       question: { name: domain, type },
@@ -450,57 +961,168 @@ export async function executeDig(
 }
 
 /**
- * Format dig output for short mode (+short)
+ * Format dig result in short mode (like `dig +short`).
+ *
+ * Returns only the answer data, one per line, without any
+ * headers or metadata.
+ *
+ * @param result - DnsResult to format
+ * @returns Answer data only, newline-separated
+ *
+ * @example
+ * ```typescript
+ * const result = await executeDig('example.com')
+ * console.log(formatDigShort(result))
+ * // 93.184.216.34
+ * ```
  */
 export function formatDigShort(result: DnsResult): string {
   return result.answer.map((a) => a.data).join('\n')
 }
 
 /**
- * Format dig output like real dig command
+ * DNS response code names.
+ * @see https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-6
+ */
+const DNS_STATUS_NAMES: Record<number, string> = {
+  0: 'NOERROR',
+  1: 'FORMERR',
+  2: 'SERVFAIL',
+  3: 'NXDOMAIN',
+  4: 'NOTIMP',
+  5: 'REFUSED',
+  6: 'YXDOMAIN',
+  7: 'YXRRSET',
+  8: 'NXRRSET',
+  9: 'NOTAUTH',
+  10: 'NOTZONE',
+}
+
+/**
+ * Get human-readable name for DNS status code.
+ *
+ * @param status - Numeric DNS response code
+ * @returns Status name string (e.g., 'NOERROR', 'NXDOMAIN')
+ */
+function getStatusName(status: number): string {
+  return DNS_STATUS_NAMES[status] || `RCODE${status}`
+}
+
+/**
+ * Format dig result as full output (like standard `dig` command).
+ *
+ * Produces output closely matching the real dig command, including:
+ * - Header with opcode and status
+ * - Question section
+ * - Answer section with properly aligned columns
+ * - Authority section (if present)
+ * - Query time and server info
+ *
+ * @param result - DnsResult to format
+ * @returns Multi-line string formatted like real dig output
+ *
+ * @example
+ * ```typescript
+ * const result = await executeDig('example.com', { type: 'A' })
+ * console.log(formatDigOutput(result))
+ * // ; <<>> DiG <<>> example.com A
+ * // ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 12345
+ * // ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+ * //
+ * // ;; QUESTION SECTION:
+ * // ;example.com.                   IN      A
+ * //
+ * // ;; ANSWER SECTION:
+ * // example.com.            300     IN      A       93.184.216.34
+ * //
+ * // ;; Query time: 45 msec
+ * // ;; SERVER: 1.1.1.1#53(cloudflare-dns.com)
+ * // ;; WHEN: Thu Jan 09 2025 10:30:00 GMT
+ * ```
  */
 export function formatDigOutput(result: DnsResult): string {
   const lines: string[] = []
 
-  lines.push(';; ->>HEADER<<- opcode: QUERY, status: ' + getStatusName(result.status))
+  // DiG header line
+  lines.push(`; <<>> DiG <<>> ${result.question.name} ${result.question.type}`)
+
+  // Response header
+  const answerCount = result.answer.length
+  const authorityCount = result.authority?.length ?? 0
+  const additionalCount = result.additional?.length ?? 0
+  lines.push(`;; ->>HEADER<<- opcode: QUERY, status: ${getStatusName(result.status)}, id: ${Math.floor(Math.random() * 65535)}`)
+  lines.push(`;; flags: qr rd ra; QUERY: 1, ANSWER: ${answerCount}, AUTHORITY: ${authorityCount}, ADDITIONAL: ${additionalCount}`)
   lines.push('')
 
+  // Question section
   lines.push(';; QUESTION SECTION:')
   lines.push(`;${result.question.name}.\t\t\tIN\t${result.question.type}`)
   lines.push('')
 
+  // Answer section
   if (result.answer.length > 0) {
     lines.push(';; ANSWER SECTION:')
     result.answer.forEach((a) => {
-      lines.push(`${a.name}\t\t${a.ttl}\tIN\t${a.type}\t${a.data}`)
+      // Format: name TTL class type data
+      const name = a.name.endsWith('.') ? a.name : `${a.name}.`
+      lines.push(`${name}\t\t${a.ttl}\tIN\t${a.type}\t${a.data}`)
     })
     lines.push('')
   }
 
+  // Authority section
+  if (result.authority && result.authority.length > 0) {
+    lines.push(';; AUTHORITY SECTION:')
+    result.authority.forEach((a) => {
+      const name = a.name.endsWith('.') ? a.name : `${a.name}.`
+      lines.push(`${name}\t\t${a.ttl}\tIN\t${a.type}\t${a.data}`)
+    })
+    lines.push('')
+  }
+
+  // Additional section
+  if (result.additional && result.additional.length > 0) {
+    lines.push(';; ADDITIONAL SECTION:')
+    result.additional.forEach((a) => {
+      const name = a.name.endsWith('.') ? a.name : `${a.name}.`
+      lines.push(`${name}\t\t${a.ttl}\tIN\t${a.type}\t${a.data}`)
+    })
+    lines.push('')
+  }
+
+  // Footer with query time
   if (result.queryTime !== undefined) {
     lines.push(`;; Query time: ${result.queryTime.toFixed(0)} msec`)
   }
+  lines.push(`;; SERVER: 1.1.1.1#53(cloudflare-dns.com)`)
+  lines.push(`;; WHEN: ${new Date().toUTCString()}`)
 
   return lines.join('\n')
 }
 
 /**
- * Get status name from DNS status code
- */
-function getStatusName(status: number): string {
-  const names: Record<number, string> = {
-    0: 'NOERROR',
-    1: 'FORMERR',
-    2: 'SERVFAIL',
-    3: 'NXDOMAIN',
-    4: 'NOTIMP',
-    5: 'REFUSED',
-  }
-  return names[status] || `STATUS${status}`
-}
-
-/**
- * Parse dig command arguments
+ * Parse a dig command string into structured options.
+ *
+ * Supports common dig syntax:
+ * - `dig domain`: Basic A record lookup
+ * - `dig domain TYPE`: Specific record type
+ * - `dig @resolver domain`: Use specific DNS resolver
+ * - `dig +short domain`: Short output mode
+ *
+ * @param cmd - Full dig command string
+ * @returns Parsed options with domain, type, resolver, and flags
+ *
+ * @example
+ * ```typescript
+ * parseDigCommand('dig example.com')
+ * // { domain: 'example.com', type: 'A' }
+ *
+ * parseDigCommand('dig @8.8.8.8 example.com MX')
+ * // { domain: 'example.com', type: 'MX', resolver: '8.8.8.8' }
+ *
+ * parseDigCommand('dig +short example.com AAAA')
+ * // { domain: 'example.com', type: 'AAAA', short: true }
+ * ```
  */
 export function parseDigCommand(cmd: string): {
   domain?: string
@@ -533,18 +1155,41 @@ export function parseDigCommand(cmd: string): {
 // ============================================================================
 
 /**
- * Execute an nslookup query via DoH.
+ * nslookup options for customizing DNS queries.
+ */
+export interface NslookupOptions {
+  /** DNS server to use (IP or name) */
+  server?: string
+  /** Record type to query (default: 'A') */
+  type?: string
+}
+
+/**
+ * Execute an nslookup query via DNS over HTTPS.
+ *
+ * Simulates the traditional `nslookup` command behavior using DoH.
+ * Provides a simpler interface than dig for basic DNS lookups.
  *
  * @param hostname - Hostname to look up
- * @param options - Options including optional DNS server
- * @returns HostResult with addresses
+ * @param options - Query options including server and record type
+ * @returns HostResult with resolved addresses
+ *
+ * @example
+ * ```typescript
+ * // Basic lookup
+ * const result = await executeNslookup('example.com')
+ * console.log(result.addresses) // ['93.184.216.34']
+ *
+ * // With specific server
+ * const google = await executeNslookup('example.com', { server: '8.8.8.8' })
+ *
+ * // Query MX records
+ * const mx = await executeNslookup('example.com', { type: 'MX' })
+ * ```
  */
 export async function executeNslookup(
   hostname: string,
-  options: {
-    server?: string
-    type?: string
-  } = {}
+  options: NslookupOptions = {}
 ): Promise<HostResult> {
   const type = options.type || 'A'
   const digResult = await executeDig(hostname, {
@@ -560,7 +1205,24 @@ export async function executeNslookup(
 }
 
 /**
- * Format nslookup output like real nslookup command
+ * Format nslookup result as human-readable output.
+ *
+ * Produces output similar to the traditional `nslookup` command.
+ *
+ * @param result - HostResult to format
+ * @returns Multi-line string formatted like nslookup output
+ *
+ * @example
+ * ```typescript
+ * const result = await executeNslookup('example.com')
+ * console.log(formatNslookupOutput(result))
+ * // Server:    1.1.1.1
+ * // Address:   1.1.1.1#53
+ * //
+ * // Non-authoritative answer:
+ * // Name:  example.com
+ * // Address: 93.184.216.34
+ * ```
  */
 export function formatNslookupOutput(result: HostResult): string {
   const lines: string[] = []
@@ -583,19 +1245,45 @@ export function formatNslookupOutput(result: HostResult): string {
 // ============================================================================
 
 /**
- * Execute a simplified DNS lookup (host command).
- *
- * @param target - Hostname or IP to look up
- * @param options - Options including record type
- * @returns HostResult with addresses
+ * Host command options for DNS lookups.
  */
-export async function executeHost(
-  target: string,
-  options: {
-    type?: string
-    verbose?: boolean
-  } = {}
-): Promise<HostResult> {
+export interface HostOptions {
+  /** DNS record type to query (A, AAAA, MX, NS, TXT, etc.) */
+  type?: string
+  /** Show verbose output with all record details */
+  verbose?: boolean
+}
+
+/**
+ * Execute a simplified DNS lookup (like the `host` command).
+ *
+ * Automatically detects whether the target is a hostname or IP address
+ * and performs the appropriate lookup (forward or reverse DNS).
+ *
+ * Features:
+ * - Forward lookups for hostnames
+ * - Reverse DNS (PTR) lookups for IPv4 and IPv6 addresses
+ * - Support for all DNS record types
+ *
+ * @param target - Hostname or IP address to look up
+ * @param options - Query options including record type
+ * @returns HostResult with resolved addresses or hostnames
+ *
+ * @example
+ * ```typescript
+ * // Forward lookup
+ * const forward = await executeHost('example.com')
+ * console.log(forward.addresses) // ['93.184.216.34']
+ *
+ * // Reverse lookup (IP to hostname)
+ * const reverse = await executeHost('8.8.8.8')
+ * console.log(reverse.addresses) // ['dns.google']
+ *
+ * // MX record lookup
+ * const mx = await executeHost('example.com', { type: 'MX' })
+ * ```
+ */
+export async function executeHost(target: string, options: HostOptions = {}): Promise<HostResult> {
   // Check if it's a reverse lookup (IP address)
   const isIPv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(target)
   const isIPv6 = /^[0-9a-fA-F:]+$/.test(target) && target.includes(':')
@@ -605,11 +1293,11 @@ export async function executeHost(
     let ptrDomain: string
 
     if (isIPv4) {
-      // Convert IP to reverse DNS format
+      // Convert IP to reverse DNS format (e.g., 8.8.8.8 -> 8.8.8.8.in-addr.arpa)
       const octets = target.split('.')
       ptrDomain = `${octets.reverse().join('.')}.in-addr.arpa`
     } else {
-      // IPv6 reverse lookup (simplified)
+      // IPv6 reverse lookup (expand and reverse nibbles)
       const expanded = expandIPv6(target)
       const nibbles = expanded.replace(/:/g, '').split('')
       ptrDomain = `${nibbles.reverse().join('.')}.ip6.arpa`
@@ -634,17 +1322,36 @@ export async function executeHost(
 }
 
 /**
- * Format host output like real host command
+ * Format host result as human-readable output.
+ *
+ * Produces output similar to the `host` command.
+ *
+ * @param result - HostResult to format
+ * @returns Human-readable output string
+ *
+ * @example
+ * ```typescript
+ * const result = await executeHost('example.com')
+ * console.log(formatHostOutput(result))
+ * // example.com has address 93.184.216.34
+ * ```
  */
 export function formatHostOutput(result: HostResult): string {
   return result.addresses.map((addr) => `${result.hostname} has address ${addr}`).join('\n')
 }
 
 /**
- * Expand IPv6 address to full form (simplified)
+ * Expand a compressed IPv6 address to its full 32-character form.
+ *
+ * Required for constructing reverse DNS lookup domains (ip6.arpa).
+ *
+ * @param addr - Compressed IPv6 address (e.g., '2001:4860::8888')
+ * @returns Fully expanded IPv6 address (e.g., '2001:4860:0000:0000:0000:0000:0000:8888')
+ *
+ * @internal
  */
 function expandIPv6(addr: string): string {
-  // Simple expansion - just for reverse lookup
+  // Handle :: compression
   const parts = addr.split('::')
   if (parts.length === 2) {
     const left = parts[0].split(':').filter(Boolean)
@@ -654,6 +1361,8 @@ function expandIPv6(addr: string): string {
     const full = [...left, ...middle, ...right]
     return full.map((p) => p.padStart(4, '0')).join(':')
   }
+
+  // No compression, just pad each group
   return addr
     .split(':')
     .map((p) => p.padStart(4, '0'))
@@ -665,25 +1374,54 @@ function expandIPv6(addr: string): string {
 // ============================================================================
 
 /**
- * Execute a netcat port check.
+ * Netcat command options.
+ */
+export interface NcOptions {
+  /** Zero I/O mode - just scan for listening ports (nc -z) */
+  zero?: boolean
+  /** Connection timeout in milliseconds (default: 5000) */
+  timeout?: number
+  /** Verbose output */
+  verbose?: boolean
+  /** Listen mode - not supported in Workers */
+  listen?: boolean
+}
+
+/**
+ * Execute a netcat-style port check.
  *
- * In Workers, we can only check HTTP/HTTPS ports via fetch.
- * True TCP socket connections are not available.
+ * Simulates the `nc -z` (zero I/O) mode for checking if ports are open.
  *
- * @param host - Target host
- * @param port - Target port
+ * **Limitations in Cloudflare Workers:**
+ * - Only HTTP/HTTPS ports can be reliably checked via fetch
+ * - True TCP socket connections are not available
+ * - Listen mode (-l) is not supported
+ *
+ * Uses connection keep-alive hints for better performance when
+ * scanning multiple ports.
+ *
+ * @param host - Target hostname or IP address
+ * @param port - Port number to check
  * @param options - Netcat options
- * @returns PortCheckResult
+ * @returns PortCheckResult indicating if port is open
+ * @throws Error if listen mode is requested
+ *
+ * @example
+ * ```typescript
+ * // Check if port 443 is open
+ * const result = await executeNc('example.com', 443, { zero: true })
+ * if (result.open) {
+ *   console.log(`Port 443 is open (latency: ${result.latency}ms)`)
+ * }
+ *
+ * // Quick check with short timeout
+ * const quick = await executeNc('host', 80, { zero: true, timeout: 1000 })
+ * ```
  */
 export async function executeNc(
   host: string,
   port: number,
-  options: {
-    zero?: boolean
-    timeout?: number
-    verbose?: boolean
-    listen?: boolean
-  } = {}
+  options: NcOptions = {}
 ): Promise<PortCheckResult> {
   // Listen mode is not supported in Workers
   if (options.listen) {
@@ -713,6 +1451,7 @@ export async function executeNc(
     await fetch(url, {
       method: 'HEAD',
       signal: controller.signal,
+      ...createFetchOptions(),
     })
 
     const latency = performance.now() - start
@@ -737,11 +1476,22 @@ export async function executeNc(
 /**
  * Execute a port range scan.
  *
- * @param host - Target host
- * @param startPort - Starting port
- * @param endPort - Ending port
- * @param options - Scan options
- * @returns Array of PortCheckResult
+ * Checks multiple consecutive ports for availability.
+ * Scans are performed sequentially to avoid overwhelming the target.
+ *
+ * @param host - Target hostname or IP address
+ * @param startPort - First port in range (inclusive)
+ * @param endPort - Last port in range (inclusive)
+ * @param options - Scan options including timeout
+ * @returns Array of PortCheckResult for each port
+ *
+ * @example
+ * ```typescript
+ * // Scan common HTTP ports
+ * const results = await executeNcRange('example.com', 80, 83, { timeout: 2000 })
+ * const openPorts = results.filter(r => r.open).map(r => r.port)
+ * console.log('Open ports:', openPorts)
+ * ```
  */
 export async function executeNcRange(
   host: string,
@@ -760,12 +1510,25 @@ export async function executeNcRange(
 }
 
 /**
- * Execute a simple HTTP request via netcat style.
+ * Execute a simple HTTP request via netcat-style interface.
  *
- * @param host - Target host
- * @param port - Target port
- * @param request - Raw HTTP request string
- * @returns Response text
+ * Allows sending raw HTTP requests and receiving raw responses,
+ * similar to piping data through netcat.
+ *
+ * @param host - Target hostname
+ * @param port - Target port (80 for HTTP, 443 for HTTPS)
+ * @param request - Raw HTTP request string (e.g., "GET / HTTP/1.0\r\n\r\n")
+ * @returns Raw HTTP response including headers and body
+ *
+ * @example
+ * ```typescript
+ * // Simple HTTP request
+ * const response = await executeNcHttp('example.com', 80, 'GET / HTTP/1.0\r\n\r\n')
+ * console.log(response)
+ * // HTTP/1.1 200 OK
+ * // Content-Type: text/html
+ * // ...
+ * ```
  */
 export async function executeNcHttp(host: string, port: number, request: string): Promise<string> {
   // Parse the request to extract method and path
@@ -780,6 +1543,7 @@ export async function executeNcHttp(host: string, port: number, request: string)
     headers: {
       Host: host,
     },
+    ...createFetchOptions(),
   })
 
   // Format response like raw HTTP
@@ -799,7 +1563,25 @@ export async function executeNcHttp(host: string, port: number, request: string)
 }
 
 /**
- * Parse nc command arguments
+ * Parse a netcat command string into structured options.
+ *
+ * Supports common nc flags:
+ * - `-z`: Zero I/O mode (port scanning)
+ * - `-v`: Verbose output
+ * - `-w N`: Connection timeout in seconds
+ * - `-l`: Listen mode (not supported)
+ *
+ * @param cmd - Full nc command string (e.g., "nc -zv example.com 80")
+ * @returns Parsed options with host, port, and flags
+ *
+ * @example
+ * ```typescript
+ * parseNcCommand('nc -z example.com 80')
+ * // { host: 'example.com', port: 80, zero: true }
+ *
+ * parseNcCommand('nc -zv -w 5 example.com 443')
+ * // { host: 'example.com', port: 443, zero: true, verbose: true, timeout: 5000 }
+ * ```
  */
 export function parseNcCommand(cmd: string): {
   host?: string
@@ -847,18 +1629,42 @@ export function parseNcCommand(cmd: string): {
 // ============================================================================
 
 /**
- * Check if a URL exists (wget --spider).
+ * wget spider options.
+ */
+export interface WgetSpiderOptions {
+  /** Request timeout in milliseconds (default: 30000) */
+  timeout?: number
+  /** Whether to follow HTTP redirects (default: true) */
+  followRedirects?: boolean
+}
+
+/**
+ * Check if a URL exists without downloading content (like `wget --spider`).
+ *
+ * Performs a HEAD request to check URL availability without
+ * transferring the full response body.
  *
  * @param url - URL to check
  * @param options - Spider options
- * @returns HttpCheckResult
+ * @returns HttpCheckResult indicating if URL exists
+ *
+ * @example
+ * ```typescript
+ * // Check if URL exists
+ * const result = await executeWgetSpider('https://example.com/page')
+ * if (result.exists) {
+ *   console.log(`URL exists with status ${result.status}`)
+ * }
+ *
+ * // Check without following redirects
+ * const noRedirect = await executeWgetSpider('http://example.com', {
+ *   followRedirects: false
+ * })
+ * ```
  */
 export async function executeWgetSpider(
   url: string,
-  options: {
-    timeout?: number
-    followRedirects?: boolean
-  } = {}
+  options: WgetSpiderOptions = {}
 ): Promise<HttpCheckResult> {
   const timeout = options.timeout ?? 30000
   const controller = new AbortController()
@@ -869,6 +1675,7 @@ export async function executeWgetSpider(
       method: 'HEAD',
       signal: controller.signal,
       redirect: options.followRedirects === false ? 'manual' : 'follow',
+      ...createFetchOptions(),
     })
 
     return {
@@ -891,16 +1698,29 @@ export async function executeWgetSpider(
 // ============================================================================
 
 /**
- * Fetch HTTP headers only (curl -I).
+ * Fetch HTTP headers only (like `curl -I`).
  *
- * @param url - URL to fetch
- * @returns HttpCheckResult with headers
+ * Performs a HEAD request to retrieve response headers without
+ * downloading the body. Does not follow redirects by default
+ * (matching curl -I behavior).
+ *
+ * @param url - URL to fetch headers from
+ * @returns HttpCheckResult with response headers
+ *
+ * @example
+ * ```typescript
+ * const result = await executeCurlHead('https://example.com')
+ * console.log(`Status: ${result.status}`)
+ * console.log(`Content-Type: ${result.headers?.['content-type']}`)
+ * console.log(`Server: ${result.headers?.['server']}`)
+ * ```
  */
 export async function executeCurlHead(url: string): Promise<HttpCheckResult> {
   try {
     const response = await fetch(url, {
       method: 'HEAD',
-      redirect: 'manual', // Don't follow redirects for -I
+      redirect: 'manual', // Don't follow redirects for -I (matches curl behavior)
+      ...createFetchOptions(),
     })
 
     const headers: Record<string, string> = {}
@@ -927,15 +1747,39 @@ export async function executeCurlHead(url: string): Promise<HttpCheckResult> {
 // ============================================================================
 
 /**
- * Fetch URL with timing information (curl -w).
+ * curl timing options.
+ */
+export interface CurlTimingOptions {
+  /** Custom format string (for future compatibility) */
+  format?: string
+}
+
+/**
+ * Fetch URL with timing information (like `curl -w`).
+ *
+ * Measures various timing metrics during the request lifecycle.
+ *
+ * **Note:** In Cloudflare Workers, DNS and connect timings are simulated
+ * since the runtime manages these internally. TTFB and total time are
+ * accurate measurements.
  *
  * @param url - URL to fetch
  * @param options - Timing options
- * @returns HttpCheckResult with timing info
+ * @returns HttpCheckResult with timing breakdown
+ *
+ * @example
+ * ```typescript
+ * const result = await executeCurlWithTiming('https://example.com')
+ * console.log(`TTFB: ${result.timing?.ttfb.toFixed(2)}ms`)
+ * console.log(`Total: ${result.timing?.total.toFixed(2)}ms`)
+ *
+ * // Format like curl -w output
+ * console.log(formatCurlTiming(result))
+ * ```
  */
 export async function executeCurlWithTiming(
   url: string,
-  options: { format?: string } = {}
+  options: CurlTimingOptions = {}
 ): Promise<HttpCheckResult> {
   const timings = {
     dns: 0,
@@ -946,12 +1790,11 @@ export async function executeCurlWithTiming(
 
   const totalStart = performance.now()
 
-  // DNS timing (simulated - we can't measure actual DNS in Workers)
+  // DNS timing (simulated - Workers runtime manages DNS internally)
   const dnsStart = performance.now()
-  // In a real implementation, we might use a custom DNS resolver
   timings.dns = performance.now() - dnsStart
 
-  // Connection timing (simulated)
+  // Connection timing (simulated - Workers runtime manages connections)
   const connectStart = performance.now()
   timings.connect = performance.now() - connectStart
 
@@ -959,6 +1802,7 @@ export async function executeCurlWithTiming(
     const ttfbStart = performance.now()
     const response = await fetch(url, {
       method: 'HEAD',
+      ...createFetchOptions(),
     })
     timings.ttfb = performance.now() - ttfbStart
 
@@ -988,7 +1832,22 @@ export async function executeCurlWithTiming(
 }
 
 /**
- * Format curl timing output
+ * Format curl timing result as human-readable output.
+ *
+ * Produces output similar to `curl -w` with timing variables.
+ *
+ * @param result - HttpCheckResult with timing information
+ * @returns Formatted timing output string
+ *
+ * @example
+ * ```typescript
+ * const result = await executeCurlWithTiming('https://example.com')
+ * console.log(formatCurlTiming(result))
+ * // time_namelookup: 0.000001s
+ * // time_connect: 0.000001s
+ * // time_starttransfer: 0.045123s
+ * // time_total: 0.045234s
+ * ```
  */
 export function formatCurlTiming(result: HttpCheckResult): string {
   const timing = result.timing
@@ -1007,14 +1866,41 @@ export function formatCurlTiming(result: HttpCheckResult): string {
 // ============================================================================
 
 /**
- * Sleep for specified milliseconds
+ * Sleep for specified milliseconds.
+ *
+ * Utility function for implementing delays between operations.
+ *
+ * @param ms - Duration to sleep in milliseconds
+ * @returns Promise that resolves after the specified duration
+ *
+ * @internal
  */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
- * Tokenize command string respecting quotes
+ * Tokenize a command string into arguments, respecting quotes.
+ *
+ * Handles both single and double quotes, similar to shell parsing.
+ * Used for parsing command strings like "ping -c 4 example.com".
+ *
+ * @param input - Command string to tokenize
+ * @returns Array of argument tokens
+ *
+ * @example
+ * ```typescript
+ * tokenizeCommand('ping -c 4 example.com')
+ * // ['ping', '-c', '4', 'example.com']
+ *
+ * tokenizeCommand('echo "hello world"')
+ * // ['echo', 'hello world']
+ *
+ * tokenizeCommand("grep 'pattern with spaces' file.txt")
+ * // ['grep', 'pattern with spaces', 'file.txt']
+ * ```
+ *
+ * @internal
  */
 function tokenizeCommand(input: string): string[] {
   const tokens: string[] = []

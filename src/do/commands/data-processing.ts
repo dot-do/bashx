@@ -35,17 +35,177 @@ export interface JqOptions {
 }
 
 /**
- * Execute a jq query on JSON input
- *
- * @param query - The jq query expression
- * @param input - JSON input string
- * @param options - Execution options
- * @returns Query result as string
+ * JQ execution context containing variable bindings
  */
-export function executeJq(query: string, input: string, options: JqOptions = {}): string {
-  // Handle slurp mode - parse multiple JSON documents into array
-  let data: unknown
-  if (options.slurp) {
+interface JqContext {
+  /** String variables from --arg */
+  vars: Record<string, string>
+  /** JSON variables from --argjson */
+  argjson: Record<string, unknown>
+}
+
+/**
+ * Result from jq evaluation with iterator metadata
+ */
+interface JqResult {
+  /** The evaluated value */
+  value: unknown
+  /** Whether the result came from an iterator operation */
+  isIterator: boolean
+}
+
+/**
+ * Sentinel value indicating expression was not a builtin function
+ */
+const NOT_A_BUILTIN = Symbol('NOT_A_BUILTIN')
+
+/**
+ * Custom error for jq parsing/execution errors
+ *
+ * @example
+ * ```typescript
+ * throw new JqError('parse error: Invalid JSON input', 5)
+ * ```
+ */
+export class JqError extends Error {
+  /**
+   * Creates a new JqError
+   *
+   * @param message - Error message describing the problem
+   * @param exitCode - Exit code to return (default: 1, parse errors: 5)
+   */
+  constructor(
+    message: string,
+    public exitCode: number = 1
+  ) {
+    super(message)
+    this.name = 'JqError'
+  }
+}
+
+/**
+ * JqEngine - Reusable JSON query processor
+ *
+ * Provides a jq-compatible query language for filtering and transforming JSON data.
+ * Supports:
+ * - Key access (.key, .key.nested)
+ * - Array operations (.[n], .[], map, select, sort_by)
+ * - Object construction ({key, newKey: .expr})
+ * - Built-in functions (length, keys, values, type, etc.)
+ * - Conditionals (if-then-else, alternative operator //)
+ * - Variables (--arg, --argjson)
+ *
+ * @example
+ * ```typescript
+ * const engine = new JqEngine()
+ * const result = engine.execute('.name', '{"name": "test"}')
+ * // result = '"test"\n'
+ *
+ * const filtered = engine.execute(
+ *   '.[] | select(.age > 18)',
+ *   '[{"name": "alice", "age": 25}]'
+ * )
+ * ```
+ */
+export class JqEngine {
+  /** Cached parsed JSON to avoid re-parsing */
+  private cachedInput: string | null = null
+  private cachedData: unknown = null
+
+  /**
+   * Execute a jq query on JSON input
+   *
+   * @param query - The jq query expression (e.g., '.name', '.[] | select(.age > 18)')
+   * @param input - JSON input string
+   * @param options - Execution options (raw output, compact, slurp, variables)
+   * @returns Query result as formatted string
+   * @throws {JqError} On invalid JSON or query syntax errors
+   *
+   * @example
+   * ```typescript
+   * const engine = new JqEngine()
+   *
+   * // Simple key access
+   * engine.execute('.name', '{"name": "test"}')
+   * // => '"test"\n'
+   *
+   * // With raw output (no quotes)
+   * engine.execute('.name', '{"name": "test"}', { raw: true })
+   * // => 'test\n'
+   *
+   * // With variables
+   * engine.execute(
+   *   '.[] | select(.age > $minAge)',
+   *   '[{"age": 25}, {"age": 17}]',
+   *   { argjson: { minAge: 18 } }
+   * )
+   * ```
+   */
+  execute(query: string, input: string, options: JqOptions = {}): string {
+    const data = this.parseInput(input, options)
+    const context = this.createContext(options)
+    const result = this.evaluateWithMeta(query, data, context)
+    return this.formatOutput(result.value, options, result.isIterator)
+  }
+
+  /**
+   * Evaluate a jq expression and return the raw value (not formatted)
+   *
+   * @param query - The jq query expression
+   * @param data - Parsed JSON data
+   * @param context - Execution context with variables
+   * @returns Raw evaluated value
+   */
+  evaluate(query: string, data: unknown, context: JqContext): unknown {
+    const trimmedQuery = query.trim()
+
+    if (trimmedQuery === '.' || trimmedQuery === '') {
+      return data
+    }
+
+    const tokens = this.tokenize(trimmedQuery)
+    return this.executeTokens(tokens, data, context).value
+  }
+
+  /**
+   * Parse JSON input, handling slurp mode for multiple documents
+   *
+   * @param input - JSON input string
+   * @param options - Options containing slurp mode setting
+   * @returns Parsed JSON data
+   * @throws {JqError} On invalid JSON
+   */
+  private parseInput(input: string, options: JqOptions): unknown {
+    // Check cache for non-slurp mode
+    if (!options.slurp && input === this.cachedInput) {
+      return this.cachedData
+    }
+
+    let data: unknown
+
+    if (options.slurp) {
+      data = this.parseSlurpMode(input)
+    } else {
+      try {
+        data = JSON.parse(input)
+        // Cache the parsed result
+        this.cachedInput = input
+        this.cachedData = data
+      } catch {
+        throw new JqError('parse error: Invalid JSON input', 5)
+      }
+    }
+
+    return data
+  }
+
+  /**
+   * Parse multiple JSON documents in slurp mode
+   *
+   * @param input - Input containing multiple JSON documents (newline-separated)
+   * @returns Array of parsed documents
+   */
+  private parseSlurpMode(input: string): unknown[] {
     const docs: unknown[] = []
     const lines = input.trim().split('\n')
     let currentDoc = ''
@@ -80,198 +240,259 @@ export function executeJq(query: string, input: string, options: JqOptions = {})
       }
     }
 
-    data = docs
-  } else {
-    try {
-      data = JSON.parse(input)
-    } catch (e) {
-      throw new JqError('parse error: Invalid JSON input', 5)
+    return docs
+  }
+
+  /**
+   * Create execution context from options
+   *
+   * @param options - Options containing variable bindings
+   * @returns JqContext with variables
+   */
+  private createContext(options: JqOptions): JqContext {
+    return {
+      vars: { ...options.args },
+      argjson: { ...options.argjson },
     }
   }
 
-  // Create context with variables
-  const context: JqContext = {
-    vars: { ...options.args },
-    argjson: { ...options.argjson },
-  }
+  /**
+   * Evaluate a jq expression with iterator metadata
+   *
+   * @param query - The jq query expression
+   * @param data - Parsed JSON data
+   * @param context - Execution context
+   * @returns Result with value and iterator flag
+   */
+  private evaluateWithMeta(query: string, data: unknown, context: JqContext): JqResult {
+    const trimmedQuery = query.trim()
 
-  // Execute query
-  const result = evaluateJqWithMeta(query, data, context)
-
-  // Format output
-  return formatJqOutput(result.value, options, result.isIterator)
-}
-
-/**
- * JQ execution context
- */
-interface JqContext {
-  vars: Record<string, string>
-  argjson: Record<string, unknown>
-}
-
-/**
- * Custom error for jq parsing/execution errors
- */
-export class JqError extends Error {
-  constructor(
-    message: string,
-    public exitCode: number = 1
-  ) {
-    super(message)
-    this.name = 'JqError'
-  }
-}
-
-/**
- * Result from jq evaluation with iterator metadata
- */
-interface JqResult {
-  value: unknown
-  isIterator: boolean
-}
-
-/**
- * Evaluate a jq expression (internal use, returns raw value)
- */
-function evaluateJq(query: string, data: unknown, context: JqContext): unknown {
-  const trimmedQuery = query.trim()
-
-  // Handle empty/identity query
-  if (trimmedQuery === '.' || trimmedQuery === '') {
-    return data
-  }
-
-  // Parse and execute the query
-  const tokens = tokenizeJq(trimmedQuery)
-  return executeJqTokens(tokens, data, context).value
-}
-
-/**
- * Evaluate a jq expression with iterator metadata (for top-level formatting)
- */
-function evaluateJqWithMeta(query: string, data: unknown, context: JqContext): JqResult {
-  const trimmedQuery = query.trim()
-
-  // Handle empty/identity query
-  if (trimmedQuery === '.' || trimmedQuery === '') {
-    return { value: data, isIterator: false }
-  }
-
-  // Parse and execute the query
-  const tokens = tokenizeJq(trimmedQuery)
-  return executeJqTokens(tokens, data, context)
-}
-
-/**
- * Tokenize a jq query into components
- */
-function tokenizeJq(query: string): string[] {
-  const tokens: string[] = []
-  let current = ''
-  let parenDepth = 0
-  let bracketDepth = 0
-  let braceDepth = 0
-  let inString = false
-  let stringChar = ''
-
-  for (let i = 0; i < query.length; i++) {
-    const char = query[i]
-    const prevChar = i > 0 ? query[i - 1] : ''
-
-    // Handle strings
-    if ((char === '"' || char === "'") && prevChar !== '\\') {
-      if (!inString) {
-        inString = true
-        stringChar = char
-      } else if (char === stringChar) {
-        inString = false
-      }
-      current += char
-      continue
+    if (trimmedQuery === '.' || trimmedQuery === '') {
+      return { value: data, isIterator: false }
     }
 
-    if (inString) {
-      current += char
-      continue
-    }
-
-    // Track nesting
-    if (char === '(') parenDepth++
-    else if (char === ')') parenDepth--
-    else if (char === '[') bracketDepth++
-    else if (char === ']') bracketDepth--
-    else if (char === '{') braceDepth++
-    else if (char === '}') braceDepth--
-
-    // Pipe separator at top level
-    if (char === '|' && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
-      if (current.trim()) {
-        tokens.push(current.trim())
-      }
-      current = ''
-      continue
-    }
-
-    current += char
+    const tokens = this.tokenize(trimmedQuery)
+    return this.executeTokens(tokens, data, context)
   }
 
-  if (current.trim()) {
-    tokens.push(current.trim())
-  }
+  /**
+   * Tokenize a jq query into pipe-separated components
+   *
+   * Handles nested structures (parentheses, brackets, braces) and strings
+   * to correctly split on pipe operators.
+   *
+   * @param query - The jq query to tokenize
+   * @returns Array of token strings
+   */
+  private tokenize(query: string): string[] {
+    const tokens: string[] = []
+    let current = ''
+    let parenDepth = 0
+    let bracketDepth = 0
+    let braceDepth = 0
+    let inString = false
+    let stringChar = ''
 
-  return tokens
-}
+    for (let i = 0; i < query.length; i++) {
+      const char = query[i]
+      const prevChar = i > 0 ? query[i - 1] : ''
 
-/**
- * Execute tokenized jq query
- * Handles iterator semantics: when a filter produces multiple outputs,
- * subsequent filters are applied to each output independently.
- */
-function executeJqTokens(tokens: string[], data: unknown, context: JqContext): JqResult {
-  let result: unknown = data
-  let isIterator = false
-
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]
-
-    // Check if previous result was from an iterator (.[] operation)
-    // If so, apply this filter to each element
-    if (isIterator && Array.isArray(result)) {
-      const filtered: unknown[] = []
-      for (const item of result) {
-        const itemResult = executeJqExpressionRaw(token, item, context)
-        // select returns undefined for non-matches
-        if (itemResult !== undefined) {
-          filtered.push(itemResult)
+      // Handle strings
+      if ((char === '"' || char === "'") && prevChar !== '\\') {
+        if (!inString) {
+          inString = true
+          stringChar = char
+        } else if (char === stringChar) {
+          inString = false
         }
+        current += char
+        continue
       }
-      result = filtered
-      // Keep iterator mode for subsequent filters
-      isIterator = true
-    } else {
-      result = executeJqExpressionRaw(token, result, context)
-      // Check if this is an iterator expression
-      isIterator = token === '.[]' || /^\.[a-zA-Z_]\w*\[\]$/.test(token)
+
+      if (inString) {
+        current += char
+        continue
+      }
+
+      // Track nesting
+      if (char === '(') parenDepth++
+      else if (char === ')') parenDepth--
+      else if (char === '[') bracketDepth++
+      else if (char === ']') bracketDepth--
+      else if (char === '{') braceDepth++
+      else if (char === '}') braceDepth--
+
+      // Pipe separator at top level
+      if (char === '|' && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+        if (current.trim()) {
+          tokens.push(current.trim())
+        }
+        current = ''
+        continue
+      }
+
+      current += char
     }
+
+    if (current.trim()) {
+      tokens.push(current.trim())
+    }
+
+    return tokens
   }
 
-  return { value: result, isIterator }
-}
+  /**
+   * Execute tokenized jq query
+   *
+   * Handles iterator semantics: when a filter produces multiple outputs,
+   * subsequent filters are applied to each output independently.
+   *
+   * @param tokens - Array of query tokens (pipe-separated components)
+   * @param data - Input data
+   * @param context - Execution context
+   * @returns Result with value and iterator flag
+   */
+  private executeTokens(tokens: string[], data: unknown, context: JqContext): JqResult {
+    let result: unknown = data
+    let isIterator = false
 
-/**
- * Execute a single jq expression (raw, returns value directly)
- */
-function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext): unknown {
-  const trimmed = expr.trim()
+    for (const token of tokens) {
+      if (isIterator && Array.isArray(result)) {
+        // Apply filter to each element
+        const filtered: unknown[] = []
+        for (const item of result) {
+          const itemResult = this.executeExpression(token, item, context)
+          if (itemResult !== undefined) {
+            filtered.push(itemResult)
+          }
+        }
+        result = filtered
+        isIterator = true
+      } else {
+        result = this.executeExpression(token, result, context)
+        isIterator = token === '.[]' || /^\.[a-zA-Z_]\w*\[\]$/.test(token)
+      }
+    }
 
-  // Identity
-  if (trimmed === '.') {
-    return data
+    return { value: result, isIterator }
   }
 
-  // Iterator: .[]
-  if (trimmed === '.[]') {
+  /**
+   * Execute a single jq expression
+   *
+   * @param expr - Expression to execute
+   * @param data - Current data
+   * @param context - Execution context
+   * @returns Expression result
+   * @throws {JqError} On invalid expression
+   */
+  private executeExpression(expr: string, data: unknown, context: JqContext): unknown {
+    const trimmed = expr.trim()
+
+    // Identity
+    if (trimmed === '.') {
+      return data
+    }
+
+    // Iterator: .[]
+    if (trimmed === '.[]') {
+      return this.handleIterator(data)
+    }
+
+    // Key access with iterator: .key[]
+    const keyIterMatch = trimmed.match(/^\.([a-zA-Z_][a-zA-Z0-9_]*)\[\]$/)
+    if (keyIterMatch) {
+      return this.handleKeyIterator(data, keyIterMatch[1])
+    }
+
+    // Path with iterator: .items[].name
+    const pathIterMatch = trimmed.match(/^\.([\w.]+)\[\]\.(\w+)$/)
+    if (pathIterMatch) {
+      return this.handlePathIterator(data, pathIterMatch[1], pathIterMatch[2])
+    }
+
+    // Simple key access: .key or .key.nested
+    if (trimmed.startsWith('.') && /^\.[\w.]+$/.test(trimmed)) {
+      return this.getPath(data, trimmed.slice(1))
+    }
+
+    // Array index: .[n] or .[n:m]
+    const indexMatch = trimmed.match(/^\.\[(-?\d+)(?::(-?\d+))?\]$/)
+    if (indexMatch) {
+      return this.handleArrayIndex(data, indexMatch)
+    }
+
+    // Key with array index: .key[n] or .key[n:m]
+    const keyIndexMatch = trimmed.match(/^\.(\w+)\[(-?\d+)(?::(-?\d+))?\]$/)
+    if (keyIndexMatch) {
+      return this.handleKeyIndex(data, keyIndexMatch)
+    }
+
+    // Nested path with array index: .items[0].name
+    const nestedIndexMatch = trimmed.match(/^\.(\w+)\[(-?\d+)\]\.(\w+)$/)
+    if (nestedIndexMatch) {
+      return this.handleNestedIndex(data, nestedIndexMatch)
+    }
+
+    // Variable access: $var
+    if (trimmed.startsWith('$')) {
+      return this.handleVariable(trimmed, context)
+    }
+
+    // Dynamic key access with variable: .[$key]
+    const dynKeyMatch = trimmed.match(/^\.\[\$(\w+)\]$/)
+    if (dynKeyMatch) {
+      return this.handleDynamicKey(data, dynKeyMatch[1], context)
+    }
+
+    // Built-in functions
+    const builtinResult = this.handleBuiltinFunction(trimmed, data, context)
+    if (builtinResult !== NOT_A_BUILTIN) {
+      return builtinResult
+    }
+
+    // Object construction
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      return this.constructObject(trimmed, data, context)
+    }
+
+    // Object addition
+    const addMatch = trimmed.match(/^\.\s*\+\s*(\{.+\})$/)
+    if (addMatch) {
+      const newObj = this.constructObject(addMatch[1], data, context)
+      return { ...(data as object), ...newObj }
+    }
+
+    // Alternative operator: expr // default
+    if (trimmed.includes(' // ')) {
+      return this.handleAlternative(trimmed, data, context)
+    }
+
+    // if-then-else
+    const ifMatch = trimmed.match(/^if\s+(.+)\s+then\s+(.+)\s+else\s+(.+)\s+end$/)
+    if (ifMatch) {
+      return this.handleConditional(ifMatch, data, context)
+    }
+
+    // try-catch
+    const tryMatch = trimmed.match(/^try\s+(.+)\s+catch\s+(.+)$/)
+    if (tryMatch) {
+      return this.handleTryCatch(tryMatch, data, context)
+    }
+
+    // Literals
+    const literalResult = this.handleLiteral(trimmed)
+    if (literalResult !== NOT_A_BUILTIN) {
+      return literalResult
+    }
+
+    throw new JqError(`Unknown expression: ${trimmed}`)
+  }
+
+  /**
+   * Handle iterator expression (.[] )
+   */
+  private handleIterator(data: unknown): unknown[] {
     if (Array.isArray(data)) {
       return data
     }
@@ -281,10 +502,10 @@ function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext)
     throw new JqError(`Cannot iterate over ${typeof data}`)
   }
 
-  // Key access with iterator: .key[]
-  const keyIterMatch = trimmed.match(/^\.([a-zA-Z_][a-zA-Z0-9_]*)\[\]$/)
-  if (keyIterMatch) {
-    const key = keyIterMatch[1]
+  /**
+   * Handle key iterator (.key[])
+   */
+  private handleKeyIterator(data: unknown, key: string): unknown[] {
     const obj = data as Record<string, unknown>
     const value = obj?.[key]
     if (Array.isArray(value)) {
@@ -296,102 +517,97 @@ function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext)
     throw new JqError(`Cannot iterate over ${typeof value}`)
   }
 
-  // Path with iterator: .items[].name
-  const pathIterMatch = trimmed.match(/^\.([\w.]+)\[\]\.(\w+)$/)
-  if (pathIterMatch) {
-    const basePath = pathIterMatch[1]
-    const finalKey = pathIterMatch[2]
+  /**
+   * Handle path iterator (.items[].name)
+   */
+  private handlePathIterator(data: unknown, basePath: string, finalKey: string): unknown[] {
     let current: unknown = data
 
-    // Navigate to base
     for (const key of basePath.split('.')) {
       if (current && typeof current === 'object') {
         current = (current as Record<string, unknown>)[key]
       } else {
-        return null
+        return [null]
       }
     }
 
-    // Iterate and extract final key
     if (Array.isArray(current)) {
       return current.map((item) => (item as Record<string, unknown>)?.[finalKey])
     }
     throw new JqError(`Cannot iterate: not an array`)
   }
 
-  // Simple key access: .key or .key.nested
-  if (trimmed.startsWith('.') && /^\.[\w.]+$/.test(trimmed)) {
-    const path = trimmed.slice(1)
-    return getPath(data, path)
-  }
-
-  // Array index: .[n] or .[n:m]
-  const indexMatch = trimmed.match(/^\.\[(-?\d+)(?::(-?\d+))?\]$/)
-  if (indexMatch) {
+  /**
+   * Handle array index (.[n] or .[n:m])
+   */
+  private handleArrayIndex(data: unknown, match: RegExpMatchArray): unknown {
     if (!Array.isArray(data)) {
       throw new JqError('Cannot index non-array')
     }
-    const start = parseInt(indexMatch[1], 10)
-    if (indexMatch[2] !== undefined) {
-      const end = parseInt(indexMatch[2], 10)
+    const start = parseInt(match[1], 10)
+    if (match[2] !== undefined) {
+      const end = parseInt(match[2], 10)
       return data.slice(start < 0 ? data.length + start : start, end < 0 ? data.length + end : end)
     }
     const idx = start < 0 ? data.length + start : start
     return data[idx]
   }
 
-  // Key with array index: .key[n] or .key[n:m]
-  const keyIndexMatch = trimmed.match(/^\.(\w+)\[(-?\d+)(?::(-?\d+))?\]$/)
-  if (keyIndexMatch) {
-    const key = keyIndexMatch[1]
+  /**
+   * Handle key with array index (.key[n])
+   */
+  private handleKeyIndex(data: unknown, match: RegExpMatchArray): unknown {
+    const key = match[1]
     const arr = (data as Record<string, unknown>)?.[key]
     if (!Array.isArray(arr)) {
       throw new JqError(`Cannot index: .${key} is not an array`)
     }
-    const start = parseInt(keyIndexMatch[2], 10)
-    if (keyIndexMatch[3] !== undefined) {
-      const end = parseInt(keyIndexMatch[3], 10)
+    const start = parseInt(match[2], 10)
+    if (match[3] !== undefined) {
+      const end = parseInt(match[3], 10)
       return arr.slice(start < 0 ? arr.length + start : start, end < 0 ? arr.length + end : end)
     }
     const idx = start < 0 ? arr.length + start : start
     return arr[idx]
   }
 
-  // Nested path with array index: .items[0].name
-  const nestedIndexMatch = trimmed.match(/^\.(\w+)\[(-?\d+)\]\.(\w+)$/)
-  if (nestedIndexMatch) {
-    const key = nestedIndexMatch[1]
-    const idx = parseInt(nestedIndexMatch[2], 10)
-    const finalKey = nestedIndexMatch[3]
+  /**
+   * Handle nested path with array index (.items[0].name)
+   */
+  private handleNestedIndex(data: unknown, match: RegExpMatchArray): unknown {
+    const key = match[1]
+    const idx = parseInt(match[2], 10)
+    const finalKey = match[3]
     const arr = (data as Record<string, unknown>)?.[key]
     if (!Array.isArray(arr)) {
       throw new JqError(`Cannot index: .${key} is not an array`)
     }
     const realIdx = idx < 0 ? arr.length + idx : idx
     const item = arr[realIdx]
-    // Accessing property on null/undefined should throw in try-catch context
     if (item === undefined || item === null) {
       throw new JqError(`Cannot get .${finalKey} of null`)
     }
     return (item as Record<string, unknown>)?.[finalKey]
   }
 
-  // Variable access: $var
-  if (trimmed.startsWith('$')) {
-    const varName = trimmed.slice(1)
+  /**
+   * Handle variable access ($var)
+   */
+  private handleVariable(varExpr: string, context: JqContext): unknown {
+    const varName = varExpr.slice(1)
     if (varName in context.argjson) {
       return context.argjson[varName]
     }
     if (varName in context.vars) {
       return context.vars[varName]
     }
-    throw new JqError(`Variable ${trimmed} is not defined`)
+    throw new JqError(`Variable ${varExpr} is not defined`)
   }
 
-  // Dynamic key access with variable: .[$key]
-  const dynKeyMatch = trimmed.match(/^\.\[\$(\w+)\]$/)
-  if (dynKeyMatch) {
-    const varName = dynKeyMatch[1]
+  /**
+   * Handle dynamic key access (.[$key])
+   */
+  private handleDynamicKey(data: unknown, varName: string, context: JqContext): unknown {
     let key: string
     if (varName in context.argjson) {
       key = String(context.argjson[varName])
@@ -403,72 +619,169 @@ function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext)
     return (data as Record<string, unknown>)?.[key]
   }
 
-  // Built-in functions
-  if (trimmed === 'length') {
-    if (Array.isArray(data)) return data.length
-    if (typeof data === 'string') return data.length
-    if (data && typeof data === 'object') return Object.keys(data).length
-    return 0
-  }
+  /**
+   * Handle built-in functions (length, keys, sort, etc.)
+   *
+   * @returns Result value, undefined for select filter-out, or NOT_A_BUILTIN if not a builtin
+   */
+  private handleBuiltinFunction(expr: string, data: unknown, context: JqContext): unknown | typeof NOT_A_BUILTIN {
+    // Simple builtins
+    switch (expr) {
+      case 'length':
+        if (Array.isArray(data)) return data.length
+        if (typeof data === 'string') return data.length
+        if (data && typeof data === 'object') return Object.keys(data).length
+        return 0
 
-  if (trimmed === 'keys') {
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
-      return Object.keys(data).sort()
+      case 'keys':
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          return Object.keys(data).sort()
+        }
+        if (Array.isArray(data)) {
+          return data.map((_, i) => i)
+        }
+        throw new JqError('keys requires an object or array')
+
+      case 'values':
+        if (data === null || data === undefined) {
+          return undefined
+        }
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          return Object.values(data)
+        }
+        return data
+
+      case 'type':
+        if (data === null) return 'null'
+        if (Array.isArray(data)) return 'array'
+        return typeof data
+
+      case 'tonumber': {
+        const num = Number(data)
+        if (isNaN(num)) throw new JqError('Cannot convert to number')
+        return num
+      }
+
+      case 'tostring':
+        if (typeof data === 'string') return data
+        return JSON.stringify(data)
+
+      case 'sort':
+        if (!Array.isArray(data)) throw new JqError('sort requires an array')
+        return [...data].sort((a, b) => {
+          if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
+          if (typeof a === 'number' && typeof b === 'number') return a - b
+          return String(a).localeCompare(String(b))
+        })
+
+      case 'reverse':
+        if (!Array.isArray(data)) throw new JqError('reverse requires an array')
+        return [...data].reverse()
+
+      case 'unique':
+        if (!Array.isArray(data)) throw new JqError('unique requires an array')
+        return this.uniqueArray(data)
+
+      case 'flatten':
+        if (!Array.isArray(data)) throw new JqError('flatten requires an array')
+        return data.flat(Infinity)
+
+      case 'add':
+        if (!Array.isArray(data)) throw new JqError('add requires an array')
+        return this.addArray(data)
+
+      case 'ascii_upcase':
+        if (typeof data !== 'string') throw new JqError('ascii_upcase requires a string')
+        return data.toUpperCase()
+
+      case 'ascii_downcase':
+        if (typeof data !== 'string') throw new JqError('ascii_downcase requires a string')
+        return data.toLowerCase()
     }
-    if (Array.isArray(data)) {
-      return data.map((_, i) => i)
+
+    // Parameterized builtins
+    return this.handleParameterizedBuiltin(expr, data, context)
+  }
+
+  /**
+   * Handle parameterized built-in functions (sort_by, map, select, etc.)
+   */
+  private handleParameterizedBuiltin(expr: string, data: unknown, context: JqContext): unknown {
+    // sort_by(.key)
+    const sortByMatch = expr.match(/^sort_by\(\.(\w+)\)$/)
+    if (sortByMatch) {
+      if (!Array.isArray(data)) throw new JqError('sort_by requires an array')
+      const key = sortByMatch[1]
+      return [...data].sort((a, b) => {
+        const aVal = (a as Record<string, unknown>)?.[key]
+        const bVal = (b as Record<string, unknown>)?.[key]
+        if (typeof aVal === 'number' && typeof bVal === 'number') return aVal - bVal
+        return String(aVal ?? '').localeCompare(String(bVal ?? ''))
+      })
     }
-    throw new JqError('keys requires an object or array')
-  }
 
-  if (trimmed === 'values') {
-    // In jq, 'values' is a filter that removes nulls and passes through everything else
-    // When applied to objects, it returns the values
-    // When applied to arrays, it returns the array
-    // When applied to scalar values, it passes them through if non-null
-    if (data === null || data === undefined) {
-      return undefined // Filter out null/undefined values
+    // map(expr)
+    const mapMatch = expr.match(/^map\((.+)\)$/)
+    if (mapMatch) {
+      if (!Array.isArray(data)) throw new JqError('map requires an array')
+      const innerExpr = mapMatch[1]
+      // Handle select inside map - filter out undefined results
+      const results: unknown[] = []
+      for (const item of data) {
+        const result = this.evaluate(innerExpr, item, context)
+        if (result !== undefined) {
+          results.push(result)
+        }
+      }
+      return results
     }
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
-      return Object.values(data)
+
+    // select(condition)
+    const selectMatch = expr.match(/^select\((.+)\)$/)
+    if (selectMatch) {
+      if (this.evaluateCondition(selectMatch[1], data, context)) {
+        return data
+      }
+      return undefined
     }
-    // For arrays and scalar values, just pass through
-    return data
+
+    // has("key")
+    const hasMatch = expr.match(/^has\("([^"]+)"\)$/) || expr.match(/^has\(\\"([^"]+)\\"\)$/)
+    if (hasMatch) {
+      if (data && typeof data === 'object') {
+        return hasMatch[1] in (data as Record<string, unknown>)
+      }
+      return false
+    }
+
+    // split("delimiter")
+    const splitMatch = expr.match(/^split\("([^"]*)"\)$/) || expr.match(/^split\(\\"([^"]*)\\"\)$/)
+    if (splitMatch) {
+      if (typeof data !== 'string') throw new JqError('split requires a string')
+      return data.split(splitMatch[1])
+    }
+
+    // join("delimiter")
+    const joinMatch = expr.match(/^join\("([^"]*)"\)$/) || expr.match(/^join\(\\"([^"]*)\\"\)$/)
+    if (joinMatch) {
+      if (!Array.isArray(data)) throw new JqError('join requires an array')
+      return data.join(joinMatch[1])
+    }
+
+    // test("pattern")
+    const testMatch = expr.match(/^test\("([^"]+)"\)$/) || expr.match(/^test\(\\"([^"]+)\\"\)$/)
+    if (testMatch) {
+      if (typeof data !== 'string') throw new JqError('test requires a string')
+      return new RegExp(testMatch[1]).test(data)
+    }
+
+    return NOT_A_BUILTIN
   }
 
-  if (trimmed === 'type') {
-    if (data === null) return 'null'
-    if (Array.isArray(data)) return 'array'
-    return typeof data
-  }
-
-  if (trimmed === 'tonumber') {
-    const num = Number(data)
-    if (isNaN(num)) throw new JqError('Cannot convert to number')
-    return num
-  }
-
-  if (trimmed === 'tostring') {
-    if (typeof data === 'string') return data
-    return JSON.stringify(data)
-  }
-
-  if (trimmed === 'sort') {
-    if (!Array.isArray(data)) throw new JqError('sort requires an array')
-    return [...data].sort((a, b) => {
-      if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
-      if (typeof a === 'number' && typeof b === 'number') return a - b
-      return String(a).localeCompare(String(b))
-    })
-  }
-
-  if (trimmed === 'reverse') {
-    if (!Array.isArray(data)) throw new JqError('reverse requires an array')
-    return [...data].reverse()
-  }
-
-  if (trimmed === 'unique') {
-    if (!Array.isArray(data)) throw new JqError('unique requires an array')
+  /**
+   * Get unique values from array
+   */
+  private uniqueArray(data: unknown[]): unknown[] {
     const seen = new Set<string>()
     return data.filter((item) => {
       const key = JSON.stringify(item)
@@ -478,13 +791,10 @@ function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext)
     })
   }
 
-  if (trimmed === 'flatten') {
-    if (!Array.isArray(data)) throw new JqError('flatten requires an array')
-    return data.flat(Infinity)
-  }
-
-  if (trimmed === 'add') {
-    if (!Array.isArray(data)) throw new JqError('add requires an array')
+  /**
+   * Add array elements (numbers, strings, arrays, or objects)
+   */
+  private addArray(data: unknown[]): unknown {
     if (data.length === 0) return null
     if (typeof data[0] === 'number') {
       return data.reduce((a, b) => (a as number) + (b as number), 0)
@@ -498,177 +808,120 @@ function executeJqExpressionRaw(expr: string, data: unknown, context: JqContext)
     return data.reduce((a, b) => ({ ...(a as object), ...(b as object) }), {})
   }
 
-  if (trimmed === 'ascii_upcase') {
-    if (typeof data !== 'string') throw new JqError('ascii_upcase requires a string')
-    return data.toUpperCase()
-  }
-
-  if (trimmed === 'ascii_downcase') {
-    if (typeof data !== 'string') throw new JqError('ascii_downcase requires a string')
-    return data.toLowerCase()
-  }
-
-  // sort_by(.key)
-  const sortByMatch = trimmed.match(/^sort_by\(\.(\w+)\)$/)
-  if (sortByMatch) {
-    if (!Array.isArray(data)) throw new JqError('sort_by requires an array')
-    const key = sortByMatch[1]
-    return [...data].sort((a, b) => {
-      const aVal = (a as Record<string, unknown>)?.[key]
-      const bVal = (b as Record<string, unknown>)?.[key]
-      if (typeof aVal === 'number' && typeof bVal === 'number') return aVal - bVal
-      return String(aVal ?? '').localeCompare(String(bVal ?? ''))
-    })
-  }
-
-  // map(expr)
-  const mapMatch = trimmed.match(/^map\((.+)\)$/)
-  if (mapMatch) {
-    if (!Array.isArray(data)) throw new JqError('map requires an array')
-    const innerExpr = mapMatch[1]
-    return data.map((item) => evaluateJq(innerExpr, item, context))
-  }
-
-  // select(condition)
-  const selectMatch = trimmed.match(/^select\((.+)\)$/)
-  if (selectMatch) {
-    const condition = selectMatch[1]
-    if (evaluateCondition(condition, data, context)) {
-      return data
-    }
-    return undefined // Filter out
-  }
-
-  // has("key")
-  const hasMatch = trimmed.match(/^has\("([^"]+)"\)$/) || trimmed.match(/^has\(\\"([^"]+)\\"\)$/)
-  if (hasMatch) {
-    const key = hasMatch[1]
-    if (data && typeof data === 'object') {
-      return key in (data as Record<string, unknown>)
-    }
-    return false
-  }
-
-  // split("delimiter")
-  const splitMatch = trimmed.match(/^split\("([^"]*)"\)$/) || trimmed.match(/^split\(\\"([^"]*)\\"\)$/)
-  if (splitMatch) {
-    if (typeof data !== 'string') throw new JqError('split requires a string')
-    return data.split(splitMatch[1])
-  }
-
-  // join("delimiter")
-  const joinMatch = trimmed.match(/^join\("([^"]*)"\)$/) || trimmed.match(/^join\(\\"([^"]*)\\"\)$/)
-  if (joinMatch) {
-    if (!Array.isArray(data)) throw new JqError('join requires an array')
-    return data.join(joinMatch[1])
-  }
-
-  // test("pattern")
-  const testMatch = trimmed.match(/^test\("([^"]+)"\)$/) || trimmed.match(/^test\(\\"([^"]+)\\"\)$/)
-  if (testMatch) {
-    if (typeof data !== 'string') throw new JqError('test requires a string')
-    return new RegExp(testMatch[1]).test(data)
-  }
-
-  // Object construction: {key, key2} or {newKey: .key}
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    return constructObject(trimmed, data, context)
-  }
-
-  // Object addition: . + {key: value}
-  const addMatch = trimmed.match(/^\.\s*\+\s*(\{.+\})$/)
-  if (addMatch) {
-    const newObj = constructObject(addMatch[1], data, context)
-    return { ...(data as object), ...newObj }
-  }
-
-  // Alternative operator: expr // default
-  if (trimmed.includes(' // ')) {
-    const [primary, fallback] = trimmed.split(' // ')
+  /**
+   * Handle alternative operator (expr // default)
+   */
+  private handleAlternative(expr: string, data: unknown, context: JqContext): unknown {
+    const [primary, fallback] = expr.split(' // ')
     try {
-      const result = evaluateJq(primary.trim(), data, context)
+      const result = this.evaluate(primary.trim(), data, context)
       if (result === null || result === undefined) {
-        return evaluateJq(fallback.trim(), data, context)
+        return this.evaluate(fallback.trim(), data, context)
       }
       return result
     } catch {
-      return evaluateJq(fallback.trim(), data, context)
+      return this.evaluate(fallback.trim(), data, context)
     }
   }
 
-  // if-then-else
-  const ifMatch = trimmed.match(/^if\s+(.+)\s+then\s+(.+)\s+else\s+(.+)\s+end$/)
-  if (ifMatch) {
-    const condition = ifMatch[1]
-    const thenExpr = ifMatch[2]
-    const elseExpr = ifMatch[3]
-    if (evaluateCondition(condition, data, context)) {
-      return evaluateJq(thenExpr, data, context)
+  /**
+   * Handle if-then-else conditional
+   */
+  private handleConditional(match: RegExpMatchArray, data: unknown, context: JqContext): unknown {
+    const condition = match[1]
+    const thenExpr = match[2]
+    const elseExpr = match[3]
+    if (this.evaluateCondition(condition, data, context)) {
+      return this.evaluate(thenExpr, data, context)
     }
-    return evaluateJq(elseExpr, data, context)
+    return this.evaluate(elseExpr, data, context)
   }
 
-  // try-catch
-  const tryMatch = trimmed.match(/^try\s+(.+)\s+catch\s+(.+)$/)
-  if (tryMatch) {
+  /**
+   * Handle try-catch expression
+   */
+  private handleTryCatch(match: RegExpMatchArray, data: unknown, context: JqContext): unknown {
     try {
-      return evaluateJq(tryMatch[1], data, context)
+      return this.evaluate(match[1], data, context)
     } catch {
-      // Parse the catch value
-      const catchExpr = tryMatch[2].trim()
+      const catchExpr = match[2].trim()
       if (catchExpr.startsWith('"') && catchExpr.endsWith('"')) {
         return catchExpr.slice(1, -1)
       }
       if (catchExpr.startsWith('\\"') && catchExpr.endsWith('\\"')) {
         return catchExpr.slice(2, -2)
       }
-      return evaluateJq(catchExpr, data, context)
+      return this.evaluate(catchExpr, data, context)
     }
   }
 
-  // String literal
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith('\\"') && trimmed.endsWith('\\"'))) {
-    const inner = trimmed.startsWith('\\"') ? trimmed.slice(2, -2) : trimmed.slice(1, -1)
-    return inner
+  /**
+   * Handle literal values (strings, numbers, booleans, null)
+   */
+  private handleLiteral(expr: string): unknown {
+    // String literal
+    if ((expr.startsWith('"') && expr.endsWith('"')) || (expr.startsWith('\\"') && expr.endsWith('\\"'))) {
+      return expr.startsWith('\\"') ? expr.slice(2, -2) : expr.slice(1, -1)
+    }
+
+    // Number literal
+    if (/^-?\d+(\.\d+)?$/.test(expr)) {
+      return parseFloat(expr)
+    }
+
+    // Boolean and null literals
+    if (expr === 'true') return true
+    if (expr === 'false') return false
+    if (expr === 'null') return null
+
+    return NOT_A_BUILTIN
   }
 
-  // Number literal
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    return parseFloat(trimmed)
+  /**
+   * Evaluate a condition expression for select/if-then-else
+   */
+  private evaluateCondition(condition: string, data: unknown, context: JqContext): boolean {
+    const trimmed = condition.trim()
+
+    // Handle compound conditions (and/or)
+    if (trimmed.includes(' and ')) {
+      const parts = trimmed.split(' and ')
+      return parts.every((part) => this.evaluateCondition(part.trim(), data, context))
+    }
+
+    if (trimmed.includes(' or ')) {
+      const parts = trimmed.split(' or ')
+      return parts.some((part) => this.evaluateCondition(part.trim(), data, context))
+    }
+
+    // Comparison operators
+    const compMatch = trimmed.match(/^(.+?)\s*(>=|<=|>|<|==|!=)\s*(.+)$/)
+    if (compMatch) {
+      return this.evaluateComparison(compMatch, data, context)
+    }
+
+    // Truthy check for path expressions
+    if (trimmed.startsWith('.')) {
+      const value = this.evaluate(trimmed, data, context)
+      return Boolean(value)
+    }
+
+    // has("key") condition
+    const hasCondMatch = trimmed.match(/^has\("([^"]+)"\)$/) || trimmed.match(/^has\(\\"([^"]+)\\"\)$/)
+    if (hasCondMatch) {
+      return data && typeof data === 'object' && hasCondMatch[1] in (data as Record<string, unknown>)
+    }
+
+    return false
   }
 
-  // Boolean literals
-  if (trimmed === 'true') return true
-  if (trimmed === 'false') return false
-  if (trimmed === 'null') return null
-
-  throw new JqError(`Unknown expression: ${trimmed}`)
-}
-
-/**
- * Evaluate a condition expression
- */
-function evaluateCondition(condition: string, data: unknown, context: JqContext): boolean {
-  const trimmed = condition.trim()
-
-  // Handle compound conditions first (and/or) - split on first instance
-  // This must be done before comparison to handle: .name == $name and .age > $minAge
-  if (trimmed.includes(' and ')) {
-    const parts = trimmed.split(' and ')
-    return parts.every((part) => evaluateCondition(part.trim(), data, context))
-  }
-
-  if (trimmed.includes(' or ')) {
-    const parts = trimmed.split(' or ')
-    return parts.some((part) => evaluateCondition(part.trim(), data, context))
-  }
-
-  // .key > value, .key >= value, etc.
-  const compMatch = trimmed.match(/^(.+?)\s*(>=|<=|>|<|==|!=)\s*(.+)$/)
-  if (compMatch) {
-    const left = evaluateJq(compMatch[1].trim(), data, context)
-    const op = compMatch[2]
-    let right: unknown = compMatch[3].trim()
+  /**
+   * Evaluate comparison expression
+   */
+  private evaluateComparison(match: RegExpMatchArray, data: unknown, context: JqContext): boolean {
+    const left = this.evaluate(match[1].trim(), data, context)
+    const op = match[2]
+    let right: unknown = match[3].trim()
 
     // Parse right side
     if (/^-?\d+(\.\d+)?$/.test(right as string)) {
@@ -677,9 +930,8 @@ function evaluateCondition(condition: string, data: unknown, context: JqContext)
       const varName = (right as string).slice(1)
       right = context.argjson[varName] ?? context.vars[varName]
     } else if ((right as string).startsWith('.')) {
-      right = evaluateJq(right as string, data, context)
+      right = this.evaluate(right as string, data, context)
     } else if ((right as string).startsWith('"') && (right as string).endsWith('"')) {
-      // Handle quoted strings
       right = (right as string).slice(1, -1)
     }
 
@@ -696,155 +948,181 @@ function evaluateCondition(condition: string, data: unknown, context: JqContext)
         return left === right
       case '!=':
         return left !== right
+      default:
+        return false
     }
   }
 
-  // .key (truthy check)
-  if (trimmed.startsWith('.')) {
-    const value = evaluateJq(trimmed, data, context)
-    return Boolean(value)
-  }
+  /**
+   * Construct an object from jq object syntax ({key, newKey: .expr})
+   */
+  private constructObject(expr: string, data: unknown, context: JqContext): Record<string, unknown> {
+    const inner = expr.slice(1, -1).trim()
+    const result: Record<string, unknown> = {}
 
-  // has("key")
-  const hasCondMatch = trimmed.match(/^has\("([^"]+)"\)$/) || trimmed.match(/^has\(\\"([^"]+)\\"\)$/)
-  if (hasCondMatch) {
-    const key = hasCondMatch[1]
-    return data && typeof data === 'object' && key in (data as Record<string, unknown>)
-  }
+    const pairs = this.parseObjectPairs(inner)
 
-  return false
-}
-
-/**
- * Construct an object from jq object syntax
- */
-function constructObject(expr: string, data: unknown, context: JqContext): Record<string, unknown> {
-  const inner = expr.slice(1, -1).trim()
-  const result: Record<string, unknown> = {}
-
-  // Parse key-value pairs
-  const pairs: string[] = []
-  let current = ''
-  let depth = 0
-  let inString = false
-
-  for (let i = 0; i < inner.length; i++) {
-    const char = inner[i]
-    if (char === '"' && inner[i - 1] !== '\\') {
-      inString = !inString
-    }
-    if (!inString) {
-      if (char === '{' || char === '[') depth++
-      else if (char === '}' || char === ']') depth--
-      else if (char === ',' && depth === 0) {
-        pairs.push(current.trim())
-        current = ''
+    for (const pair of pairs) {
+      // Shorthand: key (same as key: .key)
+      if (/^\w+$/.test(pair)) {
+        result[pair] = (data as Record<string, unknown>)?.[pair]
         continue
       }
-    }
-    current += char
-  }
-  if (current.trim()) {
-    pairs.push(current.trim())
-  }
 
-  for (const pair of pairs) {
-    // Shorthand: key (same as key: .key)
-    if (/^\w+$/.test(pair)) {
-      const val = (data as Record<string, unknown>)?.[pair]
-      result[pair] = val
-      continue
-    }
+      // Full syntax: newKey: .expr or newKey: "value"
+      const colonIdx = pair.indexOf(':')
+      if (colonIdx > 0) {
+        const key = pair.slice(0, colonIdx).trim()
+        const valueExpr = pair.slice(colonIdx + 1).trim()
 
-    // Full syntax: newKey: .expr or newKey: "value"
-    const colonIdx = pair.indexOf(':')
-    if (colonIdx > 0) {
-      const key = pair.slice(0, colonIdx).trim()
-      const valueExpr = pair.slice(colonIdx + 1).trim()
-
-      if (valueExpr.startsWith('\\"') && valueExpr.endsWith('\\"')) {
-        result[key] = valueExpr.slice(2, -2)
-      } else if (valueExpr.startsWith('"') && valueExpr.endsWith('"')) {
-        result[key] = valueExpr.slice(1, -1)
-      } else {
-        result[key] = evaluateJq(valueExpr, data, context)
+        if (valueExpr.startsWith('\\"') && valueExpr.endsWith('\\"')) {
+          result[key] = valueExpr.slice(2, -2)
+        } else if (valueExpr.startsWith('"') && valueExpr.endsWith('"')) {
+          result[key] = valueExpr.slice(1, -1)
+        } else {
+          result[key] = this.evaluate(valueExpr, data, context)
+        }
       }
     }
+
+    return result
   }
 
-  return result
-}
+  /**
+   * Parse object key-value pairs, handling nested structures
+   */
+  private parseObjectPairs(inner: string): string[] {
+    const pairs: string[] = []
+    let current = ''
+    let depth = 0
+    let inString = false
 
-/**
- * Get value at a dot-separated path
- */
-function getPath(data: unknown, path: string): unknown {
-  const parts = path.split('.')
-  let current: unknown = data
-
-  for (const part of parts) {
-    if (current === null || current === undefined) {
-      return null
+    for (let i = 0; i < inner.length; i++) {
+      const char = inner[i]
+      if (char === '"' && inner[i - 1] !== '\\') {
+        inString = !inString
+      }
+      if (!inString) {
+        if (char === '{' || char === '[') depth++
+        else if (char === '}' || char === ']') depth--
+        else if (char === ',' && depth === 0) {
+          pairs.push(current.trim())
+          current = ''
+          continue
+        }
+      }
+      current += char
     }
-    if (typeof current !== 'object') {
-      return null
+    if (current.trim()) {
+      pairs.push(current.trim())
     }
-    current = (current as Record<string, unknown>)[part]
+
+    return pairs
   }
 
-  // Return null for undefined values (missing keys)
-  return current === undefined ? null : current
-}
+  /**
+   * Get value at a dot-separated path
+   */
+  private getPath(data: unknown, path: string): unknown {
+    const parts = path.split('.')
+    let current: unknown = data
 
-/**
- * Format jq output based on options
- */
-function formatJqOutput(result: unknown, options: JqOptions, isIteratorResult: boolean = false): string {
-  // Handle array of results from iterator operations
-  if (Array.isArray(result) && result.some((r) => r === undefined)) {
-    // Filter out undefined (from select that didn't match)
-    result = result.filter((r) => r !== undefined)
+    for (const part of parts) {
+      if (current === null || current === undefined) {
+        return null
+      }
+      if (typeof current !== 'object') {
+        return null
+      }
+      current = (current as Record<string, unknown>)[part]
+    }
+
+    return current === undefined ? null : current
   }
 
-  // Handle undefined (select didn't match)
-  if (result === undefined) {
-    return ''
-  }
+  /**
+   * Format jq output based on options
+   */
+  private formatOutput(result: unknown, options: JqOptions, isIteratorResult: boolean = false): string {
+    // Filter out undefined values
+    if (Array.isArray(result) && result.some((r) => r === undefined)) {
+      result = result.filter((r) => r !== undefined)
+    }
 
-  // Handle empty array result from iterator that filtered everything out
-  if (isIteratorResult && Array.isArray(result) && result.length === 0) {
-    return ''
-  }
+    // Handle undefined
+    if (result === undefined) {
+      return ''
+    }
 
-  // Handle iterator output - each result on its own line (not wrapped in array)
-  // jq outputs multiple results as newline-separated JSON values, not as an array
-  if (isIteratorResult && Array.isArray(result)) {
-    if (options.tab) {
-      // Tab-separated mode
+    // Handle empty iterator result
+    if (isIteratorResult && Array.isArray(result) && result.length === 0) {
+      return ''
+    }
+
+    // Iterator output - each result on its own line
+    if (isIteratorResult && Array.isArray(result)) {
+      if (options.tab) {
+        return result
+          .map((item) => {
+            if (typeof item === 'string') return options.raw ? item : JSON.stringify(item)
+            return JSON.stringify(item)
+          })
+          .join('\n') + '\n'
+      }
       return result
         .map((item) => {
-          if (typeof item === 'string') return options.raw ? item : JSON.stringify(item)
-          return JSON.stringify(item)
+          if (options.raw && typeof item === 'string') return item
+          return options.compact ? JSON.stringify(item) : JSON.stringify(item, null, 2)
         })
         .join('\n') + '\n'
     }
-    // Normal iterator output - each item on its own line
-    return result
-      .map((item) => {
-        if (options.raw && typeof item === 'string') return item
-        return options.compact ? JSON.stringify(item) : JSON.stringify(item, null, 2)
-      })
-      .join('\n') + '\n'
+
+    // Raw output for strings
+    if (options.raw && typeof result === 'string') {
+      return result + '\n'
+    }
+
+    // Normal JSON output
+    const formatted = options.compact ? JSON.stringify(result) : JSON.stringify(result, null, 2)
+    return formatted + '\n'
   }
 
-  // Raw output for strings
-  if (options.raw && typeof result === 'string') {
-    return result + '\n'
+  /**
+   * Clear the parsed JSON cache
+   */
+  clearCache(): void {
+    this.cachedInput = null
+    this.cachedData = null
   }
+}
 
-  // Normal JSON output
-  const formatted = options.compact ? JSON.stringify(result) : JSON.stringify(result, null, 2)
-  return formatted + '\n'
+// Global JqEngine instance for simple usage
+const defaultJqEngine = new JqEngine()
+
+/**
+ * Execute a jq query on JSON input
+ *
+ * This is the main entry point for jq functionality. For repeated queries
+ * on the same input, consider using JqEngine directly for better caching.
+ *
+ * @param query - The jq query expression
+ * @param input - JSON input string
+ * @param options - Execution options
+ * @returns Query result as string
+ * @throws {JqError} On invalid JSON or query syntax errors
+ *
+ * @example
+ * ```typescript
+ * // Simple key extraction
+ * executeJq('.name', '{"name": "test"}')
+ * // => '"test"\n'
+ *
+ * // Filter array
+ * executeJq('.[] | select(.age > 18)', '[{"age": 25}, {"age": 17}]')
+ * ```
+ */
+export function executeJq(query: string, input: string, options: JqOptions = {}): string {
+  return defaultJqEngine.execute(query, input, options)
 }
 
 // ============================================================================
@@ -855,16 +1133,44 @@ function formatJqOutput(result: unknown, options: JqOptions, isIteratorResult: b
  * Options for yq execution
  */
 export interface YqOptions {
-  /** Output format */
+  /** Output format (yaml, json, props, csv) */
   output?: 'yaml' | 'json' | 'props' | 'csv'
   /** Compact JSON output */
   compact?: boolean
-  /** In-place edit */
+  /** In-place edit mode */
   inPlace?: boolean
 }
 
 /**
- * Simple YAML parser (subset of YAML spec)
+ * Parse result from YAML lines
+ */
+interface ParseResult {
+  /** Parsed value */
+  value: unknown
+  /** Number of lines consumed */
+  consumed: number
+}
+
+/**
+ * Parse a YAML string into a JavaScript value
+ *
+ * Supports a subset of YAML including:
+ * - Key-value pairs
+ * - Nested objects
+ * - Arrays (both block and inline)
+ * - Anchors and aliases
+ * - Multi-document files
+ * - Basic scalar types (strings, numbers, booleans, null)
+ *
+ * @param input - YAML input string
+ * @returns Parsed JavaScript value
+ * @throws {Error} On invalid YAML syntax
+ *
+ * @example
+ * ```typescript
+ * parseYaml('name: bashx\nversion: 1.0.0')
+ * // => { name: 'bashx', version: '1.0.0' }
+ * ```
  */
 export function parseYaml(input: string): unknown {
   const lines = input.split('\n')
@@ -895,11 +1201,6 @@ export function parseYaml(input: string): unknown {
 function parseYamlDocument(lines: string[]): unknown {
   const anchors: Record<string, unknown> = {}
   return parseYamlLines(lines, 0, anchors).value
-}
-
-interface ParseResult {
-  value: unknown
-  consumed: number
 }
 
 /**
@@ -959,7 +1260,7 @@ function parseYamlLines(lines: string[], startIndent: number, anchors: Record<st
         valueStr = valueStr.slice(anchorMatch[0].length)
       }
 
-      // Handle merge: <<: *anchorName (must be checked before alias handler)
+      // Handle merge: <<: *anchorName
       if (key === '<<') {
         const mergeAliasMatch = valueStr.match(/^\*(\w+)$/)
         if (mergeAliasMatch) {
@@ -1012,15 +1313,14 @@ function parseYamlLines(lines: string[], startIndent: number, anchors: Record<st
 }
 
 /**
- * Parse a YAML value
+ * Parse a single YAML value
  */
 function parseYamlValue(str: string, anchors: Record<string, unknown>): unknown {
   const trimmed = str.trim()
 
   // Handle anchor reference
   if (trimmed.startsWith('*')) {
-    const anchorName = trimmed.slice(1)
-    return anchors[anchorName]
+    return anchors[trimmed.slice(1)]
   }
 
   // Handle quoted strings
@@ -1092,7 +1392,17 @@ function parseYamlValue(str: string, anchors: Record<string, unknown>): unknown 
 }
 
 /**
- * Stringify to YAML format
+ * Convert a JavaScript value to YAML format
+ *
+ * @param data - Value to stringify
+ * @param indent - Current indentation level
+ * @returns YAML string representation
+ *
+ * @example
+ * ```typescript
+ * stringifyYaml({ name: 'bashx', version: '1.0.0' })
+ * // => 'name: bashx\nversion: 1.0.0'
+ * ```
  */
 export function stringifyYaml(data: unknown, indent: number = 0): string {
   const prefix = '  '.repeat(indent)
@@ -1136,7 +1446,22 @@ export function stringifyYaml(data: unknown, indent: number = 0): string {
 }
 
 /**
- * Execute yq command
+ * Execute yq command on YAML input
+ *
+ * @param query - The yq query expression
+ * @param input - YAML input string
+ * @param options - Execution options
+ * @returns Query result as formatted string
+ * @throws {Error} On invalid YAML or query errors
+ *
+ * @example
+ * ```typescript
+ * executeYq('.name', 'name: bashx\nversion: 1.0.0')
+ * // => 'bashx\n'
+ *
+ * executeYq('.', 'name: bashx', { output: 'json' })
+ * // => '{"name":"bashx"}\n'
+ * ```
  */
 export function executeYq(query: string, input: string, options: YqOptions = {}): string {
   // Parse YAML
@@ -1161,8 +1486,7 @@ export function executeYq(query: string, input: string, options: YqOptions = {})
   // Handle document_index selection
   const docIndexMatch = query.match(/select\(document_index\s*==\s*(\d+)\)/)
   if (docIndexMatch) {
-    const idx = parseInt(docIndexMatch[1], 10)
-    result = docs[idx]
+    result = docs[parseInt(docIndexMatch[1], 10)]
   } else if (query === '.') {
     result = docs.length === 1 ? docs[0] : docs
   } else if (query.startsWith('.') && query.includes(' = ')) {
@@ -1193,7 +1517,7 @@ export function executeYq(query: string, input: string, options: YqOptions = {})
     result = setPath(docs[0], pathParts, [...arr, ...newItems])
   } else {
     // Use jq-style evaluation
-    result = evaluateJq(query, docs[0], { vars: {}, argjson: {} })
+    result = defaultJqEngine.evaluate(query, docs[0], { vars: {}, argjson: {} })
   }
 
   // Format output
@@ -1218,7 +1542,27 @@ export function executeYq(query: string, input: string, options: YqOptions = {})
 }
 
 /**
- * Set value at path in object
+ * Get value at a dot-separated path (for yq)
+ */
+function getPath(data: unknown, path: string): unknown {
+  const parts = path.split('.')
+  let current: unknown = data
+
+  for (const part of parts) {
+    if (current === null || current === undefined) {
+      return null
+    }
+    if (typeof current !== 'object') {
+      return null
+    }
+    current = (current as Record<string, unknown>)[part]
+  }
+
+  return current === undefined ? null : current
+}
+
+/**
+ * Set value at path in object (for yq mutations)
  */
 function setPath(obj: unknown, path: string[], value: unknown): unknown {
   if (path.length === 0) return value
@@ -1236,7 +1580,7 @@ function setPath(obj: unknown, path: string[], value: unknown): unknown {
 }
 
 /**
- * Format as properties
+ * Format data as properties file format
  */
 function formatAsProps(data: unknown, prefix: string = ''): string {
   const lines: string[] = []
@@ -1256,7 +1600,7 @@ function formatAsProps(data: unknown, prefix: string = ''): string {
 }
 
 /**
- * Format as CSV
+ * Format data as CSV
  */
 function formatAsCsv(data: unknown): string {
   if (Array.isArray(data)) {
@@ -1281,16 +1625,42 @@ function formatAsCsv(data: unknown): string {
 export interface Base64Options {
   /** Decode mode */
   decode?: boolean
-  /** Line wrap width (0 = no wrap) */
+  /** Line wrap width (0 = no wrap, default = 76) */
   wrap?: number
   /** Ignore garbage characters when decoding */
   ignoreGarbage?: boolean
-  /** URL-safe mode */
+  /** URL-safe mode (use - and _ instead of + and /) */
   urlSafe?: boolean
 }
 
 /**
- * Execute base64 encoding/decoding
+ * Custom error for base64 encoding/decoding errors
+ */
+export class Base64Error extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'Base64Error'
+  }
+}
+
+/**
+ * Execute base64 encoding or decoding
+ *
+ * @param input - Input string to encode/decode
+ * @param options - Encoding/decoding options
+ * @returns Encoded or decoded string
+ * @throws {Base64Error} On invalid base64 input during decoding
+ *
+ * @example
+ * ```typescript
+ * // Encode
+ * executeBase64('Hello, World!')
+ * // => 'SGVsbG8sIFdvcmxkIQ==\n'
+ *
+ * // Decode
+ * executeBase64('SGVsbG8sIFdvcmxkIQ==', { decode: true })
+ * // => 'Hello, World!'
+ * ```
  */
 export function executeBase64(input: string, options: Base64Options = {}): string {
   if (options.decode) {
@@ -1329,19 +1699,15 @@ function encodeBase64(input: string, options: Base64Options): string {
  * Decode base64 string
  */
 function decodeBase64(input: string, options: Base64Options): string {
-  let cleaned = input
-
-  // Remove whitespace and newlines
-  cleaned = cleaned.replace(/\s/g, '')
+  let cleaned = input.replace(/\s/g, '')
 
   if (options.ignoreGarbage) {
-    // Keep only valid base64 characters
     if (options.urlSafe) {
       cleaned = cleaned.replace(/[^A-Za-z0-9\-_=]/g, '')
     } else {
       cleaned = cleaned.replace(/[^A-Za-z0-9+/=]/g, '')
     }
-    // For standard base64, truncate at padding (= marks end of data)
+    // For standard base64, truncate at padding
     if (!options.urlSafe) {
       const paddingMatch = cleaned.match(/^[A-Za-z0-9+/]*(={0,2})/)
       if (paddingMatch) {
@@ -1351,9 +1717,7 @@ function decodeBase64(input: string, options: Base64Options): string {
   }
 
   if (options.urlSafe) {
-    // Convert URL-safe back to standard
     cleaned = cleaned.replace(/-/g, '+').replace(/_/g, '/')
-    // Add padding if needed
     while (cleaned.length % 4 !== 0) {
       cleaned += '='
     }
@@ -1366,22 +1730,11 @@ function decodeBase64(input: string, options: Base64Options): string {
 
   try {
     return atob(cleaned)
-  } catch (e) {
-    // For URL-safe mode with invalid/short input, return empty or input as-is
+  } catch {
     if (options.urlSafe) {
       return ''
     }
     throw new Base64Error('invalid base64 input')
-  }
-}
-
-/**
- * Custom error for base64 errors
- */
-export class Base64Error extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'Base64Error'
   }
 }
 
@@ -1393,27 +1746,57 @@ export class Base64Error extends Error {
  * Options for envsubst execution
  */
 export interface EnvsubstOptions {
-  /** Environment variables */
+  /** Environment variables to use for substitution */
   env: Record<string, string>
-  /** Only substitute these variables (if specified) */
+  /** Only substitute these specific variables (if specified) */
   variables?: string[]
-  /** List variables mode */
+  /** List variables mode - return list of variables found in template */
   listVariables?: boolean
 }
 
 /**
+ * Custom error for envsubst errors (e.g., required variable missing)
+ */
+export class EnvsubstError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'EnvsubstError'
+  }
+}
+
+/**
  * Execute environment variable substitution
+ *
+ * Supports:
+ * - $VAR and ${VAR} syntax
+ * - ${VAR:-default} - use default if unset/empty
+ * - ${VAR:+alternate} - use alternate if set and non-empty
+ * - ${VAR:?error} - error if unset/empty
+ * - ${VAR:=default} - use default if unset/empty (assignment)
+ * - $$ escape sequence for literal $
+ *
+ * @param template - Template string with variable references
+ * @param options - Substitution options including env vars
+ * @returns Substituted string
+ * @throws {EnvsubstError} On ${VAR:?error} with missing variable
+ *
+ * @example
+ * ```typescript
+ * executeEnvsubst('Hello, $NAME!', { env: { NAME: 'World' } })
+ * // => 'Hello, World!'
+ *
+ * executeEnvsubst('${VAR:-default}', { env: {} })
+ * // => 'default'
+ * ```
  */
 export function executeEnvsubst(template: string, options: EnvsubstOptions): string {
   const { env, variables, listVariables } = options
 
-  // List variables mode
   if (listVariables) {
     const vars = extractVariables(template)
     return vars.join('\n') + '\n'
   }
 
-  // Replace variables
   return substituteVariables(template, env, variables)
 }
 
@@ -1423,7 +1806,6 @@ export function executeEnvsubst(template: string, options: EnvsubstOptions): str
 function extractVariables(template: string): string[] {
   const vars = new Set<string>()
 
-  // Match ${VAR} and $VAR patterns
   const bracedPattern = /\$\{([A-Z_][A-Z0-9_]*)(:[^}]+)?\}/gi
   const simplePattern = /\$([A-Z_][A-Z0-9_]*)/gi
 
@@ -1444,12 +1826,11 @@ function extractVariables(template: string): string[] {
 function substituteVariables(template: string, env: Record<string, string>, onlyVars?: string[]): string {
   let result = template
 
-  // Handle escaped dollar signs first: $$ -> $
+  // Handle escaped dollar signs: $$ -> $
   result = result.replace(/\$\$/g, '\x00ESCAPED_DOLLAR\x00')
 
   // Handle ${VAR:modifier} patterns
   result = result.replace(/\$\{([A-Z_][A-Z0-9_]*)(:[^}]+)?\}/gi, (match, varName, modifier) => {
-    // Check if we should only substitute specific variables
     if (onlyVars && !onlyVars.includes(varName)) {
       return match
     }
@@ -1458,25 +1839,20 @@ function substituteVariables(template: string, env: Record<string, string>, only
     const isEmpty = value === undefined || value === ''
 
     if (modifier) {
-      // Parse modifier
-      const modType = modifier.slice(1, 2) // First char after :
-      const modValue = modifier.slice(2) // Rest
+      const modType = modifier.slice(1, 2)
+      const modValue = modifier.slice(2)
 
       switch (modType) {
         case '-':
-          // ${VAR:-default} - use default if unset or empty
           return isEmpty ? modValue : value
         case '+':
-          // ${VAR:+alternate} - use alternate if set and non-empty
           return isEmpty ? '' : modValue
         case '?':
-          // ${VAR:?error} - error if unset or empty
           if (isEmpty) {
             throw new EnvsubstError(`${varName}: ${modValue}`)
           }
           return value
         case '=':
-          // ${VAR:=default} - use default if unset or empty (assignment)
           return isEmpty ? modValue : value
         default:
           return value ?? ''
@@ -1488,7 +1864,6 @@ function substituteVariables(template: string, env: Record<string, string>, only
 
   // Handle simple $VAR patterns
   result = result.replace(/\$([A-Z_][A-Z0-9_]*)/gi, (match, varName) => {
-    // Check if we should only substitute specific variables
     if (onlyVars && !onlyVars.includes(varName)) {
       return match
     }
@@ -1501,22 +1876,21 @@ function substituteVariables(template: string, env: Record<string, string>, only
   return result
 }
 
-/**
- * Custom error for envsubst errors
- */
-export class EnvsubstError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'EnvsubstError'
-  }
-}
-
 // ============================================================================
 // COMMAND PARSING HELPERS
 // ============================================================================
 
 /**
  * Parse jq command line arguments
+ *
+ * @param args - Array of command line arguments
+ * @returns Parsed query, file path, and options
+ *
+ * @example
+ * ```typescript
+ * parseJqArgs(['-r', '.name', 'file.json'])
+ * // => { query: '.name', file: 'file.json', options: { raw: true } }
+ * ```
  */
 export function parseJqArgs(
   args: string[]
@@ -1562,6 +1936,9 @@ export function parseJqArgs(
 
 /**
  * Parse yq command line arguments
+ *
+ * @param args - Array of command line arguments
+ * @returns Parsed query, file path, and options
  */
 export function parseYqArgs(
   args: string[]
@@ -1584,7 +1961,6 @@ export function parseYqArgs(
     } else if (arg === '-i' || arg === '--inplace') {
       options.inPlace = true
     } else if (arg === 'eval-all') {
-      // Handled in query processing
       query = 'eval-all ' + (args[i + 1] || '.')
       i++
     } else if (!arg.startsWith('-') && !query) {
@@ -1601,6 +1977,9 @@ export function parseYqArgs(
 
 /**
  * Parse base64 command line arguments
+ *
+ * @param args - Array of command line arguments
+ * @returns Parsed file path and options
  */
 export function parseBase64Args(args: string[]): { file?: string; options: Base64Options } {
   const options: Base64Options = {}
@@ -1632,6 +2011,10 @@ export function parseBase64Args(args: string[]): { file?: string; options: Base6
 
 /**
  * Parse envsubst command line arguments
+ *
+ * @param args - Array of command line arguments
+ * @param env - Environment variables
+ * @returns Parsed options and input redirect path
  */
 export function parseEnvsubstArgs(
   args: string[],
@@ -1649,13 +2032,11 @@ export function parseEnvsubstArgs(
     } else if (arg === '<' && i + 1 < args.length) {
       inputRedirect = args[++i]
     } else if (arg.startsWith('$')) {
-      // Variable specification: envsubst '$VAR1 $VAR2'
       options.variables = arg
         .split(/\s+/)
         .filter((v) => v.startsWith('$'))
         .map((v) => v.slice(1))
     } else if (!arg.startsWith('-')) {
-      // Could be variable spec or file
       if (arg.includes('$')) {
         options.variables = arg
           .split(/\s+/)
