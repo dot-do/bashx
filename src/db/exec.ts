@@ -17,7 +17,7 @@
  */
 
 import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core'
-import type { SafetyClassification, Intent } from '../src/types.js'
+import type { SafetyClassification, Intent } from '../types.js'
 
 // ============================================================================
 // STATUS ENUM

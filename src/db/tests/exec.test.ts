@@ -17,7 +17,7 @@ import {
   execFieldsToClassification,
   shouldBlock,
 } from '../index.js'
-import type { SafetyClassification, Intent } from '../../src/types.js'
+import type { SafetyClassification, Intent } from '../../types.js'
 
 // ============================================================================
 // Table Export Tests
