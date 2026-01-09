@@ -8,7 +8,7 @@
  * - Tier 4: Sandbox SDK for true Linux needs
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   TieredExecutor,
   createTieredExecutor,
@@ -221,6 +221,22 @@ describe('TieredExecutor - Command Classification', () => {
     })
   })
 
+  describe('Tier 1 HTTP Classification', () => {
+    it('classifies curl commands as Tier 1 (http)', () => {
+      const classification = executor.classifyCommand('curl https://example.com')
+      expect(classification.tier).toBe(1)
+      expect(classification.handler).toBe('native')
+      expect(classification.capability).toBe('http')
+    })
+
+    it('classifies wget commands as Tier 1 (http)', () => {
+      const classification = executor.classifyCommand('wget https://example.com/file.txt')
+      expect(classification.tier).toBe(1)
+      expect(classification.handler).toBe('native')
+      expect(classification.capability).toBe('http')
+    })
+  })
+
   describe('Tier 4 Classification', () => {
     it('classifies docker commands as Tier 4', () => {
       const commands = ['docker ps', 'docker run alpine', 'docker-compose up']
@@ -232,8 +248,8 @@ describe('TieredExecutor - Command Classification', () => {
       }
     })
 
-    it('classifies network commands as Tier 4', () => {
-      const commands = ['curl https://example.com', 'wget file.txt', 'ssh server']
+    it('classifies network commands (except curl/wget) as Tier 4', () => {
+      const commands = ['ssh server', 'ping google.com', 'scp file server:/path']
 
       for (const cmd of commands) {
         const classification = executor.classifyCommand(cmd)
@@ -243,7 +259,8 @@ describe('TieredExecutor - Command Classification', () => {
     })
 
     it('classifies system commands as Tier 4', () => {
-      const commands = ['sudo apt install vim', 'chmod +x script.sh', 'ps aux']
+      // Note: chmod is now Tier 1 (filesystem) - removed from this list
+      const commands = ['sudo apt install vim', 'ps aux', 'kill 1234']
 
       for (const cmd of commands) {
         const classification = executor.classifyCommand(cmd)
@@ -373,6 +390,275 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       expect(result.exitCode).toBe(0)
     })
   })
+
+  describe('HTTP Commands (curl/wget via fetch)', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn())
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('executes curl GET request via fetch API', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '{"data": "test"}',
+        headers: new Headers({ 'content-type': 'application/json' }),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl https://api.example.com/data')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/data', {
+        method: 'GET',
+        headers: undefined,
+        body: undefined,
+        redirect: 'manual',
+      })
+      expect(result.stdout).toBe('{"data": "test"}')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('executes curl POST with -d data', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '{"success": true}',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl -d {"name":"test"} https://api.example.com/create')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/create', {
+        method: 'POST',
+        headers: undefined,
+        body: '{"name":"test"}',
+        redirect: 'manual',
+      })
+      expect(result.stdout).toBe('{"success": true}')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('executes curl with custom headers -H', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'OK',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl -H "Authorization: Bearer token123" https://api.example.com/secure')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/secure', {
+        method: 'GET',
+        headers: { 'Authorization': 'Bearer token123' },
+        body: undefined,
+        redirect: 'manual',
+      })
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('executes curl with -L to follow redirects', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'Redirected content',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl -L https://example.com/redirect')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/redirect', {
+        method: 'GET',
+        headers: undefined,
+        body: undefined,
+        redirect: 'follow',
+      })
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('executes curl with -X method override', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 204,
+        statusText: 'No Content',
+        text: async () => '',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl -X DELETE https://api.example.com/resource/123')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/resource/123', {
+        method: 'DELETE',
+        headers: undefined,
+        body: undefined,
+        redirect: 'manual',
+      })
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('executes curl HEAD request with -I', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '',
+        headers: new Headers({
+          'content-type': 'text/html',
+          'content-length': '12345',
+        }),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl -I https://example.com')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com', {
+        method: 'HEAD',
+        headers: undefined,
+        body: undefined,
+        redirect: 'manual',
+      })
+      expect(result.stdout).toContain('HTTP/1.1 200 OK')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('curl returns error for missing URL', async () => {
+      const result = await executor.execute('curl')
+
+      expect(result.stderr).toContain('no URL specified')
+      expect(result.exitCode).toBe(1)
+    })
+
+    it('curl returns exit code 1 for non-OK response', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Not Found',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl https://example.com/notfound')
+
+      expect(result.exitCode).toBe(1)
+    })
+
+    it('executes wget basic download via fetch API', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'File content here',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('wget -O - https://example.com/file.txt')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/file.txt', {
+        method: 'GET',
+        headers: undefined,
+        redirect: 'follow',
+      })
+      expect(result.stdout).toBe('File content here')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('wget with custom headers', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'Authorized content',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('wget -O - --header "Authorization: token" https://example.com/secure')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/secure', {
+        method: 'GET',
+        headers: { 'Authorization': 'token' },
+        redirect: 'follow',
+      })
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('wget returns error for missing URL', async () => {
+      const result = await executor.execute('wget')
+
+      expect(result.stderr).toContain('missing URL')
+      expect(result.exitCode).toBe(1)
+    })
+
+    it('curl handles fetch errors gracefully', async () => {
+      const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'))
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('curl https://unreachable.example.com')
+
+      expect(result.stderr).toContain('curl:')
+      expect(result.stderr).toContain('Network error')
+      expect(result.exitCode).toBe(1)
+    })
+
+    it('wget handles fetch errors gracefully', async () => {
+      const mockFetch = vi.fn().mockRejectedValue(new Error('Connection refused'))
+      vi.stubGlobal('fetch', mockFetch)
+
+      const result = await executor.execute('wget -O - https://unreachable.example.com')
+
+      expect(result.stderr).toContain('wget:')
+      expect(result.stderr).toContain('Connection refused')
+      expect(result.exitCode).toBe(1)
+    })
+
+    it('curl adds https:// protocol when missing', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'content',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      await executor.execute('curl example.com/api')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/api', expect.any(Object))
+    })
+
+    it('curl with basic auth -u', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'authenticated',
+        headers: new Headers(),
+      })
+      vi.stubGlobal('fetch', mockFetch)
+
+      await executor.execute('curl -u user:pass https://api.example.com/secure')
+
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/secure', {
+        method: 'GET',
+        headers: { 'Authorization': 'Basic dXNlcjpwYXNz' }, // base64 of "user:pass"
+        body: undefined,
+        redirect: 'manual',
+      })
+    })
+  })
 })
 
 // ============================================================================
@@ -462,13 +748,13 @@ describe('TieredExecutor - Tier 4 Execution (Sandbox)', () => {
     expect(result.stdout).toContain('sandbox: docker ps')
   })
 
-  it('executes curl command via sandbox', async () => {
+  it('executes ssh command via sandbox', async () => {
     const mockSandbox = createMockSandbox()
     const executor = new TieredExecutor({
       sandbox: mockSandbox,
     })
 
-    const result = await executor.execute('curl https://example.com')
+    const result = await executor.execute('ssh user@server')
 
     expect(mockSandbox.execute).toHaveBeenCalled()
     expect(result.exitCode).toBe(0)

@@ -3,7 +3,7 @@ import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config'
 export default defineWorkersConfig({
   test: {
     globals: true,
-    include: ['tests/**/*.test.ts', 'src/db/tests/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'src/db/tests/**/*.test.ts', 'src/do/commands/**/*.test.ts'],
     exclude: [
       'node_modules',
       'dist',
