@@ -843,3 +843,16 @@ export type {
   FsReadOptions,
   FsListOptions,
 }
+
+// Re-export container executor for convenience
+export {
+  CloudflareContainerExecutor,
+  createContainerExecutor,
+  createSessionContainerExecutor,
+} from './container-executor.js'
+
+export type {
+  ContainerStub,
+  GetContainerFn,
+  ContainerExecutorConfig,
+} from './container-executor.js'
