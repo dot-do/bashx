@@ -31,6 +31,10 @@ import type {
   SafetyClassification,
   Intent,
   FsCapability,
+  FsEntry,
+  FsStat,
+  FsReadOptions,
+  FsListOptions,
 } from '../types.js'
 import { parse } from '../ast/parser.js'
 import { analyze, isDangerous } from '../ast/analyze.js'
@@ -218,6 +222,10 @@ export class BashModule implements BashCapability {
   /**
    * Execute a command and wait for completion.
    *
+   * When FsCapability is available and the command is a native file operation
+   * (cat, head, tail, ls, test), it will be executed natively without spawning
+   * a subprocess. This is faster and works in pure Workers environments.
+   *
    * @param command - The command to execute (e.g., 'git', 'npm', 'ls')
    * @param args - Optional array of command arguments
    * @param options - Optional execution options
@@ -236,13 +244,240 @@ export class BashModule implements BashCapability {
    *   cwd: '/app',
    *   timeout: 60000
    * })
+   *
+   * // With FsCapability, this uses $.fs.read() instead of spawning cat
+   * const result = await bash.exec('cat', ['file.txt'])
    * ```
    */
   async exec(command: string, args?: string[], options?: ExecOptions): Promise<BashResult> {
-    // Build full command string
-    const fullCommand = args && args.length > 0 ? `${command} ${args.join(' ')}` : command
+    // Try native operation if FsCapability is available
+    if (this.hasFsCapability && NATIVE_FS_COMMANDS.has(command)) {
+      const nativeResult = await this.tryNativeExec(command, args || [], options)
+      if (nativeResult) {
+        return nativeResult
+      }
+    }
 
+    // Fall back to executor for non-native commands or if native failed
+    const fullCommand = args && args.length > 0 ? `${command} ${args.join(' ')}` : command
     return this.executor.execute(fullCommand, options)
+  }
+
+  /**
+   * Try to execute a command natively using FsCapability.
+   * Returns null if the command cannot be executed natively.
+   */
+  private async tryNativeExec(
+    command: string,
+    args: string[],
+    options?: ExecOptions,
+  ): Promise<BashResult | null> {
+    if (!this.fs) return null
+
+    try {
+      switch (command) {
+        case 'cat':
+          return await this.nativeCat(args, options)
+        case 'ls':
+          return await this.nativeLs(args, options)
+        case 'test':
+          return await this.nativeTest(args, options)
+        case 'head':
+          return await this.nativeHead(args, options)
+        case 'tail':
+          return await this.nativeTail(args, options)
+        default:
+          return null
+      }
+    } catch (error) {
+      // If native execution fails, return null to fall back to executor
+      return null
+    }
+  }
+
+  /**
+   * Native implementation of 'cat' using FsCapability.
+   */
+  private async nativeCat(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+    if (!this.fs || args.length === 0) return null
+
+    // Simple cat: cat file1 [file2 ...]
+    const files = args.filter((arg) => !arg.startsWith('-'))
+    if (files.length === 0) return null
+
+    try {
+      const contents = await Promise.all(files.map((file) => this.fs!.read(file)))
+      const stdout = contents.join('')
+
+      return this.createNativeResult(`cat ${args.join(' ')}`, stdout)
+    } catch (error) {
+      const stderr = error instanceof Error ? error.message : String(error)
+      return this.createNativeResult(`cat ${args.join(' ')}`, '', stderr, 1)
+    }
+  }
+
+  /**
+   * Native implementation of 'ls' using FsCapability.
+   */
+  private async nativeLs(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+    if (!this.fs) return null
+
+    // Simple ls: ls [path]
+    const paths = args.filter((arg) => !arg.startsWith('-'))
+    const path = paths[0] || '.'
+
+    try {
+      const entries = await this.fs.list(path)
+      const stdout = entries.map((e) => (e.isDirectory ? `${e.name}/` : e.name)).join('\n') + '\n'
+
+      return this.createNativeResult(`ls ${args.join(' ')}`, stdout)
+    } catch (error) {
+      const stderr = error instanceof Error ? error.message : String(error)
+      return this.createNativeResult(`ls ${args.join(' ')}`, '', stderr, 1)
+    }
+  }
+
+  /**
+   * Native implementation of 'test' using FsCapability.
+   */
+  private async nativeTest(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+    if (!this.fs) return null
+
+    // Support: test -e file, test -f file, test -d file
+    if (args.length < 2) return null
+
+    const flag = args[0]
+    const path = args[1]
+
+    try {
+      switch (flag) {
+        case '-e': {
+          // File exists
+          const exists = await this.fs.exists(path)
+          return this.createNativeResult(`test ${args.join(' ')}`, '', '', exists ? 0 : 1)
+        }
+        case '-f': {
+          // Is regular file
+          const exists = await this.fs.exists(path)
+          if (!exists) return this.createNativeResult(`test ${args.join(' ')}`, '', '', 1)
+          const stat = await this.fs.stat(path)
+          return this.createNativeResult(`test ${args.join(' ')}`, '', '', stat.isFile ? 0 : 1)
+        }
+        case '-d': {
+          // Is directory
+          const exists = await this.fs.exists(path)
+          if (!exists) return this.createNativeResult(`test ${args.join(' ')}`, '', '', 1)
+          const stat = await this.fs.stat(path)
+          return this.createNativeResult(`test ${args.join(' ')}`, '', '', stat.isDirectory ? 0 : 1)
+        }
+        default:
+          return null // Unknown flag, fall back to executor
+      }
+    } catch {
+      return this.createNativeResult(`test ${args.join(' ')}`, '', '', 1)
+    }
+  }
+
+  /**
+   * Native implementation of 'head' using FsCapability.
+   */
+  private async nativeHead(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+    if (!this.fs) return null
+
+    // Parse arguments: head [-n lines] file
+    let lines = 10 // default
+    let file: string | undefined
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-n' && args[i + 1]) {
+        lines = parseInt(args[i + 1], 10)
+        i++
+      } else if (!args[i].startsWith('-')) {
+        file = args[i]
+      }
+    }
+
+    if (!file) return null
+
+    try {
+      const content = await this.fs.read(file)
+      const allLines = content.split('\n')
+      const stdout = allLines.slice(0, lines).join('\n') + (allLines.length > lines ? '\n' : '')
+
+      return this.createNativeResult(`head ${args.join(' ')}`, stdout)
+    } catch (error) {
+      const stderr = error instanceof Error ? error.message : String(error)
+      return this.createNativeResult(`head ${args.join(' ')}`, '', stderr, 1)
+    }
+  }
+
+  /**
+   * Native implementation of 'tail' using FsCapability.
+   */
+  private async nativeTail(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+    if (!this.fs) return null
+
+    // Parse arguments: tail [-n lines] file
+    let lines = 10 // default
+    let file: string | undefined
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-n' && args[i + 1]) {
+        lines = parseInt(args[i + 1], 10)
+        i++
+      } else if (!args[i].startsWith('-')) {
+        file = args[i]
+      }
+    }
+
+    if (!file) return null
+
+    try {
+      const content = await this.fs.read(file)
+      const allLines = content.split('\n')
+      // Handle trailing newline - if last element is empty, don't count it
+      const effectiveLines = allLines[allLines.length - 1] === '' ? allLines.slice(0, -1) : allLines
+      const stdout = effectiveLines.slice(-lines).join('\n') + '\n'
+
+      return this.createNativeResult(`tail ${args.join(' ')}`, stdout)
+    } catch (error) {
+      const stderr = error instanceof Error ? error.message : String(error)
+      return this.createNativeResult(`tail ${args.join(' ')}`, '', stderr, 1)
+    }
+  }
+
+  /**
+   * Create a BashResult for native operations.
+   */
+  private createNativeResult(
+    command: string,
+    stdout: string,
+    stderr: string = '',
+    exitCode: number = 0,
+  ): BashResult {
+    return {
+      input: command,
+      command,
+      valid: true,
+      generated: false,
+      stdout,
+      stderr,
+      exitCode,
+      intent: {
+        commands: [command.split(' ')[0]],
+        reads: [],
+        writes: [],
+        deletes: [],
+        network: false,
+        elevated: false,
+      },
+      classification: {
+        type: 'read',
+        impact: 'none',
+        reversible: true,
+        reason: 'Native filesystem operation',
+      },
+    }
   }
 
   /**
@@ -358,6 +593,38 @@ export interface WithBashCapability {
 export type Constructor<T = object> = new (...args: any[]) => T
 
 /**
+ * Configuration for the withBash mixin.
+ */
+export interface WithBashConfig<TBase> {
+  /**
+   * Factory function to create the executor.
+   * Receives the instance as its argument, allowing access to instance
+   * properties like `env` for configuring the executor.
+   */
+  executor: (instance: InstanceType<TBase extends Constructor ? TBase : never>) => BashExecutor
+
+  /**
+   * Optional factory function to get FsCapability from the instance.
+   * When provided, native file operations will use FsCapability.
+   *
+   * @example
+   * ```typescript
+   * const BaseDO = withBash(withFs(DO), {
+   *   executor: (instance) => containerExecutor,
+   *   fs: (instance) => instance.$.fs  // Use $.fs from withFs mixin
+   * })
+   * ```
+   */
+  fs?: (instance: InstanceType<TBase extends Constructor ? TBase : never>) => FsCapability | undefined
+
+  /**
+   * Whether to use native operations when FsCapability is available.
+   * @default true
+   */
+  useNativeOps?: boolean
+}
+
+/**
  * Mixin function to add bash capability to a Durable Object class.
  *
  * This mixin provides lazy initialization of the BashModule, meaning
@@ -365,12 +632,12 @@ export type Constructor<T = object> = new (...args: any[]) => T
  * The BashModule instance is then cached for subsequent accesses.
  *
  * @param Base - The base DO class to extend
- * @param createExecutor - Factory function to create the executor.
- *   Receives the instance as its argument, allowing access to instance
- *   properties like `env` for configuring the executor.
+ * @param config - Configuration object or factory function for creating the executor.
+ *   When a function is provided, it works as a simple executor factory.
+ *   When an object is provided, it can include FsCapability integration.
  * @returns Extended class with bash capability
  *
- * @example Basic usage
+ * @example Basic usage with executor function
  * ```typescript
  * import { withBash } from 'bashx/do'
  * import { DO } from 'dotdo'
@@ -384,6 +651,25 @@ export type Constructor<T = object> = new (...args: any[]) => T
  *   async deploy() {
  *     const result = await this.bash.exec('npm', ['run', 'build'])
  *     return result.exitCode === 0
+ *   }
+ * }
+ * ```
+ *
+ * @example With FsCapability integration
+ * ```typescript
+ * import { withBash } from 'bashx/do'
+ * import { withFs } from 'dotdo/fs'
+ * import { DO } from 'dotdo'
+ *
+ * // First add fs capability, then bash with fs integration
+ * class MyDO extends withBash(withFs(DO), {
+ *   executor: (instance) => containerExecutor,
+ *   fs: (instance) => instance.$.fs  // Native file ops use $.fs
+ * }) {
+ *   async readConfig() {
+ *     // 'cat config.json' uses $.fs.read() natively (Tier 1, fast!)
+ *     const result = await this.bash.exec('cat', ['config.json'])
+ *     return result.stdout
  *   }
  * }
  * ```
@@ -430,15 +716,23 @@ export type Constructor<T = object> = new (...args: any[]) => T
  */
 export function withBash<TBase extends Constructor>(
   Base: TBase,
-  createExecutor: (instance: InstanceType<TBase>) => BashExecutor,
+  config: ((instance: InstanceType<TBase>) => BashExecutor) | WithBashConfig<TBase>,
 ): TBase & Constructor<WithBashCapability> {
+  // Normalize config to object form
+  const normalizedConfig: WithBashConfig<TBase> =
+    typeof config === 'function' ? { executor: config as any } : config
+
   // Use abstract class to properly type the mixin
   abstract class BashMixin extends Base implements WithBashCapability {
     private _bashModule?: BashModule
 
     get bash(): BashModule {
       if (!this._bashModule) {
-        this._bashModule = new BashModule(createExecutor(this as InstanceType<TBase>))
+        const executor = normalizedConfig.executor(this as InstanceType<TBase>)
+        const fs = normalizedConfig.fs?.(this as InstanceType<TBase>)
+        const useNativeOps = normalizedConfig.useNativeOps ?? true
+
+        this._bashModule = new BashModule(executor, { fs, useNativeOps })
       }
       return this._bashModule
     }
@@ -451,4 +745,15 @@ export function withBash<TBase extends Constructor>(
 // EXPORTS
 // ============================================================================
 
-export type { BashResult, BashCapability, ExecOptions, SpawnOptions, SpawnHandle }
+export type {
+  BashResult,
+  BashCapability,
+  ExecOptions,
+  SpawnOptions,
+  SpawnHandle,
+  FsCapability,
+  FsEntry,
+  FsStat,
+  FsReadOptions,
+  FsListOptions,
+}

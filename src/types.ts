@@ -898,6 +898,103 @@ export interface BashCapability {
 }
 
 // ============================================================================
+// Filesystem Capability Types (for FsModule integration)
+// ============================================================================
+
+/**
+ * Filesystem entry returned by list operations.
+ */
+export interface FsEntry {
+  /** Entry name (file or directory name) */
+  name: string
+  /** Whether this entry is a directory */
+  isDirectory: boolean
+}
+
+/**
+ * File/directory statistics.
+ */
+export interface FsStat {
+  /** Size in bytes */
+  size: number
+  /** Whether this is a directory */
+  isDirectory: boolean
+  /** Whether this is a file */
+  isFile: boolean
+  /** Creation timestamp */
+  createdAt: Date
+  /** Last modification timestamp */
+  modifiedAt: Date
+}
+
+/**
+ * Options for filesystem read operations.
+ */
+export interface FsReadOptions {
+  /** Encoding for reading file content */
+  encoding?: 'utf8' | 'base64' | 'binary'
+  /** Start offset for partial reads (like head/tail) */
+  offset?: number
+  /** Number of bytes/lines to read */
+  limit?: number
+}
+
+/**
+ * Options for filesystem list operations.
+ */
+export interface FsListOptions {
+  /** Filter function for entries */
+  filter?: (entry: FsEntry) => boolean
+  /** Whether to list recursively */
+  recursive?: boolean
+  /** Pattern to match (glob-like) */
+  pattern?: string
+}
+
+/**
+ * Filesystem capability interface.
+ * This is the interface that FsModule from dotdo implements.
+ * BashModule can optionally use this for optimized file operations.
+ *
+ * When available, commands like `cat`, `head`, `tail` can be executed
+ * natively via $.fs instead of spawning a subprocess.
+ *
+ * @example
+ * ```typescript
+ * // In a DO with both fs and bash capabilities
+ * class MyDO extends withBash(withFs(DO), (instance) => ({
+ *   execute: async (cmd, opts) => containerExecutor.run(cmd, opts)
+ * })) {
+ *   async readFile(path: string) {
+ *     // This might use $.fs.read() internally for 'cat' commands
+ *     return this.$.bash.exec('cat', [path])
+ *   }
+ * }
+ * ```
+ */
+export interface FsCapability {
+  /**
+   * Read file content.
+   */
+  read(path: string, options?: FsReadOptions): Promise<string>
+
+  /**
+   * Check if a path exists.
+   */
+  exists(path: string): Promise<boolean>
+
+  /**
+   * List directory contents.
+   */
+  list(path: string, options?: FsListOptions): Promise<FsEntry[]>
+
+  /**
+   * Get file/directory statistics.
+   */
+  stat(path: string): Promise<FsStat>
+}
+
+// ============================================================================
 // MCP Tool Type
 // ============================================================================
 

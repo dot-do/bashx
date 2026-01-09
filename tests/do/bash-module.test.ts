@@ -470,3 +470,389 @@ describe('withBash type exports', () => {
     expect(bashModule).toBeInstanceOf(BashModule)
   })
 })
+
+// ============================================================================
+// FsCapability Integration Tests
+// ============================================================================
+
+import type { FsCapability, FsEntry, FsStat } from '../../src/types.js'
+
+// Helper to create a mock FsCapability
+function createMockFsCapability(
+  files: Record<string, string> = {},
+  stats: Record<string, Partial<FsStat>> = {},
+): FsCapability {
+  return {
+    read: vi.fn(async (path: string) => {
+      if (path in files) {
+        return files[path]
+      }
+      throw new Error(`File not found: ${path}`)
+    }),
+    exists: vi.fn(async (path: string) => path in files || path in stats),
+    list: vi.fn(async (path: string) => {
+      // Return entries based on what files start with the path
+      const entries: FsEntry[] = []
+      for (const filePath of Object.keys({ ...files, ...stats })) {
+        if (filePath.startsWith(path === '.' ? '' : path)) {
+          const name = filePath.replace(path === '.' ? '' : path + '/', '').split('/')[0]
+          if (name && !entries.some((e) => e.name === name)) {
+            entries.push({
+              name,
+              isDirectory: !filePath.includes('.') || filePath.endsWith('/'),
+            })
+          }
+        }
+      }
+      return entries
+    }),
+    stat: vi.fn(async (path: string) => {
+      const defaultStat: FsStat = {
+        size: files[path]?.length || 0,
+        isDirectory: path.endsWith('/') || !(path in files),
+        isFile: path in files,
+        createdAt: new Date('2025-01-01'),
+        modifiedAt: new Date('2025-01-01'),
+      }
+      return { ...defaultStat, ...stats[path] }
+    }),
+  }
+}
+
+describe('BashModule with FsCapability', () => {
+  describe('constructor with options', () => {
+    it('should accept FsCapability in options', () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability()
+      const bash = new BashModule(executor, { fs })
+
+      expect(bash.hasFsCapability).toBe(true)
+    })
+
+    it('should report no FsCapability when not provided', () => {
+      const executor = createMockExecutor()
+      const bash = new BashModule(executor)
+
+      expect(bash.hasFsCapability).toBe(false)
+    })
+
+    it('should respect useNativeOps option', () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability()
+      const bash = new BashModule(executor, { fs, useNativeOps: false })
+
+      expect(bash.hasFsCapability).toBe(false)
+    })
+  })
+
+  describe('native cat command', () => {
+    it('should use fs.read for cat command when FsCapability is available', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({
+        'file.txt': 'Hello, World!',
+      })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('cat', ['file.txt'])
+
+      expect(result.stdout).toBe('Hello, World!')
+      expect(result.exitCode).toBe(0)
+      expect(fs.read).toHaveBeenCalledWith('file.txt')
+      expect(executor.execute).not.toHaveBeenCalled()
+    })
+
+    it('should concatenate multiple files', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({
+        'file1.txt': 'First\n',
+        'file2.txt': 'Second\n',
+      })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('cat', ['file1.txt', 'file2.txt'])
+
+      expect(result.stdout).toBe('First\nSecond\n')
+      expect(fs.read).toHaveBeenCalledTimes(2)
+    })
+
+    it('should return error for non-existent file', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({})
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('cat', ['missing.txt'])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('not found')
+    })
+
+    it('should fall back to executor when cat has no args', async () => {
+      const executor = createMockExecutor({
+        cat: { stdout: 'stdin content', exitCode: 0 },
+      })
+      const fs = createMockFsCapability()
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('cat')
+
+      expect(executor.execute).toHaveBeenCalled()
+    })
+  })
+
+  describe('native ls command', () => {
+    it('should use fs.list for ls command', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({
+        'file1.txt': 'content',
+        'file2.txt': 'content',
+      })
+      // Override list to return specific entries
+      ;(fs.list as any).mockResolvedValue([
+        { name: 'file1.txt', isDirectory: false },
+        { name: 'file2.txt', isDirectory: false },
+        { name: 'subdir', isDirectory: true },
+      ])
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('ls')
+
+      expect(result.stdout).toContain('file1.txt')
+      expect(result.stdout).toContain('file2.txt')
+      expect(result.stdout).toContain('subdir/')
+      expect(result.exitCode).toBe(0)
+      expect(fs.list).toHaveBeenCalledWith('.')
+    })
+
+    it('should list specific directory', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability()
+      ;(fs.list as any).mockResolvedValue([{ name: 'nested.txt', isDirectory: false }])
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('ls', ['/app'])
+
+      expect(fs.list).toHaveBeenCalledWith('/app')
+    })
+  })
+
+  describe('native test command', () => {
+    it('should check file existence with test -e', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({ 'exists.txt': 'content' })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('test', ['-e', 'exists.txt'])
+
+      expect(result.exitCode).toBe(0)
+      expect(fs.exists).toHaveBeenCalledWith('exists.txt')
+    })
+
+    it('should return exit code 1 for non-existent file', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({})
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('test', ['-e', 'missing.txt'])
+
+      expect(result.exitCode).toBe(1)
+    })
+
+    it('should check if path is file with test -f', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability(
+        { 'file.txt': 'content' },
+        { 'file.txt': { isFile: true, isDirectory: false } },
+      )
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('test', ['-f', 'file.txt'])
+
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('should check if path is directory with test -d', async () => {
+      const executor = createMockExecutor()
+      const fs = createMockFsCapability({}, { 'dir': { isFile: false, isDirectory: true } })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('test', ['-d', 'dir'])
+
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('should fall back for unknown test flags', async () => {
+      const executor = createMockExecutor({
+        'test -x script.sh': { stdout: '', exitCode: 0 },
+      })
+      const fs = createMockFsCapability()
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('test', ['-x', 'script.sh'])
+
+      expect(executor.execute).toHaveBeenCalled()
+    })
+  })
+
+  describe('native head command', () => {
+    it('should read first 10 lines by default', async () => {
+      const executor = createMockExecutor()
+      const content = Array.from({ length: 20 }, (_, i) => `Line ${i + 1}`).join('\n')
+      const fs = createMockFsCapability({ 'file.txt': content })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('head', ['file.txt'])
+
+      const lines = result.stdout.split('\n').filter((l) => l)
+      expect(lines.length).toBe(10)
+      expect(lines[0]).toBe('Line 1')
+      expect(lines[9]).toBe('Line 10')
+    })
+
+    it('should respect -n flag', async () => {
+      const executor = createMockExecutor()
+      const content = Array.from({ length: 20 }, (_, i) => `Line ${i + 1}`).join('\n')
+      const fs = createMockFsCapability({ 'file.txt': content })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('head', ['-n', '5', 'file.txt'])
+
+      const lines = result.stdout.split('\n').filter((l) => l)
+      expect(lines.length).toBe(5)
+      expect(lines[4]).toBe('Line 5')
+    })
+  })
+
+  describe('native tail command', () => {
+    it('should read last 10 lines by default', async () => {
+      const executor = createMockExecutor()
+      const content = Array.from({ length: 20 }, (_, i) => `Line ${i + 1}`).join('\n') + '\n'
+      const fs = createMockFsCapability({ 'file.txt': content })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('tail', ['file.txt'])
+
+      const lines = result.stdout.split('\n').filter((l) => l)
+      expect(lines.length).toBe(10)
+      expect(lines[0]).toBe('Line 11')
+      expect(lines[9]).toBe('Line 20')
+    })
+
+    it('should respect -n flag', async () => {
+      const executor = createMockExecutor()
+      const content = Array.from({ length: 20 }, (_, i) => `Line ${i + 1}`).join('\n') + '\n'
+      const fs = createMockFsCapability({ 'file.txt': content })
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('tail', ['-n', '3', 'file.txt'])
+
+      const lines = result.stdout.split('\n').filter((l) => l)
+      expect(lines.length).toBe(3)
+      expect(lines[0]).toBe('Line 18')
+      expect(lines[2]).toBe('Line 20')
+    })
+  })
+
+  describe('fallback to executor', () => {
+    it('should use executor for non-native commands', async () => {
+      const executor = createMockExecutor({
+        'git status': { stdout: 'On branch main', exitCode: 0 },
+      })
+      const fs = createMockFsCapability()
+      const bash = new BashModule(executor, { fs })
+
+      const result = await bash.exec('git', ['status'])
+
+      expect(result.stdout).toBe('On branch main')
+      expect(executor.execute).toHaveBeenCalled()
+    })
+
+    it('should use executor when useNativeOps is false', async () => {
+      const executor = createMockExecutor({
+        'cat file.txt': { stdout: 'from executor', exitCode: 0 },
+      })
+      const fs = createMockFsCapability({ 'file.txt': 'from fs' })
+      const bash = new BashModule(executor, { fs, useNativeOps: false })
+
+      const result = await bash.exec('cat', ['file.txt'])
+
+      expect(result.stdout).toBe('from executor')
+      expect(executor.execute).toHaveBeenCalled()
+      expect(fs.read).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('withBash with FsCapability integration', () => {
+  it('should accept config object with fs factory', () => {
+    class BaseClass {
+      fsCapability = createMockFsCapability({ 'test.txt': 'content' })
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, {
+      executor: () => executor,
+      fs: (instance) => instance.fsCapability,
+    })
+
+    const instance = new MixedClass()
+
+    expect(instance.bash).toBeInstanceOf(BashModule)
+    expect(instance.bash.hasFsCapability).toBe(true)
+  })
+
+  it('should use native ops when fs is provided via config', async () => {
+    const fsCapability = createMockFsCapability({ 'config.json': '{"key": "value"}' })
+
+    class BaseClass {
+      fs = fsCapability
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, {
+      executor: () => executor,
+      fs: (instance) => instance.fs,
+    })
+
+    const instance = new MixedClass()
+    const result = await instance.bash.exec('cat', ['config.json'])
+
+    expect(result.stdout).toBe('{"key": "value"}')
+    expect(fsCapability.read).toHaveBeenCalledWith('config.json')
+    expect(executor.execute).not.toHaveBeenCalled()
+  })
+
+  it('should work with function shorthand (no fs)', () => {
+    class BaseClass {}
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(BaseClass, () => executor)
+
+    const instance = new MixedClass()
+
+    expect(instance.bash.hasFsCapability).toBe(false)
+  })
+
+  it('should allow disabling native ops in config', async () => {
+    const fsCapability = createMockFsCapability({ 'file.txt': 'fs content' })
+
+    class BaseClass {
+      fs = fsCapability
+    }
+
+    const executor = createMockExecutor({
+      'cat file.txt': { stdout: 'executor content', exitCode: 0 },
+    })
+
+    const MixedClass = withBash(BaseClass, {
+      executor: () => executor,
+      fs: (instance) => instance.fs,
+      useNativeOps: false,
+    })
+
+    const instance = new MixedClass()
+    const result = await instance.bash.exec('cat', ['file.txt'])
+
+    expect(result.stdout).toBe('executor content')
+    expect(executor.execute).toHaveBeenCalled()
+  })
+})
