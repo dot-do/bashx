@@ -1,0 +1,4 @@
+name = "bashx"
+main = "src/index.ts"
+compatibility_date = "2025-01-09"
+compatibility_flags = ["nodejs_compat"]

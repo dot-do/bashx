@@ -38,8 +38,11 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest",
-    "test:run": "vitest run",
+    "test": "vitest run && vitest run --config vitest.node.config.ts",
+    "test:run": "vitest run && vitest run --config vitest.node.config.ts",
+    "test:workers": "vitest run",
+    "test:node": "vitest run --config vitest.node.config.ts",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "clean": "rm -rf dist"
