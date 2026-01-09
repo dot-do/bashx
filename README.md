@@ -360,4 +360,4 @@ MIT
 
 - [GitHub](https://github.com/dot-do/bashx)
 - [Documentation](https://bashx.do)
-- [dotdo Framework](https://dotdo.dev)
+- [dotdo Framework](https://do.org.ai)
