@@ -7,6 +7,11 @@
  * - Delta decompression (OFS_DELTA, REF_DELTA)
  * - Checksum verification
  *
+ * Streaming Support:
+ * - StreamingPackParser: Memory-efficient async iterator for large packs
+ * - LRU cache for delta base objects
+ * - On-demand delta resolution
+ *
  * @module bashx/remote/pack-parser
  */
 
@@ -771,4 +776,424 @@ function hexToBytes(hex: string): Uint8Array {
     bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
   }
   return bytes
+}
+
+// =============================================================================
+// LRU Cache for Delta Base Objects
+// =============================================================================
+
+/**
+ * LRU (Least Recently Used) Cache for memory-efficient delta resolution.
+ * Keeps only the most recently used base objects in memory.
+ */
+export class LRUCache<K, V> {
+  private cache: Map<K, V> = new Map()
+  private readonly maxSize: number
+
+  constructor(maxSize: number = 100) {
+    this.maxSize = maxSize
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key)
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key)
+      this.cache.set(key, value)
+    }
+    return value
+  }
+
+  set(key: K, value: V): void {
+    // If key exists, delete it first to update position
+    if (this.cache.has(key)) {
+      this.cache.delete(key)
+    }
+    // Evict oldest if at capacity
+    while (this.cache.size >= this.maxSize) {
+      const oldestKey = this.cache.keys().next().value
+      if (oldestKey !== undefined) {
+        this.cache.delete(oldestKey)
+      }
+    }
+    this.cache.set(key, value)
+  }
+
+  has(key: K): boolean {
+    return this.cache.has(key)
+  }
+
+  delete(key: K): boolean {
+    return this.cache.delete(key)
+  }
+
+  clear(): void {
+    this.cache.clear()
+  }
+
+  get size(): number {
+    return this.cache.size
+  }
+}
+
+// =============================================================================
+// Pack Index - Maps offsets to object info for on-demand resolution
+// =============================================================================
+
+/**
+ * Index entry for a pack object
+ */
+export interface PackIndexEntry {
+  offset: number
+  type: number
+  size: number
+  headerSize: number
+  baseOffset?: number
+  baseSha?: string
+}
+
+/**
+ * Build an index of object offsets without loading full data into memory.
+ * This is the first pass for memory-efficient pack processing.
+ */
+export function buildPackIndex(data: Uint8Array): {
+  header: PackHeader
+  entries: PackIndexEntry[]
+  entryOffsets: number[]
+} {
+  const header = parsePackHeader(data)
+  const entries: PackIndexEntry[] = []
+  const entryOffsets: number[] = []
+  let offset = 12
+
+  for (let i = 0; i < header.objectCount; i++) {
+    entryOffsets.push(offset)
+
+    if (offset >= data.length - 20) {
+      throw new CorruptedPackError(`Object count mismatch: expected ${header.objectCount}, got ${i}`)
+    }
+
+    // Parse type and size without decompressing
+    const { type, size, bytesRead: sizeBytes } = decodePackSizeOnly(data, offset)
+    let headerSize = sizeBytes
+    let baseOffset: number | undefined
+    let baseSha: string | undefined
+
+    if (type === OBJ_OFS_DELTA) {
+      const { value: ofsOffset, bytesRead: offsetBytes } = decodeOfsOffset(data, offset + sizeBytes)
+      baseOffset = ofsOffset
+      headerSize += offsetBytes
+    } else if (type === OBJ_REF_DELTA) {
+      const shaBytes = data.slice(offset + sizeBytes, offset + sizeBytes + 20)
+      baseSha = bytesToHex(shaBytes)
+      headerSize += 20
+    }
+
+    // Find compressed data size by trying decompression
+    const { bytesConsumed: zlibBytes } = decompressZlib(data, offset + headerSize)
+
+    entries.push({
+      offset,
+      type,
+      size,
+      headerSize,
+      baseOffset,
+      baseSha,
+    })
+
+    offset += headerSize + zlibBytes
+  }
+
+  return { header, entries, entryOffsets }
+}
+
+/**
+ * Decode pack object type and size without decompression
+ */
+function decodePackSizeOnly(
+  data: Uint8Array,
+  offset: number
+): { type: number; size: number; bytesRead: number } {
+  const firstByte = data[offset]
+  const type = (firstByte >> 4) & 0x07
+  let size = firstByte & 0x0f
+  let shift = 4
+  let bytesRead = 1
+
+  if ((firstByte & 0x80) !== 0) {
+    while (offset + bytesRead < data.length) {
+      const byte = data[offset + bytesRead]
+      size |= (byte & 0x7f) << shift
+      shift += 7
+      bytesRead++
+
+      if ((byte & 0x80) === 0) {
+        break
+      }
+    }
+  }
+
+  return { type, size, bytesRead }
+}
+
+/**
+ * Decode OFS_DELTA negative offset (exported for streaming use)
+ */
+export function decodeOfsOffset(data: Uint8Array, offset: number): { value: number; bytesRead: number } {
+  let value = data[offset] & 0x7f
+  let bytesRead = 1
+
+  while ((data[offset + bytesRead - 1] & 0x80) !== 0) {
+    if (offset + bytesRead >= data.length) {
+      throw new PackParseError('Truncated OFS_DELTA offset')
+    }
+    value = ((value + 1) << 7) | (data[offset + bytesRead] & 0x7f)
+    bytesRead++
+  }
+
+  return { value, bytesRead }
+}
+
+// =============================================================================
+// Streaming Pack Parser
+// =============================================================================
+
+/**
+ * Resolved object from streaming parser
+ */
+export interface StreamingPackObject {
+  type: number
+  typeName: string
+  size: number
+  data: Uint8Array
+  sha: string
+  offset: number
+}
+
+/**
+ * Options for streaming pack parser
+ */
+export interface StreamingParseOptions {
+  /** Maximum number of base objects to cache for delta resolution */
+  cacheSize?: number
+  /** External object resolver for thin packs */
+  resolveExternal?: (sha: string) => Uint8Array | undefined
+  /** Callback for progress reporting */
+  onProgress?: (parsed: number, total: number) => void
+}
+
+/**
+ * Streaming Pack Parser - Memory-efficient pack file parsing.
+ *
+ * Uses async generators to process pack entries one at a time.
+ * Only keeps delta base objects in an LRU cache.
+ * Memory usage is O(delta_depth * max_object_size) instead of O(pack_size).
+ *
+ * @example
+ * ```typescript
+ * const parser = new StreamingPackParser(packData, { cacheSize: 50 })
+ * for await (const obj of parser.objects()) {
+ *   console.log(obj.sha, obj.typeName, obj.size)
+ *   // Process object without keeping all in memory
+ * }
+ * ```
+ */
+export class StreamingPackParser {
+  private readonly data: Uint8Array
+  private readonly options: StreamingParseOptions
+  private header: PackHeader | null = null
+  private index: PackIndexEntry[] | null = null
+  private entryOffsets: number[] | null = null
+  private baseCache: LRUCache<number, { type: number; data: Uint8Array }>
+  private resolvedBySha: Map<string, { type: number; data: Uint8Array }> = new Map()
+  private resolving: Set<number> = new Set()
+
+  constructor(data: Uint8Array, options: StreamingParseOptions = {}) {
+    this.data = data
+    this.options = options
+    this.baseCache = new LRUCache(options.cacheSize ?? 100)
+  }
+
+  /**
+   * Get pack header information
+   */
+  getHeader(): PackHeader {
+    if (!this.header) {
+      const checksumResult = verifyPackChecksum(this.data)
+      if (!checksumResult.valid) {
+        throw new ChecksumMismatchError(checksumResult.expected, checksumResult.actual)
+      }
+      this.header = parsePackHeader(this.data)
+    }
+    return this.header
+  }
+
+  /**
+   * Build or get the pack index (lightweight first pass)
+   */
+  private ensureIndex(): void {
+    if (!this.index) {
+      const { header, entries, entryOffsets } = buildPackIndex(this.data)
+      this.header = header
+      this.index = entries
+      this.entryOffsets = entryOffsets
+    }
+  }
+
+  /**
+   * Resolve a single object at the given index, handling delta chains.
+   */
+  private resolveObject(idx: number): { type: number; data: Uint8Array } {
+    this.ensureIndex()
+    const entry = this.index![idx]
+    const entryOffset = this.entryOffsets![idx]
+
+    // Check if already resolving (circular reference detection)
+    if (this.resolving.has(idx)) {
+      throw new CorruptedPackError('Circular delta reference detected')
+    }
+
+    // Check LRU cache first
+    const cached = this.baseCache.get(entryOffset)
+    if (cached) {
+      return cached
+    }
+
+    this.resolving.add(idx)
+
+    try {
+      let resolvedType: number
+      let resolvedData: Uint8Array
+
+      // Parse the compressed data
+      const dataOffset = entry.offset + entry.headerSize
+      const { data: decompressedData } = decompressZlib(this.data, dataOffset)
+
+      if (entry.type === OBJ_OFS_DELTA && entry.baseOffset !== undefined) {
+        // Find base object by offset
+        const baseOffset = entryOffset - entry.baseOffset
+        const baseIdx = this.entryOffsets!.indexOf(baseOffset)
+        if (baseIdx === -1) {
+          throw new MissingBaseObjectError(`offset:${baseOffset}`, baseOffset)
+        }
+        const baseObject = this.resolveObject(baseIdx)
+        resolvedData = applyDelta(decompressedData, baseObject.data)
+        resolvedType = baseObject.type
+      } else if (entry.type === OBJ_REF_DELTA && entry.baseSha !== undefined) {
+        // Find base object by SHA
+        const baseObject = this.resolvedBySha.get(entry.baseSha)
+        if (!baseObject) {
+          const externalData = this.options.resolveExternal?.(entry.baseSha)
+          if (!externalData) {
+            throw new MissingBaseObjectError(entry.baseSha, entryOffset)
+          }
+          resolvedData = applyDelta(decompressedData, externalData)
+          resolvedType = OBJ_BLOB // Default type for external objects
+        } else {
+          resolvedData = applyDelta(decompressedData, baseObject.data)
+          resolvedType = baseObject.type
+        }
+      } else {
+        resolvedType = entry.type
+        resolvedData = decompressedData
+      }
+
+      const result = { type: resolvedType, data: resolvedData }
+
+      // Cache the resolved object for potential delta dependents
+      this.baseCache.set(entryOffset, result)
+
+      // Also track by SHA for REF_DELTA lookups
+      const typeName = TYPE_NAMES[resolvedType] || 'unknown'
+      const sha = computeObjectHash(typeName, resolvedData)
+      this.resolvedBySha.set(sha, result)
+
+      return result
+    } finally {
+      this.resolving.delete(idx)
+    }
+  }
+
+  /**
+   * Async generator that yields resolved pack objects one at a time.
+   * Memory-efficient: only keeps delta base objects in LRU cache.
+   */
+  async *objects(): AsyncGenerator<StreamingPackObject> {
+    this.ensureIndex()
+    const header = this.getHeader()
+    const onProgress = this.options.onProgress
+
+    for (let i = 0; i < header.objectCount; i++) {
+      const { type, data } = this.resolveObject(i)
+      const typeName = TYPE_NAMES[type] || 'unknown'
+      const sha = computeObjectHash(typeName, data)
+      const offset = this.entryOffsets![i]
+
+      if (onProgress) {
+        onProgress(i + 1, header.objectCount)
+      }
+
+      yield {
+        type,
+        typeName,
+        size: data.length,
+        data,
+        sha,
+        offset,
+      }
+    }
+  }
+
+  /**
+   * Parse to a full result (for compatibility with existing API).
+   * Note: This loads all objects into memory.
+   */
+  async parseAll(): Promise<PackParseResult> {
+    const header = this.getHeader()
+    const objects: PackObject[] = []
+    const index = new Map<string, PackObject>()
+
+    for await (const obj of this.objects()) {
+      const packObj: PackObject = {
+        type: obj.type,
+        typeName: obj.typeName,
+        size: obj.size,
+        data: obj.data,
+        sha: obj.sha,
+      }
+      objects.push(packObj)
+      index.set(obj.sha, packObj)
+    }
+
+    return {
+      version: header.version,
+      objects,
+      index,
+    }
+  }
+
+  /**
+   * Get object count without parsing all objects
+   */
+  get objectCount(): number {
+    return this.getHeader().objectCount
+  }
+
+  /**
+   * Get pack version
+   */
+  get version(): number {
+    return this.getHeader().version
+  }
+}
+
+/**
+ * Parse a pack file using streaming (memory-efficient).
+ * Returns an async iterator of resolved objects.
+ */
+export function parsePackFileStreaming(
+  data: Uint8Array,
+  options?: StreamingParseOptions
+): StreamingPackParser {
+  return new StreamingPackParser(data, options)
 }

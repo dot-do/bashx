@@ -1,10 +1,19 @@
 /**
  * Git Push Operation
  *
- * Push refs and objects to a remote repository.
+ * Push refs and objects to a remote repository with progress reporting.
  *
  * @module bashx/remote/push
  */
+
+import {
+  type ProgressOptions,
+  type ProgressCallback,
+  emitPhase,
+  emitProgress,
+  emitComplete,
+  createProgressEvent,
+} from './progress.js'
 
 /**
  * Mock HTTP client interface for simulating Git smart protocol
@@ -16,6 +25,19 @@ interface MockHttpClient {
   requests: Array<{ url: string; method: string; headers: Record<string, string>; body?: Uint8Array }>
   authRequired: Set<string>
   protectedBranches: Map<string, Set<string>>
+  /** Pack index cache for optimized subsequent fetches */
+  packIndexCache?: Map<string, PackIndexEntry[]>
+  /** ETag cache for conditional requests */
+  etagCache?: Map<string, string>
+}
+
+/**
+ * Pack index entry for caching
+ */
+interface PackIndexEntry {
+  sha: string
+  offset: number
+  size: number
 }
 
 /**
@@ -39,6 +61,12 @@ export interface PushOptions {
   tags?: boolean
   http: MockHttpClient
   localRepo: MockRepo
+  /** Progress callback */
+  onProgress?: ProgressCallback
+  /** Progress options (advanced) */
+  progress?: ProgressOptions
+  /** Use pack cache to send minimal objects */
+  usePackCache?: boolean
 }
 
 export interface PushResult {
@@ -50,6 +78,8 @@ export interface PushResult {
   deletedRefs?: string[]
   forcePushed?: string[]
   objectsSent: number
+  /** Bytes sent */
+  bytesSent?: number
 }
 
 /**
@@ -79,13 +109,75 @@ function canFastForward(
 }
 
 /**
- * Push to a remote repository
+ * Collect objects to push by walking commit history
+ * Returns the SHAs of objects that need to be sent
+ */
+function collectObjectsToSend(
+  localSha: string,
+  remoteSha: string | null,
+  objects: Map<string, { type: string; data: Uint8Array }>,
+  knownRemoteObjects: Set<string>
+): Set<string> {
+  const toSend = new Set<string>()
+  const visited = new Set<string>()
+  const queue: string[] = [localSha]
+
+  while (queue.length > 0) {
+    const sha = queue.shift()!
+    if (visited.has(sha) || knownRemoteObjects.has(sha)) {
+      continue
+    }
+    visited.add(sha)
+
+    // Stop if we reach the remote SHA (objects from here are already on remote)
+    if (sha === remoteSha) {
+      continue
+    }
+
+    const obj = objects.get(sha)
+    if (!obj) continue
+
+    toSend.add(sha)
+
+    // For commits, also queue parents and tree
+    if (obj.type === 'commit' || obj.type === 'comm') {
+      const content = new TextDecoder().decode(obj.data)
+      const treeMatch = content.match(/tree ([0-9a-z]{40})/i)
+      if (treeMatch && objects.has(treeMatch[1])) {
+        queue.push(treeMatch[1])
+      }
+      const parentMatches = content.matchAll(/parent ([0-9a-z]{40})/gi)
+      for (const match of parentMatches) {
+        queue.push(match[1])
+      }
+    }
+  }
+
+  return toSend
+}
+
+/**
+ * Push to a remote repository with progress reporting
  *
  * @param options - Push configuration options
  * @returns Push result with exit code and output
  */
 export async function push(options: PushOptions): Promise<PushResult> {
-  const { remote, refspecs, force, setUpstream, tags, http, localRepo } = options
+  const {
+    remote,
+    refspecs,
+    force,
+    setUpstream,
+    tags,
+    http,
+    localRepo,
+    onProgress,
+    progress: progressOpts,
+    usePackCache,
+  } = options
+
+  // Merge progress options
+  const progress: ProgressOptions | undefined = progressOpts || (onProgress ? { onProgress } : undefined)
 
   // Get remote configuration
   const remoteConfig = localRepo.remotes.get(remote)
@@ -100,11 +192,19 @@ export async function push(options: PushOptions): Promise<PushResult> {
 
   const remoteUrl = remoteConfig.url
 
+  emitPhase(progress, 'connecting', `Connecting to ${remoteUrl}`)
+
+  // Build request headers
+  const headers: Record<string, string> = {
+    'User-Agent': 'git/bashx',
+    'Connection': 'keep-alive', // Request connection reuse
+  }
+
   // Record the info/refs request
   http.requests.push({
     url: `${remoteUrl}/info/refs?service=git-receive-pack`,
     method: 'GET',
-    headers: { 'User-Agent': 'git/bashx' },
+    headers,
   })
 
   // Get remote refs
@@ -119,6 +219,8 @@ export async function push(options: PushOptions): Promise<PushResult> {
   }
 
   const remoteRefs = remoteInfo.refs
+
+  emitPhase(progress, 'counting', `Remote has ${remoteRefs.size} refs`)
 
   // Determine what to push
   const refsToPush: Array<{
@@ -209,6 +311,8 @@ export async function push(options: PushOptions): Promise<PushResult> {
     }
   }
 
+  emitPhase(progress, 'compressing', `Preparing ${refsToPush.length} refs`)
+
   // Check for protected branches first (server-side rejection)
   const protectedBranches = http.protectedBranches.get(remoteUrl) || new Set()
   const receivePackResult = http.receivePack.get(remoteUrl)
@@ -240,7 +344,16 @@ export async function push(options: PushOptions): Promise<PushResult> {
   const forcePushed: string[] = []
   const rejectedRefs: string[] = []
 
-  for (const ref of refsToPush) {
+  for (let i = 0; i < refsToPush.length; i++) {
+    const ref = refsToPush[i]
+
+    // Report progress
+    if (progress) {
+      emitProgress(progress, createProgressEvent('compressing', i + 1, refsToPush.length, {
+        message: `Checking ${ref.dst}`,
+      }))
+    }
+
     if (ref.localSha === null) {
       // Delete operation
       deletedRefs.push(ref.dst)
@@ -281,33 +394,69 @@ export async function push(options: PushOptions): Promise<PushResult> {
     }
   }
 
+  emitPhase(progress, 'writing', 'Sending objects')
+
+  // Collect objects to send
+  let objectsSent = 0
+  let bytesSent = 0
+  const knownRemoteObjects = usePackCache && http.packIndexCache?.has(remoteUrl)
+    ? new Set(http.packIndexCache.get(remoteUrl)!.map(e => e.sha))
+    : new Set<string>()
+
+  for (let i = 0; i < refsToPush.length; i++) {
+    const ref = refsToPush[i]
+    if (!ref.localSha) continue
+
+    // Collect objects that need to be sent
+    const objectsForRef = collectObjectsToSend(
+      ref.localSha,
+      ref.remoteSha,
+      localRepo.objects,
+      knownRemoteObjects
+    )
+
+    objectsSent += objectsForRef.size
+
+    // Calculate bytes
+    for (const sha of objectsForRef) {
+      const obj = localRepo.objects.get(sha)
+      if (obj) {
+        bytesSent += obj.data.length
+      }
+    }
+
+    // Report progress
+    if (progress) {
+      emitProgress(progress, createProgressEvent('writing', i + 1, refsToPush.length, {
+        bytes: bytesSent,
+        message: `Sending ${objectsForRef.size} objects`,
+      }))
+    }
+  }
+
   // Record the receive-pack request
   http.requests.push({
     url: `${remoteUrl}/git-receive-pack`,
     method: 'POST',
     headers: {
-      'User-Agent': 'git/bashx',
+      ...headers,
       'Content-Type': 'application/x-git-receive-pack-request',
     },
   })
 
-  // Count objects to send (only new objects not on remote)
-  let objectsSent = 0
-  for (const ref of refsToPush) {
-    if (ref.localSha && !ref.remoteSha) {
-      // New ref - count as 1 object (simplified)
-      objectsSent++
-    } else if (ref.localSha && ref.remoteSha && ref.localSha !== ref.remoteSha) {
-      // Updated ref - count as 1 object (simplified)
-      objectsSent++
-    }
-  }
+  emitPhase(progress, 'updating-refs', 'Updating remote refs')
 
   // Update remote-tracking refs
-  for (const ref of refsToPush) {
+  for (let i = 0; i < refsToPush.length; i++) {
+    const ref = refsToPush[i]
     if (ref.localSha && ref.dst.startsWith('refs/heads/')) {
       const branchName = ref.dst.replace('refs/heads/', '')
       localRepo.refs.set(`refs/remotes/${remote}/${branchName}`, ref.localSha)
+    }
+
+    // Report progress
+    if (progress) {
+      emitProgress(progress, createProgressEvent('updating-refs', i + 1, refsToPush.length))
     }
   }
 
@@ -321,6 +470,8 @@ export async function push(options: PushOptions): Promise<PushResult> {
       }
     }
   }
+
+  emitComplete(progress)
 
   // Build output
   let stdout = `To ${remoteUrl}\n`
@@ -345,5 +496,6 @@ export async function push(options: PushOptions): Promise<PushResult> {
     deletedRefs: deletedRefs.length > 0 ? deletedRefs : undefined,
     forcePushed: forcePushed.length > 0 ? forcePushed : undefined,
     objectsSent,
+    bytesSent,
   }
 }

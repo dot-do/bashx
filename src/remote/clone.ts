@@ -1,10 +1,20 @@
 /**
  * Git Clone Operation
  *
- * Clone a repository from a remote URL.
+ * Clone a repository from a remote URL with progress reporting
+ * and shallow clone optimizations.
  *
  * @module bashx/remote/clone
  */
+
+import {
+  type ProgressOptions,
+  type ProgressCallback,
+  emitPhase,
+  emitProgress,
+  emitComplete,
+  createProgressEvent,
+} from './progress.js'
 
 /**
  * Mock HTTP client interface for simulating Git smart protocol
@@ -16,6 +26,19 @@ interface MockHttpClient {
   requests: Array<{ url: string; method: string; headers: Record<string, string>; body?: Uint8Array }>
   authRequired: Set<string>
   protectedBranches: Map<string, Set<string>>
+  /** Pack index cache for optimized subsequent fetches */
+  packIndexCache?: Map<string, PackIndexEntry[]>
+  /** ETag cache for conditional requests */
+  etagCache?: Map<string, string>
+}
+
+/**
+ * Pack index entry for caching
+ */
+interface PackIndexEntry {
+  sha: string
+  offset: number
+  size: number
 }
 
 /**
@@ -29,6 +52,8 @@ interface MockRepo {
   config: Map<string, string>
   workingTree: Map<string, Uint8Array>
   index: Map<string, { sha: string; mode: number }>
+  /** Shallow boundary commits */
+  shallowRoots?: Set<string>
 }
 
 export interface CloneAuth {
@@ -36,6 +61,18 @@ export interface CloneAuth {
   token?: string
   username?: string
   password?: string
+}
+
+/**
+ * Shallow clone options
+ */
+export interface ShallowOptions {
+  /** Clone only the specified number of commits */
+  depth?: number
+  /** Clone commits more recent than specified date */
+  shallowSince?: Date
+  /** Exclude commits reachable from these refs */
+  shallowExclude?: string[]
 }
 
 export interface CloneOptions {
@@ -47,6 +84,16 @@ export interface CloneOptions {
   recurseSubmodules?: boolean
   http: MockHttpClient
   localRepo: MockRepo
+  /** Progress callback */
+  onProgress?: ProgressCallback
+  /** Progress options (advanced) */
+  progress?: ProgressOptions
+  /** Shallow clone options */
+  shallow?: ShallowOptions
+  /** Only clone single branch */
+  singleBranch?: boolean
+  /** Use ETag for conditional requests */
+  useConditionalRequests?: boolean
 }
 
 export interface CloneResult {
@@ -54,6 +101,14 @@ export interface CloneResult {
   stdout: string
   stderr: string
   submodulesCloned?: string[]
+  /** Number of objects received */
+  objectsReceived?: number
+  /** Bytes received */
+  bytesReceived?: number
+  /** Whether this was a shallow clone */
+  isShallow?: boolean
+  /** Shallow depth */
+  shallowDepth?: number
 }
 
 /**
@@ -69,7 +124,7 @@ function isValidUrl(url: string): boolean {
 }
 
 /**
- * Parse pack data and extract objects
+ * Parse pack data and extract objects with progress reporting
  * The mock pack format stores SHA prefix (20 chars), type (4 bytes padded), then data
  *
  * Since the mock doesn't store full SHAs, we use the prefix stored in the pack
@@ -77,7 +132,8 @@ function isValidUrl(url: string): boolean {
  */
 function parsePackData(
   packData: Uint8Array,
-  knownShas: Set<string>
+  knownShas: Set<string>,
+  progress?: ProgressOptions
 ): Array<{ sha: string; type: string; data: Uint8Array }> {
   const objects: Array<{ sha: string; type: string; data: Uint8Array }> = []
 
@@ -107,6 +163,8 @@ function parsePackData(
   const rawObjects: Array<{ prefix: string; type: string; data: Uint8Array }> = []
   let scanOffset = 12
 
+  emitPhase(progress, 'receiving', `Receiving ${count} objects`)
+
   for (let i = 0; i < count && scanOffset + 24 <= packData.length; i++) {
     const shaPrefix = new TextDecoder().decode(packData.slice(scanOffset, scanOffset + 20))
     const typeStr = new TextDecoder().decode(packData.slice(scanOffset + 20, scanOffset + 24))
@@ -129,7 +187,17 @@ function parsePackData(
     rawObjects.push({ prefix: shaPrefix, type, data })
 
     scanOffset = dataEnd
+
+    // Report progress
+    if (progress && i % 10 === 0) {
+      emitProgress(progress, createProgressEvent('receiving', i + 1, count, {
+        bytes: scanOffset,
+        totalBytes: packData.length,
+      }))
+    }
   }
+
+  emitPhase(progress, 'resolving', `Resolving ${rawObjects.length} objects`)
 
   // Second pass: parse commit data to find referenced SHAs
   for (const raw of rawObjects) {
@@ -150,7 +218,8 @@ function parsePackData(
 
   // Third pass: build final objects with best available SHA
   // For objects not in lookup, try to reconstruct full SHA using common patterns
-  for (const raw of rawObjects) {
+  for (let i = 0; i < rawObjects.length; i++) {
+    const raw = rawObjects[i]
     // Try to find full SHA from lookup
     let fullSha = shaLookup.get(raw.prefix)
 
@@ -179,8 +248,8 @@ function parsePackData(
           const digitsPart = raw.prefix.slice(lastDigitIdx)
           // Continue the pattern
           let extension = ''
-          for (let i = 0; extension.length < 20 - suffix.length; i++) {
-            extension += digits[(digitsPart.length + i) % 10]
+          for (let j = 0; extension.length < 20 - suffix.length; j++) {
+            extension += digits[(digitsPart.length + j) % 10]
           }
           fullSha = raw.prefix + extension + suffix
         } else {
@@ -194,19 +263,69 @@ function parsePackData(
     }
 
     objects.push({ sha: fullSha, type: raw.type, data: raw.data })
+
+    // Report progress
+    if (progress && i % 10 === 0) {
+      emitProgress(progress, createProgressEvent('resolving', i + 1, rawObjects.length))
+    }
   }
 
   return objects
 }
 
 /**
- * Clone a git repository
+ * Check if GitHub REST API is available for a URL
+ */
+function isGitHubUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname === 'github.com' || parsed.hostname.endsWith('.github.com')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Parse GitHub owner/repo from URL
+ */
+function parseGitHubRepo(url: string): { owner: string; repo: string } | null {
+  try {
+    const parsed = new URL(url)
+    const parts = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '').split('/')
+    if (parts.length >= 2) {
+      return { owner: parts[0], repo: parts[1] }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null
+}
+
+/**
+ * Clone a git repository with progress reporting
  *
  * @param options - Clone configuration options
  * @returns Clone result with exit code and output
  */
 export async function clone(options: CloneOptions): Promise<CloneResult> {
-  const { url, directory, auth, depth, branch, recurseSubmodules, http, localRepo } = options
+  const {
+    url,
+    directory,
+    auth,
+    depth,
+    branch,
+    recurseSubmodules,
+    http,
+    localRepo,
+    onProgress,
+    progress: progressOpts,
+    shallow,
+    singleBranch,
+    useConditionalRequests,
+  } = options
+
+  // Merge progress options
+  const progress: ProgressOptions | undefined = progressOpts || (onProgress ? { onProgress } : undefined)
 
   // Validate URL
   if (!isValidUrl(url)) {
@@ -216,6 +335,8 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
       stderr: `fatal: Invalid URL: ${url}`,
     }
   }
+
+  emitPhase(progress, 'connecting', `Connecting to ${url}`)
 
   // Check if directory already has files
   const existingFiles = Array.from(localRepo.workingTree.keys()).filter(
@@ -238,11 +359,13 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
         stderr: 'fatal: Authentication required for ' + url,
       }
     }
+    emitPhase(progress, 'authenticating', 'Authenticating...')
   }
 
   // Build headers for HTTP request
   const headers: Record<string, string> = {
     'User-Agent': 'git/bashx',
+    'Connection': 'keep-alive', // Request connection reuse
   }
 
   if (auth) {
@@ -252,6 +375,11 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
       const credentials = btoa(`${auth.username}:${auth.password}`)
       headers['Authorization'] = `Basic ${credentials}`
     }
+  }
+
+  // Add conditional request headers if ETag is cached
+  if (useConditionalRequests && http.etagCache?.has(url)) {
+    headers['If-None-Match'] = http.etagCache.get(url)!
   }
 
   // Record the info/refs request
@@ -274,6 +402,8 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
   const remoteRefs = remoteInfo.refs
   const capabilities = remoteInfo.capabilities
 
+  emitPhase(progress, 'counting', `Found ${remoteRefs.size} refs`)
+
   // Handle empty repository
   if (remoteRefs.size === 0) {
     // Configure origin remote even for empty repos
@@ -281,6 +411,8 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
       url,
       fetch: '+refs/heads/*:refs/remotes/origin/*',
     })
+
+    emitComplete(progress)
 
     return {
       exitCode: 0,
@@ -319,22 +451,60 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
+  // Determine shallow clone configuration
+  const effectiveDepth = shallow?.depth ?? depth
+  const isShallow = effectiveDepth !== undefined || shallow?.shallowSince !== undefined || (shallow?.shallowExclude?.length ?? 0) > 0
+  const supportsShallow = capabilities.includes('shallow')
+
+  if (isShallow && !supportsShallow) {
+    // Server doesn't support shallow, fall back to full clone
+    console.warn('Server does not support shallow clones, performing full clone')
+  }
+
+  // Build upload-pack request with shallow options
+  const uploadPackHeaders: Record<string, string> = {
+    ...headers,
+    'Content-Type': 'application/x-git-upload-pack-request',
+  }
+
+  // Build request body for shallow clone
+  let requestBody = ''
+  if (isShallow && supportsShallow) {
+    if (effectiveDepth !== undefined) {
+      requestBody += `deepen ${effectiveDepth}\n`
+    }
+    if (shallow?.shallowSince) {
+      const timestamp = Math.floor(shallow.shallowSince.getTime() / 1000)
+      requestBody += `deepen-since ${timestamp}\n`
+    }
+    if (shallow?.shallowExclude) {
+      for (const exclude of shallow.shallowExclude) {
+        requestBody += `deepen-not ${exclude}\n`
+      }
+    }
+  }
+
   // Record the upload-pack request
   http.requests.push({
     url: `${url}/git-upload-pack`,
     method: 'POST',
-    headers: {
-      ...headers,
-      'Content-Type': 'application/x-git-upload-pack-request',
-    },
+    headers: uploadPackHeaders,
+    body: requestBody ? new TextEncoder().encode(requestBody) : undefined,
   })
 
-  // Get and parse pack data
+  // Get and parse pack data with progress
   const packData = http.packData.get(url)
+  let objectsReceived = 0
+  let bytesReceived = 0
+
   if (packData) {
+    bytesReceived = packData.length
+
     // Build set of known SHAs from refs
     const knownShas = new Set<string>(remoteRefs.values())
-    const objects = parsePackData(packData, knownShas)
+    const objects = parsePackData(packData, knownShas, progress)
+
+    objectsReceived = objects.length
 
     for (const obj of objects) {
       localRepo.objects.set(obj.sha, {
@@ -342,7 +512,20 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
         data: obj.data,
       })
     }
+
+    // Cache pack index for future fetches
+    if (!http.packIndexCache) {
+      http.packIndexCache = new Map()
+    }
+    const indexEntries: PackIndexEntry[] = objects.map((obj, i) => ({
+      sha: obj.sha,
+      offset: i * 100, // Simplified offset
+      size: obj.data.length,
+    }))
+    http.packIndexCache.set(url, indexEntries)
   }
+
+  emitPhase(progress, 'updating-refs', 'Updating references')
 
   // Set up refs from remote
   for (const [ref, sha] of remoteRefs.entries()) {
@@ -350,6 +533,11 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
 
     if (ref.startsWith('refs/heads/')) {
       const branchName = ref.replace('refs/heads/', '')
+
+      // For single-branch clone, only track the target branch
+      if (singleBranch && branchName !== targetBranch) {
+        continue
+      }
 
       // Create local branch for the target branch
       if (branchName === targetBranch) {
@@ -367,15 +555,29 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
   localRepo.head = { symbolic: true, target: targetRef }
 
   // Configure shallow if depth was specified
-  if (depth !== undefined && capabilities.includes('shallow')) {
+  if (isShallow && supportsShallow) {
     localRepo.config.set('shallow', 'true')
+    if (effectiveDepth !== undefined) {
+      localRepo.config.set('shallow.depth', String(effectiveDepth))
+    }
+    // Mark shallow boundary commits
+    if (targetSha) {
+      if (!localRepo.shallowRoots) {
+        localRepo.shallowRoots = new Set()
+      }
+      localRepo.shallowRoots.add(targetSha)
+    }
   }
 
   // Configure origin remote
   localRepo.remotes.set('origin', {
     url,
-    fetch: '+refs/heads/*:refs/remotes/origin/*',
+    fetch: singleBranch
+      ? `+refs/heads/${targetBranch}:refs/remotes/origin/${targetBranch}`
+      : '+refs/heads/*:refs/remotes/origin/*',
   })
+
+  emitPhase(progress, 'checking-out', 'Checking out files')
 
   // Populate working tree (simplified - just add a marker file)
   if (targetSha && localRepo.objects.has(targetSha)) {
@@ -401,6 +603,7 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
             auth,
             http,
             localRepo,
+            progress, // Pass progress to submodule clones
           })
 
           if (subResult.exitCode !== 0) {
@@ -411,15 +614,21 @@ export async function clone(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
+  emitComplete(progress)
+
   const stdout = `Cloning into '${directory}'...\n` +
-    `remote: Enumerating objects: ${localRepo.objects.size}, done.\n` +
-    `remote: Counting objects: 100% (${localRepo.objects.size}/${localRepo.objects.size}), done.\n` +
-    `Receiving objects: 100% (${localRepo.objects.size}/${localRepo.objects.size}), done.`
+    `remote: Enumerating objects: ${objectsReceived}, done.\n` +
+    `remote: Counting objects: 100% (${objectsReceived}/${objectsReceived}), done.\n` +
+    `Receiving objects: 100% (${objectsReceived}/${objectsReceived}), done.`
 
   return {
     exitCode: 0,
     stdout,
     stderr: '',
     submodulesCloned: submodulesCloned.length > 0 ? submodulesCloned : undefined,
+    objectsReceived,
+    bytesReceived,
+    isShallow: isShallow && supportsShallow,
+    shallowDepth: effectiveDepth,
   }
 }
