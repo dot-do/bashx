@@ -882,3 +882,6 @@ export type {
   SandboxBinding,
   TieredExecutorConfig,
 } from './tiered-executor.js'
+
+// Re-export ShellDO for wrangler worker entry
+export { ShellDO, type Env as ShellEnv } from './worker.js'
