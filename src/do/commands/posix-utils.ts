@@ -181,6 +181,8 @@ export interface SortOptions {
   humanNumeric?: boolean
   /** Check if sorted (don't sort) */
   check?: boolean
+  /** Version number sort (GNU extension -V) - sorts 1.2 < 1.10 */
+  versionSort?: boolean
 }
 
 /**
@@ -201,6 +203,68 @@ function parseHumanSize(str: string): number {
   }
 
   return value * (multipliers[suffix] || 1)
+}
+
+/**
+ * Compare version strings (GNU sort -V behavior)
+ * Handles versions like "1.2", "1.10", "2.0-alpha", "v1.0.0"
+ *
+ * @param a - First version string
+ * @param b - Second version string
+ * @returns Negative if a < b, positive if a > b, 0 if equal
+ */
+function compareVersions(a: string, b: string): number {
+  // Split into segments of digits and non-digits
+  const splitVersion = (s: string): (string | number)[] => {
+    const parts: (string | number)[] = []
+    let current = ''
+    let isDigit = false
+
+    for (const char of s) {
+      const charIsDigit = /\d/.test(char)
+      if (current === '') {
+        current = char
+        isDigit = charIsDigit
+      } else if (charIsDigit === isDigit) {
+        current += char
+      } else {
+        parts.push(isDigit ? parseInt(current, 10) : current)
+        current = char
+        isDigit = charIsDigit
+      }
+    }
+    if (current) {
+      parts.push(isDigit ? parseInt(current, 10) : current)
+    }
+    return parts
+  }
+
+  const partsA = splitVersion(a)
+  const partsB = splitVersion(b)
+
+  const maxLen = Math.max(partsA.length, partsB.length)
+  for (let i = 0; i < maxLen; i++) {
+    const partA = partsA[i]
+    const partB = partsB[i]
+
+    // Missing parts are treated as less than existing parts
+    if (partA === undefined) return -1
+    if (partB === undefined) return 1
+
+    // Compare numbers numerically, strings lexicographically
+    if (typeof partA === 'number' && typeof partB === 'number') {
+      if (partA !== partB) return partA - partB
+    } else if (typeof partA === 'string' && typeof partB === 'string') {
+      const cmp = partA.localeCompare(partB)
+      if (cmp !== 0) return cmp
+    } else {
+      // Mixed: numbers sort before strings
+      if (typeof partA === 'number') return -1
+      return 1
+    }
+  }
+
+  return 0
 }
 
 /**
@@ -253,7 +317,10 @@ export function executeSort(lines: string[], options: SortOptions = {}): string[
     }
 
     let comparison: number
-    if (options.humanNumeric) {
+    if (options.versionSort) {
+      // GNU extension: version number sort (-V)
+      comparison = compareVersions(keyA, keyB)
+    } else if (options.humanNumeric) {
       comparison = parseHumanSize(keyA) - parseHumanSize(keyB)
     } else if (options.numeric) {
       const numA = parseFloat(keyA) || 0
@@ -462,6 +529,8 @@ export interface UniqOptions {
   skipFields?: number
   /** Skip N characters before comparing */
   skipChars?: number
+  /** Compare only first N characters (GNU extension -w N) */
+  compareChars?: number
 }
 
 /**
@@ -498,6 +567,11 @@ export function executeUniq(lines: string[], options: UniqOptions = {}): string[
     // Skip characters
     if (options.skipChars) {
       key = key.slice(options.skipChars)
+    }
+
+    // Compare only first N characters (GNU extension -w N)
+    if (options.compareChars !== undefined && options.compareChars > 0) {
+      key = key.slice(0, options.compareChars)
     }
 
     // Case insensitive

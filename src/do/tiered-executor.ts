@@ -79,6 +79,32 @@ import {
   type DdOptions,
   type OdOptions,
 } from './commands/posix-utils.js'
+import {
+  executeYes,
+  executeWhoami,
+  executeHostname,
+  executePrintenv,
+  SYSTEM_UTILS_COMMANDS,
+  type SystemUtilsContext,
+} from './commands/system-utils.js'
+import {
+  EXTENDED_UTILS_COMMANDS,
+  parseEnvArgs,
+  executeEnv,
+  formatEnv,
+  parseIdArgs,
+  executeId,
+  DEFAULT_WORKER_IDENTITY,
+  parseUnameArgs,
+  executeUname,
+  DEFAULT_WORKER_SYSINFO,
+  parseTacArgs,
+  executeTac,
+  parseShufArgs,
+  executeShuf as executeExtendedShuf,
+  parseTimeoutArgs,
+  executeTimeout as executeExtendedTimeout,
+} from './commands/extended-utils.js'
 
 // ============================================================================
 // TYPES
@@ -225,6 +251,10 @@ const TIER_1_NATIVE_COMMANDS = new Set([
   'uuidgen', 'uuid', 'cksum', 'sum', 'openssl',
   // Text processing commands (native implementations)
   'sed', 'awk', 'diff', 'patch', 'tee', 'xargs',
+  // System utility commands (native implementations)
+  'yes', 'whoami', 'hostname', 'printenv',
+  // Extended utility commands (native implementations)
+  'env', 'id', 'uname', 'tac',
 ])
 
 /**
@@ -274,6 +304,25 @@ const TIER_1_POSIX_UTILS_COMMANDS = new Set([
   'cut', 'sort', 'tr', 'uniq', 'wc',
   'basename', 'dirname', 'echo', 'printf',
   'date', 'dd', 'od',
+])
+
+/**
+ * System utility commands with native implementations
+ * These include: yes, whoami, hostname, printenv
+ * (sleep, seq, pwd are already handled in other command groups)
+ */
+const TIER_1_SYSTEM_UTILS_COMMANDS = new Set([
+  'yes', 'whoami', 'hostname', 'printenv',
+])
+
+/**
+ * Extended utility commands with native implementations
+ * These include: env, id, uname, timeout, tac, shuf
+ * Note: timeout and shuf are also in math-control, but extended-utils provides more options
+ */
+const TIER_1_EXTENDED_UTILS_COMMANDS = new Set([
+  'env', 'id', 'uname', 'tac',
+  // Note: timeout and shuf have extended implementations but also exist in math-control
 ])
 
 // ============================================================================
@@ -463,6 +512,22 @@ export class TieredExecutor implements BashExecutor {
           reason: `Native POSIX utility command (${cmd})`,
           handler: 'native',
           capability: 'posix',
+        }
+      } else if (TIER_1_SYSTEM_UTILS_COMMANDS.has(cmd)) {
+        // System utility commands (yes, whoami, hostname, printenv)
+        return {
+          tier: 1,
+          reason: `Native system utility command (${cmd})`,
+          handler: 'native',
+          capability: 'system',
+        }
+      } else if (TIER_1_EXTENDED_UTILS_COMMANDS.has(cmd)) {
+        // Extended utility commands (env, id, uname, tac)
+        return {
+          tier: 1,
+          reason: `Native extended utility command (${cmd})`,
+          handler: 'native',
+          capability: 'extended',
         }
       } else {
         // Pure computation commands
@@ -695,6 +760,16 @@ export class TieredExecutor implements BashExecutor {
       return this.executePosixUtils(cmd, args, command, options)
     }
 
+    // Handle system utility commands (yes, whoami, hostname, printenv)
+    if (TIER_1_SYSTEM_UTILS_COMMANDS.has(cmd)) {
+      return this.executeSystemUtilsCommands(cmd, args, command, options)
+    }
+
+    // Handle extended utility commands (env, id, uname, tac)
+    if (TIER_1_EXTENDED_UTILS_COMMANDS.has(cmd)) {
+      return this.executeExtendedUtilsCommands(cmd, args, command, options)
+    }
+
     // Handle pure computation commands
     return this.executeNativeCompute(cmd, args, options)
   }
@@ -750,25 +825,134 @@ export class TieredExecutor implements BashExecutor {
         }
 
         case 'head': {
-          const file = args.find(a => !a.startsWith('-'))
-          if (!file) return this.createResult('head', '', 'head: missing operand', 1, 1)
-          const lines = parseInt(args.find(a => a.startsWith('-n'))?.slice(2) || '10', 10)
-          // Use encoding: 'utf-8' to ensure we get a string back
-          const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
-          stdout = content.split('\n').slice(0, lines).join('\n') + '\n'
+          // Parse options: -n N, -n -N (exclude last N), -q (quiet, no headers)
+          let headQuiet = false
+          let headLines = 10
+          let headExcludeLast = false
+          const headFiles: string[] = []
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-q' || arg === '--quiet' || arg === '--silent') {
+              headQuiet = true
+            } else if (arg === '-n' && args[i + 1]) {
+              const nArg = args[++i]
+              if (nArg.startsWith('-')) {
+                // -n -N means exclude last N lines
+                headExcludeLast = true
+                headLines = parseInt(nArg.slice(1), 10)
+              } else {
+                headLines = parseInt(nArg, 10)
+              }
+            } else if (arg.startsWith('-n')) {
+              const nArg = arg.slice(2)
+              if (nArg.startsWith('-')) {
+                headExcludeLast = true
+                headLines = parseInt(nArg.slice(1), 10)
+              } else {
+                headLines = parseInt(nArg, 10)
+              }
+            } else if (!arg.startsWith('-')) {
+              headFiles.push(arg)
+            }
+          }
+          if (headFiles.length === 0) {
+            // Read from stdin
+            const stdinContent = options?.stdin || ''
+            const stdinLines = stdinContent.split('\n')
+            if (headExcludeLast) {
+              // Exclude last N lines
+              stdout = stdinLines.slice(0, -headLines).join('\n') + '\n'
+            } else {
+              stdout = stdinLines.slice(0, headLines).join('\n') + '\n'
+            }
+          } else {
+            const results: string[] = []
+            for (let fi = 0; fi < headFiles.length; fi++) {
+              const file = headFiles[fi]
+              const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
+              const fileLines = content.split('\n')
+              let selectedLines: string[]
+              if (headExcludeLast) {
+                selectedLines = fileLines.slice(0, -headLines)
+              } else {
+                selectedLines = fileLines.slice(0, headLines)
+              }
+              // Add header if multiple files and not quiet
+              if (headFiles.length > 1 && !headQuiet) {
+                if (fi > 0) results.push('')
+                results.push(`==> ${file} <==`)
+              }
+              results.push(...selectedLines)
+            }
+            stdout = results.join('\n') + '\n'
+          }
           break
         }
 
         case 'tail': {
-          const file = args.find(a => !a.startsWith('-'))
-          if (!file) return this.createResult('tail', '', 'tail: missing operand', 1, 1)
-          const lines = parseInt(args.find(a => a.startsWith('-n'))?.slice(2) || '10', 10)
-          // Use encoding: 'utf-8' to ensure we get a string back
-          const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
-          const allLines = content.split('\n')
-          // Handle trailing newline - if last element is empty, exclude it from count
-          const effectiveLines = allLines[allLines.length - 1] === '' ? allLines.slice(0, -1) : allLines
-          stdout = effectiveLines.slice(-lines).join('\n') + '\n'
+          // Parse options: -n N, -n +N (start from line N), -q (quiet, no headers)
+          let tailQuiet = false
+          let tailLines = 10
+          let tailStartFrom = false // +N means start from line N
+          const tailFiles: string[] = []
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-q' || arg === '--quiet' || arg === '--silent') {
+              tailQuiet = true
+            } else if (arg === '-n' && args[i + 1]) {
+              const nArg = args[++i]
+              if (nArg.startsWith('+')) {
+                // -n +N means start from line N (1-indexed)
+                tailStartFrom = true
+                tailLines = parseInt(nArg.slice(1), 10)
+              } else {
+                tailLines = parseInt(nArg, 10)
+              }
+            } else if (arg.startsWith('-n')) {
+              const nArg = arg.slice(2)
+              if (nArg.startsWith('+')) {
+                tailStartFrom = true
+                tailLines = parseInt(nArg.slice(1), 10)
+              } else {
+                tailLines = parseInt(nArg, 10)
+              }
+            } else if (!arg.startsWith('-')) {
+              tailFiles.push(arg)
+            }
+          }
+          if (tailFiles.length === 0) {
+            // Read from stdin
+            const stdinContent = options?.stdin || ''
+            const stdinLines = stdinContent.split('\n')
+            const effectiveStdinLines = stdinLines[stdinLines.length - 1] === '' ? stdinLines.slice(0, -1) : stdinLines
+            if (tailStartFrom) {
+              // +N means output starting from line N (1-indexed)
+              stdout = effectiveStdinLines.slice(tailLines - 1).join('\n') + '\n'
+            } else {
+              stdout = effectiveStdinLines.slice(-tailLines).join('\n') + '\n'
+            }
+          } else {
+            const results: string[] = []
+            for (let fi = 0; fi < tailFiles.length; fi++) {
+              const file = tailFiles[fi]
+              const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
+              const allLines = content.split('\n')
+              const effectiveLines = allLines[allLines.length - 1] === '' ? allLines.slice(0, -1) : allLines
+              let selectedLines: string[]
+              if (tailStartFrom) {
+                selectedLines = effectiveLines.slice(tailLines - 1)
+              } else {
+                selectedLines = effectiveLines.slice(-tailLines)
+              }
+              // Add header if multiple files and not quiet
+              if (tailFiles.length > 1 && !tailQuiet) {
+                if (fi > 0) results.push('')
+                results.push(`==> ${file} <==`)
+              }
+              results.push(...selectedLines)
+            }
+            stdout = results.join('\n') + '\n'
+          }
           break
         }
 
@@ -1001,6 +1185,7 @@ export class TieredExecutor implements BashExecutor {
           let grepShowLineNumbers = false
           let grepInvertMatch = false
           let grepRecursive = false
+          let grepPerlRegex = false // -P flag: use JavaScript regex (supports lookahead, non-greedy, etc.)
           let grepPattern = ''
           const grepFiles: string[] = []
           for (let i = 0; i < args.length; i++) {
@@ -1009,6 +1194,7 @@ export class TieredExecutor implements BashExecutor {
             else if (arg === '-n') grepShowLineNumbers = true
             else if (arg === '-v') grepInvertMatch = true
             else if (arg === '-r' || arg === '-R') grepRecursive = true
+            else if (arg === '-P') grepPerlRegex = true // Enable Perl-compatible regex (JavaScript regex)
             else if (!arg.startsWith('-')) {
               if (!grepPattern) grepPattern = arg
               else grepFiles.push(arg)
@@ -1017,7 +1203,16 @@ export class TieredExecutor implements BashExecutor {
           if (!grepPattern) {
             return this.createResult('grep', '', 'grep: missing pattern', 1, 1)
           }
-          const grepRegex = new RegExp(grepPattern, grepIgnoreCase ? 'i' : '')
+          // When -P is used, pattern is already JavaScript regex syntax
+          // When -P is not used, convert basic grep pattern to JavaScript regex
+          let grepRegexPattern = grepPattern
+          if (!grepPerlRegex) {
+            // Basic grep uses BRE (Basic Regular Expression)
+            // In BRE, () {} + ? | need to be escaped to be special
+            // For simplicity, we treat the pattern as-is since JavaScript regex is close to ERE
+            grepRegexPattern = grepPattern
+          }
+          const grepRegex = new RegExp(grepRegexPattern, grepIgnoreCase ? 'i' : '')
           const grepResults: string[] = []
           let grepMatchFound = false
           const grepProcessFile = async (filePath: string) => {
@@ -2206,6 +2401,132 @@ export class TieredExecutor implements BashExecutor {
 
         default:
           throw new Error(`Unsupported POSIX utility command: ${cmd}`)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return this.createResult(fullCommand, '', message, 1, 1)
+    }
+  }
+
+  /**
+   * Execute system utility commands (yes, whoami, hostname, printenv)
+   */
+  private async executeSystemUtilsCommands(
+    cmd: string,
+    args: string[],
+    fullCommand: string,
+    options?: ExecOptions
+  ): Promise<BashResult> {
+    try {
+      // Build context from execution options
+      const context: SystemUtilsContext = {
+        cwd: options?.cwd,
+        env: options?.env,
+        stdin: options?.stdin,
+      }
+
+      switch (cmd) {
+        case 'yes': {
+          // Parse yes options (there are none in standard yes)
+          // Limit to 1000 lines for safety in non-streaming environment
+          const result = executeYes(args, { maxLines: 1000 })
+          return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
+        }
+
+        case 'whoami': {
+          const result = executeWhoami(args, context)
+          return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
+        }
+
+        case 'hostname': {
+          const result = executeHostname(args, context)
+          return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
+        }
+
+        case 'printenv': {
+          // Parse printenv options
+          const printenvOpts = {
+            null: args.includes('-0') || args.includes('--null'),
+          }
+          const varArgs = args.filter(a => a !== '-0' && a !== '--null')
+          const result = executePrintenv(varArgs, context, printenvOpts)
+          return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
+        }
+
+        default:
+          throw new Error(`Unsupported system utility command: ${cmd}`)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return this.createResult(fullCommand, '', message, 1, 1)
+    }
+  }
+
+  /**
+   * Execute extended utility commands (env, id, uname, tac)
+   */
+  private async executeExtendedUtilsCommands(
+    cmd: string,
+    args: string[],
+    fullCommand: string,
+    options?: ExecOptions
+  ): Promise<BashResult> {
+    try {
+      switch (cmd) {
+        case 'env': {
+          const envArgs = parseEnvArgs(args)
+          const baseEnv = options?.env ?? {}
+          const result = executeEnv(baseEnv, envArgs)
+
+          if (result.command && result.command.length > 0) {
+            // Execute the command with the modified environment
+            const cmdToRun = result.command.join(' ')
+            return this.execute(cmdToRun, { ...options, env: result.env })
+          }
+
+          // No command - print the environment
+          const output = formatEnv(result.env)
+          return this.createResult(fullCommand, output, '', 0, 1)
+        }
+
+        case 'id': {
+          const idArgs = parseIdArgs(args)
+          // Use worker identity (could be configurable in future)
+          const output = executeId(DEFAULT_WORKER_IDENTITY, idArgs)
+          return this.createResult(fullCommand, output + '\n', '', 0, 1)
+        }
+
+        case 'uname': {
+          const unameArgs = parseUnameArgs(args)
+          // Use worker system info (could be configurable in future)
+          const output = executeUname(DEFAULT_WORKER_SYSINFO, unameArgs)
+          return this.createResult(fullCommand, output + '\n', '', 0, 1)
+        }
+
+        case 'tac': {
+          const { options: tacOptions, files } = parseTacArgs(args)
+
+          // Get input - from files or stdin
+          let input: string
+          if (files.length > 0 && this.fs) {
+            // Read from files
+            const contents: string[] = []
+            for (const file of files) {
+              const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
+              contents.push(content)
+            }
+            input = contents.join('')
+          } else {
+            // Use stdin
+            input = options?.stdin ?? ''
+          }
+
+          const output = executeTac(input, tacOptions)
+          return this.createResult(fullCommand, output, '', 0, 1)
+        }
+
+        default:
+          throw new Error(`Unsupported extended utility command: ${cmd}`)
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
