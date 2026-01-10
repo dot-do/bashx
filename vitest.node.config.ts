@@ -12,6 +12,8 @@ export default defineConfig({
       'tests/undo-tracking.test.ts',
       // POSIX compliance tests - run against real shell
       'tests/posix/**/*.test.ts',
+      // HTTP transport and auth tests (uses msw)
+      'src/remote/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
