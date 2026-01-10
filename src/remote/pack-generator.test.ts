@@ -22,6 +22,8 @@ import {
   OBJ_TAG,
   OBJ_OFS_DELTA,
   OBJ_REF_DELTA,
+  computeSha1,
+  computeGitObjectHash,
 } from './pack-generator.js'
 
 // We'll also need PackParser for round-trip tests
@@ -949,14 +951,4 @@ describe('PackGenerator', () => {
   })
 })
 
-// Helper function placeholders (these would be implemented in the actual generator)
-function computeSha1(data: Uint8Array): Uint8Array {
-  // This is a placeholder - the actual implementation would use crypto
-  // For tests to pass, we need this to match what pack-generator produces
-  throw new Error('Not implemented - pack-generator.js must provide this')
-}
-
-function computeGitObjectHash(type: string, data: Uint8Array): Uint8Array {
-  // Git object hash = SHA-1("type size\0data")
-  throw new Error('Not implemented - pack-generator.js must provide this')
-}
+// Note: computeSha1 and computeGitObjectHash are imported from pack-generator.js

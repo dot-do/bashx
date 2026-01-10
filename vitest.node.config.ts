@@ -14,6 +14,8 @@ export default defineConfig({
       'tests/posix/**/*.test.ts',
       // HTTP transport and auth tests (uses msw)
       'src/remote/**/*.test.ts',
+      // NPM registry client tests
+      'src/npmx/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },

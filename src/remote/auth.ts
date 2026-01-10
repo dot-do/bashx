@@ -1,8 +1,12 @@
 /**
- * Git Authentication (Stub)
+ * Git Authentication
  *
- * This file is a stub for TDD RED phase.
- * Implementation will be added in GREEN phase.
+ * Provides authentication utilities for Git HTTP transport:
+ * - Bearer token (OAuth, PAT)
+ * - Basic auth (username:password)
+ * - Environment variable token detection
+ * - WWW-Authenticate header parsing
+ * - Credential caching
  */
 
 // Type exports
@@ -38,48 +42,214 @@ export type TokenType =
   | 'bitbucket'
   | 'unknown'
 
-// Function exports - stubs
+/**
+ * Create an Authorization header value from credentials
+ */
 export function createAuthHeader(credentials: AuthCredentials): string {
-  throw new Error('Not implemented')
+  if (credentials.method === 'bearer') {
+    return `Bearer ${credentials.token}`
+  }
+
+  // Basic auth
+  const username = credentials.username ?? ''
+  const password = credentials.password ?? ''
+  const encoded = btoa(`${username}:${password}`)
+  return `Basic ${encoded}`
 }
 
+/**
+ * Get authentication token from environment variables based on host
+ */
 export function getTokenFromEnv(host: string, envVar?: string): string | undefined {
-  throw new Error('Not implemented')
+  // Custom env var takes precedence
+  if (envVar && process.env[envVar]) {
+    return process.env[envVar]
+  }
+
+  const hostLower = host.toLowerCase()
+
+  // GitHub
+  if (hostLower.includes('github')) {
+    return process.env.GITHUB_TOKEN || process.env.GH_TOKEN
+  }
+
+  // GitLab
+  if (hostLower.includes('gitlab')) {
+    return process.env.GITLAB_TOKEN || process.env.GL_TOKEN
+  }
+
+  // Bitbucket
+  if (hostLower.includes('bitbucket')) {
+    return process.env.BITBUCKET_TOKEN || process.env.BB_TOKEN
+  }
+
+  // Generic fallback
+  return process.env.GIT_TOKEN
 }
 
+/**
+ * Parse WWW-Authenticate header from 401 response
+ */
 export function parseWwwAuthenticate(header: string): WwwAuthenticateInfo {
-  throw new Error('Not implemented')
+  const result: WwwAuthenticateInfo = {
+    scheme: '',
+    schemes: [],
+  }
+
+  // Split by comma to handle multiple auth methods, but be careful with quoted strings
+  const parts = header.split(/,\s*(?=\w+(?:\s|$|=))/)
+
+  for (const part of parts) {
+    const trimmed = part.trim()
+
+    // Extract scheme (first word before space or end)
+    const schemeMatch = trimmed.match(/^(\w+)(?:\s|$)/)
+    if (schemeMatch) {
+      const scheme = schemeMatch[1]
+      if (!result.scheme) {
+        result.scheme = scheme
+      }
+      if (!result.schemes!.includes(scheme)) {
+        result.schemes!.push(scheme)
+      }
+    }
+
+    // Extract realm="value"
+    const realmMatch = trimmed.match(/realm="([^"]*)"/)
+    if (realmMatch) {
+      result.realm = realmMatch[1]
+    }
+
+    // Extract error="value"
+    const errorMatch = trimmed.match(/error="([^"]*)"/)
+    if (errorMatch) {
+      result.error = errorMatch[1]
+    }
+
+    // Extract error_description="value"
+    const descMatch = trimmed.match(/error_description="([^"]*)"/)
+    if (descMatch) {
+      result.errorDescription = descMatch[1]
+    }
+  }
+
+  return result
 }
 
-// Class export - stub
+/**
+ * Git authentication manager with caching support
+ */
 export class GitAuth {
   private static cache = new Map<string, { auth: GitAuth; expiresAt: number }>()
 
+  private token?: string
+  private username?: string
+  private password?: string
+
   constructor(options: { token?: string; username?: string; password?: string }) {
-    throw new Error('Not implemented')
+    this.token = options.token
+    this.username = options.username
+    this.password = options.password
   }
 
+  /**
+   * Create GitAuth instance from environment variables
+   */
   static fromEnv(host: string): GitAuth {
-    throw new Error('Not implemented')
+    const token = getTokenFromEnv(host)
+    if (token) {
+      return new GitAuth({ token })
+    }
+    return new GitAuth({})
   }
 
+  /**
+   * Get cached credentials for a host
+   */
   static getCached(host: string): GitAuth | undefined {
-    throw new Error('Not implemented')
+    const entry = GitAuth.cache.get(host)
+    if (!entry) {
+      return undefined
+    }
+
+    // Check if expired
+    if (Date.now() > entry.expiresAt) {
+      GitAuth.cache.delete(host)
+      return undefined
+    }
+
+    return entry.auth
   }
 
+  /**
+   * Check if this instance has credentials
+   */
   hasCredentials(): boolean {
-    throw new Error('Not implemented')
+    return Boolean(this.token || (this.username && this.password) || this.username)
   }
 
+  /**
+   * Get the Authorization header value
+   */
   getHeader(): string {
-    throw new Error('Not implemented')
+    if (this.token) {
+      return `Bearer ${this.token}`
+    }
+
+    if (this.username) {
+      const password = this.password ?? ''
+      return `Basic ${btoa(`${this.username}:${password}`)}`
+    }
+
+    return ''
   }
 
+  /**
+   * Detect token type from prefix
+   */
   getTokenType(): TokenType {
-    throw new Error('Not implemented')
+    if (!this.token) {
+      return 'unknown'
+    }
+
+    // GitHub Personal Access Token (classic or fine-grained)
+    if (this.token.startsWith('ghp_')) {
+      return 'github-pat'
+    }
+
+    // GitHub OAuth token
+    if (this.token.startsWith('gho_')) {
+      return 'github-oauth'
+    }
+
+    // GitHub App token
+    if (this.token.startsWith('ghs_') || this.token.startsWith('ghu_')) {
+      return 'github-app'
+    }
+
+    // GitLab Personal Access Token
+    if (this.token.startsWith('glpat-')) {
+      return 'gitlab-pat'
+    }
+
+    // GitLab OAuth token
+    if (this.token.startsWith('gloa-')) {
+      return 'gitlab-oauth'
+    }
+
+    // Bitbucket app passwords don't have a standard prefix
+    // but tokens starting with specific patterns might indicate them
+
+    return 'unknown'
   }
 
+  /**
+   * Cache these credentials for a host with TTL
+   */
   cacheFor(host: string, ttlSeconds: number): void {
-    throw new Error('Not implemented')
+    GitAuth.cache.set(host, {
+      auth: this,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    })
   }
 }
