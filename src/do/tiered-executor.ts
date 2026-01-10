@@ -105,6 +105,11 @@ import {
   parseTimeoutArgs,
   executeTimeout as executeExtendedTimeout,
 } from './commands/extended-utils.js'
+import {
+  executeTest,
+  createFileInfoProvider,
+  TEST_COMMANDS,
+} from './commands/test-command.js'
 
 // ============================================================================
 // TYPES
@@ -223,7 +228,7 @@ export interface TieredExecutorConfig {
  */
 const TIER_1_NATIVE_COMMANDS = new Set([
   // Basic file operations (read)
-  'cat', 'head', 'tail', 'ls', 'test', 'stat', 'readlink', 'find', 'grep',
+  'cat', 'head', 'tail', 'ls', 'test', '[', 'stat', 'readlink', 'find', 'grep',
   // File operations (write)
   'mkdir', 'rmdir', 'rm', 'cp', 'mv', 'touch', 'truncate', 'ln',
   // Permission operations
@@ -956,35 +961,14 @@ export class TieredExecutor implements BashExecutor {
           break
         }
 
-        case 'test': {
-          const flag = args[0]
-          const path = args[1]
-          if (!flag || !path) {
-            exitCode = 2
-            break
-          }
-          switch (flag) {
-            case '-e':
-              exitCode = (await this.fs.exists(path)) ? 0 : 1
-              break
-            case '-f': {
-              const exists = await this.fs.exists(path)
-              if (!exists) { exitCode = 1; break }
-              const stat = await this.fs.stat(path)
-              // fsx.do Stats class has isFile() as a method, not a property
-              exitCode = stat.isFile() ? 0 : 1
-              break
-            }
-            case '-d': {
-              const exists = await this.fs.exists(path)
-              if (!exists) { exitCode = 1; break }
-              const stat = await this.fs.stat(path)
-              // fsx.do Stats class has isDirectory() as a method, not a property
-              exitCode = stat.isDirectory() ? 0 : 1
-              break
-            }
-            default:
-              exitCode = 2
+        case 'test':
+        case '[': {
+          // Full test/[ implementation with all POSIX operators
+          const fileInfoProvider = this.fs ? createFileInfoProvider(this.fs) : undefined
+          const result = await executeTest(args, { fileInfoProvider })
+          exitCode = result.exitCode
+          if (result.error) {
+            stderr = result.error
           }
           break
         }
@@ -2338,6 +2322,10 @@ export class TieredExecutor implements BashExecutor {
         case 'dd': {
           // Parse dd options (dd uses operand=value format)
           const ddOptions: DdOptions = {}
+          let inputFile: string | undefined
+          let outputFile: string | undefined
+          let convOptions: string[] = []
+
           for (const arg of args) {
             if (arg.startsWith('bs=')) {
               ddOptions.bs = parseInt(arg.slice(3), 10)
@@ -2351,12 +2339,61 @@ export class TieredExecutor implements BashExecutor {
               ddOptions.ibs = parseInt(arg.slice(4), 10)
             } else if (arg.startsWith('obs=')) {
               ddOptions.obs = parseInt(arg.slice(4), 10)
+            } else if (arg.startsWith('if=')) {
+              inputFile = arg.slice(3)
+            } else if (arg.startsWith('of=')) {
+              outputFile = arg.slice(3)
+            } else if (arg.startsWith('conv=')) {
+              convOptions = arg.slice(5).split(',')
             }
           }
-          const inputData = new TextEncoder().encode(input)
-          const outputData = executeDd(inputData, ddOptions)
+
+          // Get input data from file or stdin
+          let inputData: Uint8Array
+          if (inputFile) {
+            if (!this.fs) {
+              return this.createResult(fullCommand, '', 'dd: no filesystem capability for if=', 1, 1)
+            }
+            try {
+              const content = await this.fs.read(inputFile)
+              inputData = typeof content === 'string' ? new TextEncoder().encode(content) : content
+            } catch (e) {
+              return this.createResult(fullCommand, '', `dd: ${inputFile}: No such file or directory`, 1, 1)
+            }
+          } else {
+            inputData = new TextEncoder().encode(input)
+          }
+
+          // Execute dd
+          let outputData = executeDd(inputData, ddOptions)
+
+          // Apply conv options
+          if (convOptions.includes('ucase')) {
+            const text = new TextDecoder().decode(outputData)
+            outputData = new TextEncoder().encode(text.toUpperCase())
+          }
+          if (convOptions.includes('lcase')) {
+            const text = new TextDecoder().decode(outputData)
+            outputData = new TextEncoder().encode(text.toLowerCase())
+          }
+
+          // Calculate stats for stderr
+          const bs = ddOptions.bs || 512
+          const recordsIn = Math.ceil(inputData.length / bs)
+          const recordsOut = Math.ceil(outputData.length / bs)
+          const stderr = `${recordsIn}+0 records in\n${recordsOut}+0 records out\n${outputData.length} bytes copied`
+
+          // Write output to file or stdout
+          if (outputFile) {
+            if (!this.fs) {
+              return this.createResult(fullCommand, '', 'dd: no filesystem capability for of=', 1, 1)
+            }
+            await this.fs.write(outputFile, outputData)
+            return this.createResult(fullCommand, '', stderr, 0, 1)
+          }
+
           const stdout = new TextDecoder().decode(outputData)
-          return this.createResult(fullCommand, stdout, '', 0, 1)
+          return this.createResult(fullCommand, stdout, stderr, 0, 1)
         }
 
         case 'od': {
