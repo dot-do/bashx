@@ -375,7 +375,7 @@ export class BashModule implements BashCapability {
   /**
    * Native implementation of 'cat' using FsCapability (from fsx.do).
    */
-  private async nativeCat(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+  private async nativeCat(args: string[], _options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs || args.length === 0) return null
 
     // Simple cat: cat file1 [file2 ...]
@@ -399,7 +399,7 @@ export class BashModule implements BashCapability {
   /**
    * Native implementation of 'ls' using FsCapability (from fsx.do).
    */
-  private async nativeLs(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+  private async nativeLs(args: string[], _options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
 
     // Simple ls: ls [path]
@@ -424,7 +424,7 @@ export class BashModule implements BashCapability {
   /**
    * Native implementation of 'test' using FsCapability (from fsx.do).
    */
-  private async nativeTest(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+  private async nativeTest(args: string[], _options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
 
     // Support: test -e file, test -f file, test -d file
@@ -467,7 +467,7 @@ export class BashModule implements BashCapability {
   /**
    * Native implementation of 'head' using FsCapability (from fsx.do).
    */
-  private async nativeHead(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+  private async nativeHead(args: string[], _options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
 
     // Parse arguments: head [-n lines] file
@@ -501,7 +501,7 @@ export class BashModule implements BashCapability {
   /**
    * Native implementation of 'tail' using FsCapability (from fsx.do).
    */
-  private async nativeTail(args: string[], options?: ExecOptions): Promise<BashResult | null> {
+  private async nativeTail(args: string[], _options?: ExecOptions): Promise<BashResult | null> {
     if (!this.fs) return null
 
     // Parse arguments: tail [-n lines] file

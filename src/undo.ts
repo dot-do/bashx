@@ -12,7 +12,7 @@
 
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import { readFileSync, existsSync, statSync, readdirSync } from 'fs'
+import { readFileSync, existsSync, statSync } from 'fs'
 import { join, basename } from 'path'
 import type { BashResult, SafetyClassification } from './types.js'
 
@@ -233,7 +233,7 @@ function isDirectory(path: string): boolean {
 /**
  * Generate undo command for cp operation
  */
-function generateCpUndo(command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
+function generateCpUndo(_command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
   const { flags, paths } = extractFlagsAndPaths(args)
   const recursive = hasRecursive(flags)
 
@@ -287,8 +287,8 @@ function generateCpUndo(command: string, args: string[]): { undoCommand: string;
 /**
  * Generate undo command for mv operation
  */
-function generateMvUndo(command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
-  const { flags, paths } = extractFlagsAndPaths(args)
+function generateMvUndo(_command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
+  const { paths } = extractFlagsAndPaths(args)
 
   if (paths.length < 2) return null
 
@@ -338,10 +338,10 @@ function generateMvUndo(command: string, args: string[]): { undoCommand: string;
 /**
  * Generate undo command for rm operation
  */
-function generateRmUndo(command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
+function generateRmUndo(_command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
   if (!undoOptions.trackDeletedContent) return null
 
-  const { flags, paths } = extractFlagsAndPaths(args)
+  const { paths } = extractFlagsAndPaths(args)
   const files: UndoEntry['files'] = []
 
   // For rm, we need to capture file content before deletion
@@ -374,7 +374,7 @@ function generateRmUndo(command: string, args: string[]): { undoCommand: string;
 /**
  * Generate undo command for mkdir operation
  */
-function generateMkdirUndo(command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
+function generateMkdirUndo(_command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
   const { flags, paths } = extractFlagsAndPaths(args)
   const hasP = flags.some(f => f === '-p' || f.includes('p'))
   const files: UndoEntry['files'] = []

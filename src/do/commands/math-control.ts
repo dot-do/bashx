@@ -143,7 +143,7 @@ type TokenType = 'number' | 'operator' | 'function' | 'variable' | 'paren'
 /**
  * Token representation for the expression parser.
  */
-interface Token {
+export interface Token {
   type: TokenType
   value: string | number
 }
@@ -847,7 +847,7 @@ function evaluateComparison(tokens: string[], idx: number): string {
  * @param ops - Valid operators for this evaluation
  * @returns Result as string
  */
-function evaluateArithmetic(tokens: string[], idx: number, ops: string[]): string {
+function evaluateArithmetic(tokens: string[], idx: number, _ops: string[]): string {
   const left = evaluateExprTokens(tokens.slice(0, idx))
   const op = tokens[idx].replace(/^\\/, '')
   const right = evaluateExprTokens(tokens.slice(idx + 1))

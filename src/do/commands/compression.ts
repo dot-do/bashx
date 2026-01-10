@@ -200,7 +200,10 @@ const BufferUtils = {
 
     // Try decode and re-encode, compare lengths
     try {
-      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      const decoder = new TextDecoder('utf-8')
+      // @ts-expect-error - fatal option is standard but missing from CF types
+      decoder.fatal = true
+      const decoded = decoder.decode(bytes)
       const reencoded = new TextEncoder().encode(decoded)
       return bytes.length === reencoded.length
     } catch {
@@ -384,7 +387,8 @@ const GzipCodec: CompressionCodec = {
   magicBytes: [0x1f, 0x8b],
 
   compress(data: Uint8Array, options?: CompressionOptions): Uint8Array {
-    return pako.gzip(data, { level: options?.level ?? 6 })
+    const level = (options?.level ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+    return pako.gzip(data, { level })
   },
 
   decompress(data: Uint8Array): Uint8Array {
@@ -618,7 +622,7 @@ function parseTarHeader(header: Uint8Array): ArchiveEntry | null {
 /**
  * ZIP archive handler using fflate library.
  */
-const ZipHandler: ArchiveHandler = {
+export const ZipHandler: ArchiveHandler = {
   /**
    * Build a ZIP archive from entries.
    *
@@ -626,11 +630,11 @@ const ZipHandler: ArchiveHandler = {
    * @returns ZIP archive data
    */
   build(entries: ArchiveEntry[]): Uint8Array {
-    const zipInput: Record<string, fflate.ZipInputFile> = {}
+    const zipInput: fflate.Zippable = {}
 
     for (const entry of entries) {
       if (entry.type === 'file') {
-        zipInput[entry.name] = [entry.content, { level: 6 }]
+        zipInput[entry.name] = [entry.content, { level: 6 }] as fflate.AsyncZippableFile
       }
       // Note: fflate handles directories implicitly from paths
     }
@@ -1429,9 +1433,9 @@ export async function zip(ctx: CommandContext): Promise<BashResult> {
     }
 
     // Create zip with compression
-    const zipOptions: Record<string, fflate.ZipInputFile> = {}
+    const zipOptions: fflate.Zippable = {}
     for (const [name, content] of Object.entries(zipData)) {
-      zipOptions[name] = [content, { level }]
+      zipOptions[name] = [content, { level }] as fflate.AsyncZippableFile
     }
 
     const zipResult = fflate.zipSync(zipOptions)

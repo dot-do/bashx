@@ -30,7 +30,7 @@
  * @module bashx/do/commands/crypto
  */
 
-import type { BashResult, FsCapability, ExecOptions } from '../../types.js'
+import type { FsCapability } from '../../types.js'
 
 // ============================================================================
 // TYPES
@@ -1588,7 +1588,7 @@ async function executeHashCommandWithHasher(
  */
 async function executeHashCommand(
   algorithm: HashAlgorithm,
-  hashLength: number,
+  _hashLength: number,
   tagName: string,
   args: string[],
   ctx: CryptoCommandContext
@@ -1605,7 +1605,6 @@ async function executeHashCommand(
   let checkMode = false
   let bsdStyle = false
   let binaryMode = false
-  let textMode = false
   let quiet = false
   let status = false
   let warn = false
@@ -1620,7 +1619,7 @@ async function executeHashCommand(
     } else if (arg === '-b') {
       binaryMode = true
     } else if (arg === '-t') {
-      textMode = true
+      // Text mode - no-op since we treat all input as text
     } else if (arg === '--quiet') {
       quiet = true
     } else if (arg === '--status') {
@@ -1673,8 +1672,7 @@ async function executeHashCommand(
       } else {
         stdout += `${hash}  ${file}\n`
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+    } catch {
       stderr += `${algorithm}sum: ${file}: No such file or directory\n`
       exitCode = 1
     }

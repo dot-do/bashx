@@ -387,7 +387,7 @@ export class PackGenerator {
       }
     }
 
-    const compressionLevel = options?.compressionLevel ?? 6
+    const compressionLevel = (options?.compressionLevel ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
     const useDelta = options?.useDelta ?? false
     const preferRefDelta = options?.preferRefDelta ?? false
 
@@ -733,7 +733,7 @@ export class StreamingPackGenerator {
     }
 
     const sha1 = new StreamingSha1()
-    const compressionLevel = this.options.compressionLevel ?? 6
+    const compressionLevel = (this.options.compressionLevel ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
     const useDelta = this.options.useDelta ?? false
     const preferRefDelta = this.options.preferRefDelta ?? false
     const onProgress = this.options.onProgress

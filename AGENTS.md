@@ -20,26 +20,40 @@ Unlike fsx (filesystem) or gitx (git), bash commands can be irreversible and dan
 
 ```
 SDK Layer (src/index.ts)
-├── Tagged template: bashx`natural language`
-├── Direct methods: bashx.run(), bashx.explain(), etc.
-└── RPC client to backend
+├── Tagged template: bash`command`
+├── Options: confirm, dryRun, timeout, cwd
+└── Rich BashResult with AST, intent, classification
 
-Safety Layer (src/safety/)
-├── Command classification
-├── Pattern detection
-├── Risk assessment
-└── Alternative suggestions
+Core Library (core/) - @dotdo/bashx
+├── Pure library with zero Cloudflare dependencies
+├── core/types.ts - AST types (Program, Command, Pipeline, etc.)
+├── core/ast/ - Type guards, factory functions, serialization
+├── core/safety/ - Safety analysis, classification, intent extraction
+├── core/escape/ - POSIX-compliant shell escaping
+├── core/classify/ - Input classification (command vs natural language)
+└── core/backend.ts - Abstract shell backend interface
+
+AST Layer (src/ast/)
+├── tree-sitter-bash WASM integration
+├── Command parsing and analysis
+├── Syntax fixing and optimization
+└── Dependency tree extraction
 
 MCP Layer (src/mcp/)
-├── 18 tools for AI assistants
+├── Single `bash` tool for AI assistants
 ├── Tool definitions with schemas
-└── Handlers for each tool
+└── Handlers for execution
 
-Operations Layer (src/ops/)
+Execution Layer (src/execute.ts, src/undo.ts)
 ├── Actual command execution
 ├── Output parsing
 ├── Error recovery
 └── Undo tracking
+
+DO Layer (src/do/)
+├── Durable Object command implementations
+├── POSIX command emulation (cat, ls, find, etc.)
+└── Native Workers API mappings
 ```
 
 ## Key Types
@@ -63,20 +77,18 @@ This project follows strict TDD:
 ### Testing Structure
 
 ```
-test/
-├── safety/
-│   ├── classify.test.ts     # Command classification
-│   ├── patterns.test.ts     # Dangerous pattern detection
-│   └── analyze.test.ts      # Full safety analysis
-├── mcp/
-│   ├── tools.test.ts        # Tool definitions
-│   └── handlers.test.ts     # Tool execution
-├── ops/
-│   ├── exec.test.ts         # Command execution
-│   ├── parse.test.ts        # Output parsing
-│   └── recovery.test.ts     # Error recovery
-└── integration/
-    └── e2e.test.ts          # End-to-end tests
+tests/
+├── ast-*.test.ts            # AST parsing, traversal, intent extraction
+├── safety-*.test.ts         # Safety classification and gate tests
+├── structural-safety.test.ts # Structural safety analysis
+├── input-classification.test.ts # Command vs natural language detection
+├── tagged-template.test.ts  # Shell template interpolation
+├── exec.test.ts             # Command execution
+├── undo-tracking.test.ts    # Undo support
+├── mcp/                     # MCP tool tests
+├── posix/                   # POSIX command compatibility tests
+├── do/                      # Durable Object integration tests
+└── utils/                   # Test utilities
 ```
 
 ### Code Conventions

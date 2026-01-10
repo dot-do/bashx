@@ -177,7 +177,7 @@ export function $Context(
         throw new Error(`Failed to read ${path}: ${response.status}`)
       }
 
-      const result = await response.json()
+      const result = await response.json() as { content: string }
       return result.content
     },
 
@@ -220,8 +220,8 @@ export function $Context(
         throw new Error(`Failed to list ${path}: ${response.status}`)
       }
 
-      const result = await response.json()
-      return result.entries.map((e: { name: string }) => e.name)
+      const result = await response.json() as { entries: { name: string }[] }
+      return result.entries.map((e) => e.name)
     },
 
     async git(args: string[]): Promise<CommandResult> {
@@ -277,7 +277,7 @@ export function $Context(
         throw new Error(`MCP call failed: ${response.status}`)
       }
 
-      const result = await response.json()
+      const result = await response.json() as { error?: { message: string }; result: T }
       if (result.error) {
         throw new Error(result.error.message)
       }

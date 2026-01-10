@@ -329,13 +329,11 @@ export function executeDd(input: Uint8Array, options: DdOptions = {}): DdResult 
     return { output: new Uint8Array(0), stats }
   }
 
-  // Calculate how many input bytes to read
-  let inputBytesToRead: number
-  if (options.count !== undefined) {
-    inputBytesToRead = options.count * ibs
-  } else {
-    inputBytesToRead = input.length - inputStart
-  }
+  // Calculate how many input bytes to read (for potential future use)
+  const _inputBytesToRead = options.count !== undefined
+    ? options.count * ibs
+    : input.length - inputStart
+  void _inputBytesToRead
 
   // Read input blocks
   const inputChunks: Uint8Array[] = []

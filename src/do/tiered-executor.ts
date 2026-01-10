@@ -23,7 +23,6 @@ import {
   executeShuf,
   executeSleep,
   executeTimeout,
-  parseDuration,
   timeoutCommandNotFound,
   type SeqOptions,
   type ShufOptions,
@@ -43,7 +42,6 @@ import {
   EnvsubstError,
 } from './commands/data-processing.js'
 import {
-  CRYPTO_COMMANDS,
   executeCryptoCommand,
 } from './commands/crypto.js'
 import {
@@ -53,7 +51,6 @@ import {
   executePatch,
   executeTee,
   executeXargs,
-  TEXT_PROCESSING_COMMANDS,
 } from './commands/text-processing.js'
 import {
   executeCut,
@@ -68,7 +65,6 @@ import {
   executeDate,
   executeDd,
   executeOd,
-  POSIX_UTILS_COMMANDS,
   type CutOptions,
   type SortOptions,
   type TrOptions,
@@ -84,11 +80,9 @@ import {
   executeWhoami,
   executeHostname,
   executePrintenv,
-  SYSTEM_UTILS_COMMANDS,
   type SystemUtilsContext,
 } from './commands/system-utils.js'
 import {
-  EXTENDED_UTILS_COMMANDS,
   parseEnvArgs,
   executeEnv,
   formatEnv,
@@ -100,15 +94,10 @@ import {
   DEFAULT_WORKER_SYSINFO,
   parseTacArgs,
   executeTac,
-  parseShufArgs,
-  executeShuf as executeExtendedShuf,
-  parseTimeoutArgs,
-  executeTimeout as executeExtendedTimeout,
 } from './commands/extended-utils.js'
 import {
   executeTest,
   createFileInfoProvider,
-  TEST_COMMANDS,
 } from './commands/test-command.js'
 
 // ============================================================================
@@ -434,7 +423,8 @@ export class TieredExecutor implements BashExecutor {
   private readonly workerLoaders: Record<string, WorkerLoaderBinding>
   private readonly sandbox?: SandboxBinding
   private readonly defaultTimeout: number
-  private readonly preferFaster: boolean
+  /** @internal Reserved for future optimization strategy selection */
+  public readonly preferFaster: boolean
 
   constructor(config: TieredExecutorConfig) {
     this.fs = config.fs
@@ -800,6 +790,7 @@ export class TieredExecutor implements BashExecutor {
 
     try {
       let stdout = ''
+      let stderr = ''
       let exitCode = 0
 
       switch (cmd) {
@@ -965,10 +956,10 @@ export class TieredExecutor implements BashExecutor {
         case '[': {
           // Full test/[ implementation with all POSIX operators
           const fileInfoProvider = this.fs ? createFileInfoProvider(this.fs) : undefined
-          const result = await executeTest(args, { fileInfoProvider })
+          const result = await executeTest(args, fileInfoProvider)
           exitCode = result.exitCode
-          if (result.error) {
-            stderr = result.error
+          if (result.stderr) {
+            stderr = result.stderr
           }
           break
         }
@@ -1255,7 +1246,7 @@ export class TieredExecutor implements BashExecutor {
           throw new Error(`Unsupported native fs command: ${cmd}`)
       }
 
-      return this.createResult(`${cmd} ${args.join(' ')}`, stdout, '', exitCode, 1)
+      return this.createResult(`${cmd} ${args.join(' ')}`, stdout, stderr, exitCode, 1)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return this.createResult(`${cmd} ${args.join(' ')}`, '', message, 1, 1)
@@ -2681,7 +2672,7 @@ export class TieredExecutor implements BashExecutor {
   private async executeLoadedModule(
     module: unknown,
     command: string,
-    options?: ExecOptions
+    _options?: ExecOptions
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     // This is a placeholder for module-specific execution logic
     // Real implementation would handle each module type appropriately
@@ -2715,7 +2706,7 @@ export class TieredExecutor implements BashExecutor {
    */
   private async executeTier4(
     command: string,
-    classification: TierClassification,
+    _classification: TierClassification,
     options?: ExecOptions
   ): Promise<BashResult> {
     if (!this.sandbox) {
@@ -2971,7 +2962,7 @@ export class TieredExecutor implements BashExecutor {
  * ```
  */
 export function createTieredExecutor(
-  env: Record<string, unknown>,
+  _env: Record<string, unknown>,
   options?: Partial<TieredExecutorConfig>
 ): TieredExecutor {
   return new TieredExecutor({

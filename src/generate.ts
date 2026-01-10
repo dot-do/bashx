@@ -75,23 +75,8 @@ interface IntentPattern {
   ) => Partial<GenerateCommandResult>
 }
 
-/**
- * Extract filename from intent, handling quotes and special characters
- */
-function extractFilename(intent: string, patterns: RegExp[]): string | null {
-  for (const pattern of patterns) {
-    const match = intent.match(pattern)
-    if (match) {
-      // Check for quoted filename
-      const quotedMatch = intent.match(/["']([^"']+)["']/)
-      if (quotedMatch) {
-        return quotedMatch[1]
-      }
-      return match[1]
-    }
-  }
-  return null
-}
+// extractFilename is reserved for future complex filename extraction
+// Currently unused as simpler inline extraction is sufficient
 
 /**
  * Quote filename if it contains special characters or spaces
@@ -116,7 +101,7 @@ const intentPatterns: IntentPattern[] = [
       /^list\s+all\s+files?\s+with\s+details\s+(?:including\s+)?hidden$/i,
       /^list\s+files?\s+with\s+details$/i,
     ],
-    handler: (match, intent) => ({
+    handler: () => ({
       command: 'ls -la',
       confidence: 0.95,
       explanation: 'Lists all files including hidden ones with detailed information',
@@ -212,7 +197,7 @@ const intentPatterns: IntentPattern[] = [
       /^create\s+nested\s+director(?:y|ies)\s+(.+)$/i,
       /^create\s+parent\s+director(?:y|ies)\s+if\s+they\s+don'?t\s+exist$/i,
     ],
-    handler: (match, intent) => {
+    handler: (match) => {
       const path = match[1] || 'directory'
       return {
         command: `mkdir -p ${path}`,
@@ -241,7 +226,7 @@ const intentPatterns: IntentPattern[] = [
   // ============================================
   {
     patterns: [/^delete\s+(.+\.[\w]+)$/i, /^remove\s+(.+\.[\w]+)$/i, /^rm\s+(.+)$/i],
-    handler: (match, intent) => {
+    handler: (match, _intent) => {
       const filename = match[1]
       return {
         command: `rm ${quoteIfNeeded(filename)}`,
@@ -841,7 +826,7 @@ const intentPatterns: IntentPattern[] = [
   // ============================================
   {
     patterns: [/^delete\s+file\s+with(.+)$/i],
-    handler: (match, intent) => {
+    handler: (match) => {
       // Extract the filename with special chars
       const filename = match[1].trim()
       return {

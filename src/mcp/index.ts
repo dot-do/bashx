@@ -6,7 +6,7 @@
  * That's it. One tool that does everything.
  */
 
-import type { BashMcpTool, BashResult, Intent, SafetyClassification, Program, Fix } from '../types.js'
+import type { BashMcpTool, BashResult, Intent, SafetyClassification, Fix } from '../types.js'
 import { parse } from '../ast/parser.js'
 import { analyze } from '../ast/analyze.js'
 import { autoFix } from '../ast/fix.js'

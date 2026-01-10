@@ -95,12 +95,12 @@ function createMockFsCapability(): FsCapability {
   }
 
   return {
-    read: async (path: string, options?: { encoding?: string }) => {
+    read: async (path: string) => {
       if (files[path]) return files[path]
       throw new Error(`ENOENT: no such file: ${path}`)
     },
     exists: async (path: string) => path in files,
-    list: async (path: string, options?: { withFileTypes?: boolean }) => {
+    list: async (path: string) => {
       const entries = Object.keys(files)
         .filter((f) => f.startsWith(path + '/'))
         .map((f) => {

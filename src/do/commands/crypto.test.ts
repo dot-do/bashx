@@ -16,7 +16,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   TieredExecutor,
-  type TieredExecutorConfig,
   type SandboxBinding,
 } from '../tiered-executor.js'
 import type { FsCapability, BashResult } from '../../types.js'
@@ -60,12 +59,12 @@ a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447  /test.txt`,
   }
 
   return {
-    read: async (path: string, options?: { encoding?: string }) => {
+    read: async (path: string) => {
       if (files[path] !== undefined) return files[path]
       throw new Error(`ENOENT: no such file: ${path}`)
     },
-    exists: async (path) => path in files || path in directories,
-    list: async (path: string, options?: { withFileTypes?: boolean }) => {
+    exists: async (path: string) => path in files || path in directories,
+    list: async (path: string) => {
       return directories[path] || []
     },
     stat: async (path: string) => {

@@ -14,7 +14,6 @@ import {
   parseSize,
   formatDdStats,
   isDdCommand,
-  type DdOptions,
   type DdStats,
 } from './dd-command.js'
 

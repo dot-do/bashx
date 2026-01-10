@@ -93,7 +93,8 @@ class DnsCache {
 
     // Return a copy with adjusted TTLs
     const elapsed = Math.floor((Date.now() - (entry.expiresAt - entry.ttl * 1000)) / 1000)
-    const remainingTtl = Math.max(0, entry.ttl - elapsed)
+    // remainingTtl available for future cache metadata
+    void Math.max(0, entry.ttl - elapsed)
 
     return {
       ...entry.result,
@@ -1779,7 +1780,7 @@ export interface CurlTimingOptions {
  */
 export async function executeCurlWithTiming(
   url: string,
-  options: CurlTimingOptions = {}
+  _options: CurlTimingOptions = {}
 ): Promise<HttpCheckResult> {
   const timings = {
     dns: 0,

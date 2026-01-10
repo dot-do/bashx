@@ -8,21 +8,13 @@
  * The implementation files (http-client.ts, auth.ts) don't exist yet.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll, beforeAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, beforeAll } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 
 // Import from files that don't exist yet - will fail until implemented
 import {
   GitHttpClient,
-  type RefAdvertisement,
-  type UploadPackRequest,
-  type UploadPackResponse,
-  type ReceivePackRequest,
-  type ReceivePackResponse,
-  type RefUpdate,
-  type RefUpdateResult,
-  type ServerCapabilities,
 } from './http-client.js'
 
 import {
@@ -30,9 +22,6 @@ import {
   createAuthHeader,
   getTokenFromEnv,
   parseWwwAuthenticate,
-  type AuthCredentials,
-  type AuthMethod,
-  type RateLimitInfo,
 } from './auth.js'
 
 // =============================================================================

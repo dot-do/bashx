@@ -262,8 +262,9 @@ function parseSedDelete(script: string): { start?: number; end?: number; pattern
  * executeSed(['s/hello/world/g'], 'hello hello')
  * // => { stdout: 'world world\n', stderr: '', exitCode: 0 }
  */
-export function executeSed(args: string[], input: string, fs?: FsCapability): { stdout: string; stderr: string; exitCode: number } {
-  const { options, script, files } = parseSedArgs(args)
+export function executeSed(args: string[], input: string, _fs?: FsCapability): { stdout: string; stderr: string; exitCode: number } {
+  const { options, script, files: _files } = parseSedArgs(args)
+  void _files // Reserved for future file input support
   const scripts = options.expressions!.length > 0 ? options.expressions! : [script]
 
   // If files provided, we'd need to read from fs - for now just use input
@@ -546,7 +547,7 @@ function executeAwkAction(
             if (argsStr) {
               const args = argsStr.split(/\s*,\s*/).map(a => evaluateAwkExpression(a.trim(), fields, variables, options))
               let argIndex = 0
-              format = format.replace(/%(-?\d*\.?\d*)?([sdxef])/g, (_, width, type) => {
+              format = format.replace(/%(-?\d*\.?\d*)?([sdxef])/g, (_match, _width, type) => {
                 const val = args[argIndex++] || ''
                 if (type === 'd') {
                   return String(parseInt(val, 10) || 0)
@@ -1139,8 +1140,9 @@ function formatContextDiff(
 
 /**
  * Parse diff command arguments
+ * @internal Reserved for future CLI diff support
  */
-function parseDiffArgs(args: string[]): { options: DiffOptions; files: string[] } {
+export function parseDiffArgs(args: string[]): { options: DiffOptions; files: string[] } {
   const options: DiffOptions = {}
   const files: string[] = []
 
@@ -1448,8 +1450,9 @@ function stripPathPrefix(path: string, level: number): string {
 
 /**
  * Parse patch command arguments
+ * @internal Reserved for future CLI patch support
  */
-function parsePatchArgs(args: string[]): { options: PatchOptions; patchFile?: string } {
+export function parsePatchArgs(args: string[]): { options: PatchOptions; patchFile?: string } {
   const options: PatchOptions = { stripLevel: 0 }
   let patchFile: string | undefined
 

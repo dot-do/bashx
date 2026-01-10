@@ -10,8 +10,10 @@
 /**
  * Characters that are safe in shell without quoting.
  * Includes: alphanumeric, underscore, hyphen, period, forward slash, colon, equals, at
+ * Only ASCII characters are considered safe - Unicode characters require quoting.
  */
-const SAFE_CHARS_REGEX = /^[a-zA-Z0-9_\-./:=@]+$/
+const SAFE_CHARS_REGEX = /^[\x20-\x7E]*$/ // Check if all chars are printable ASCII
+const SAFE_UNQUOTED_REGEX = /^[a-zA-Z0-9_\-./:=@]+$/ // Safe chars that don't need quoting
 
 /**
  * Escape a single argument for safe shell use.
@@ -37,8 +39,9 @@ export function shellEscapeArg(value: unknown): string {
     return "''"
   }
 
-  // If only safe characters, no quoting needed
-  if (SAFE_CHARS_REGEX.test(str)) {
+  // If only safe ASCII characters that don't need quoting, return as-is
+  // Must be printable ASCII AND only contain safe unquoted characters
+  if (SAFE_CHARS_REGEX.test(str) && SAFE_UNQUOTED_REGEX.test(str)) {
     return str
   }
 

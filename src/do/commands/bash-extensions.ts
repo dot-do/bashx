@@ -631,12 +631,12 @@ export function expandVariables(template: string, env: Record<string, string>): 
   result = result.replace(/\$\$/g, '\x00ESCAPED_DOLLAR\x00')
 
   // Handle ${...} expansions
-  result = result.replace(/\$\{([^}]+)\}/g, (match, expr) => {
+  result = result.replace(/\$\{([^}]+)\}/g, (_match, expr) => {
     return expandBracedVariable(expr, env)
   })
 
   // Handle simple $VAR expansions
-  result = result.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (match, varName) => {
+  result = result.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, varName) => {
     return env[varName] ?? ''
   })
 

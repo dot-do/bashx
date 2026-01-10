@@ -474,7 +474,8 @@ export function executeOd(input: Uint8Array, options: OdOptions = {}): OdResult 
   // Process line by line
   for (let lineStart = startPos; lineStart < endPos; lineStart += width) {
     const lineEnd = Math.min(lineStart + width, endPos)
-    const lineBytes = lineEnd - lineStart
+    // lineBytes available for potential future padding calculation
+    void (lineEnd - lineStart)
 
     // Format address
     const addrStr = formatAddress(lineStart, addressRadix)

@@ -275,8 +275,9 @@ function parsePackData(
 
 /**
  * Check if GitHub REST API is available for a URL
+ * @internal Reserved for future GitHub API integration
  */
-function isGitHubUrl(url: string): boolean {
+export function isGitHubUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     return parsed.hostname === 'github.com' || parsed.hostname.endsWith('.github.com')
@@ -287,8 +288,9 @@ function isGitHubUrl(url: string): boolean {
 
 /**
  * Parse GitHub owner/repo from URL
+ * @internal Reserved for future GitHub API integration
  */
-function parseGitHubRepo(url: string): { owner: string; repo: string } | null {
+export function parseGitHubRepo(url: string): { owner: string; repo: string } | null {
   try {
     const parsed = new URL(url)
     const parts = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '').split('/')

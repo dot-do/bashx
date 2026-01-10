@@ -909,7 +909,8 @@ export class JqEngine {
     // has("key") condition
     const hasCondMatch = trimmed.match(/^has\("([^"]+)"\)$/) || trimmed.match(/^has\(\\"([^"]+)\\"\)$/)
     if (hasCondMatch) {
-      return data && typeof data === 'object' && hasCondMatch[1] in (data as Record<string, unknown>)
+      const hasKey = data && typeof data === 'object' && hasCondMatch[1] in (data as Record<string, unknown>)
+      return hasKey as boolean
     }
 
     return false

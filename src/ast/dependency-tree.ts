@@ -23,8 +23,6 @@ import type {
   CompoundCommand,
   FunctionDef,
   Word,
-  Redirect,
-  Assignment,
 } from '../types.js'
 
 // ============================================================================
@@ -407,33 +405,9 @@ function processCommand(
 /**
  * Process a pipeline
  */
-function processPipeline(pipeline: Pipeline, ctx: BuildContext): string {
-  let prevNodeId: string | undefined
-
-  for (let i = 0; i < pipeline.commands.length; i++) {
-    const cmd = pipeline.commands[i]
-    const nodeId = processCommand(cmd, ctx, {
-      edgeType: prevNodeId ? 'pipe' : undefined,
-      fromNodeId: prevNodeId,
-    })
-
-    // Add pipe data flow information
-    if (prevNodeId) {
-      // Find the edge we just added and update it
-      const edge = ctx.edges[ctx.edges.length - 1]
-      if (edge && edge.type === 'pipe') {
-        edge.dataFlow = {
-          sourceFd: 1, // stdout
-          targetFd: 0, // stdin
-        }
-      }
-    }
-
-    prevNodeId = nodeId
-  }
-
-  return prevNodeId!
-}
+// processPipeline is unused - pipeline processing is inline in processNode
+// Keeping code for reference but marking as intentionally unused
+// function processPipeline(pipeline: Pipeline, ctx: BuildContext): string { ... }
 
 /**
  * Process a list (sequence, AND, OR, or background)
@@ -467,7 +441,6 @@ function processList(list: List, ctx: BuildContext): { firstNodeId: string; last
   }
 
   // Process right side with edge from left
-  const savedLastNodeId = ctx.lastNodeId
   ctx.lastNodeId = leftResult.lastNodeId
 
   const rightResult = processNodeWithEdge(list.right, ctx, {

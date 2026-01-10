@@ -9,7 +9,7 @@
  * - Invalid pipe/redirect syntax
  */
 
-import type { Program, ParseError, BashNode, Command, Word, Pipeline, List, Subshell, CompoundCommand, Redirect, Assignment } from '../types.js'
+import type { Program, ParseError, BashNode, Command, Word, List, Subshell, CompoundCommand, Redirect, Assignment } from '../types.js'
 
 // ============================================================================
 // Token Types
@@ -36,6 +36,7 @@ type TokenType =
   | 'REDIRECT_IN'
   | 'REDIRECT_HEREDOC'
   | 'REDIRECT_HERESTRING'
+  | 'REDIRECT_BOTH'
   | 'BACKGROUND'
   | 'IF'
   | 'THEN'
@@ -59,6 +60,7 @@ interface Token {
   value: string
   line: number
   column: number
+  fd?: number  // File descriptor for redirects (e.g., 2 for 2>&1)
 }
 
 // ============================================================================
@@ -271,7 +273,6 @@ class Lexer {
       while (this.pos < this.input.length) {
         const ch = this.peek()
         if (ch === '"' || ch === "'") {
-          const quoteStart = this.pos
           const quotedStr = this.readQuotedStringInExpansion(ch)
           result += quotedStr
           // Check if quote was unclosed (doesn't end with the same quote char it started with)
@@ -423,12 +424,17 @@ class Lexer {
       return { type: 'PIPE', value: '|', line: startLine, column: startColumn }
     }
 
-    // And/background
+    // And/background/combined redirect
     if (ch === '&') {
       this.advance()
       if (this.peek() === '&') {
         this.advance()
         return { type: 'AND', value: '&&', line: startLine, column: startColumn }
+      }
+      if (this.peek() === '>') {
+        this.advance()
+        // &> redirects both stdout and stderr
+        return { type: 'REDIRECT_BOTH', value: '&>', line: startLine, column: startColumn }
       }
       return { type: 'BACKGROUND', value: '&', line: startLine, column: startColumn }
     }
@@ -499,6 +505,42 @@ class Lexer {
         return { type: 'REDIRECT_IN', value: '<&', line: startLine, column: startColumn }
       }
       return { type: 'REDIRECT_IN', value: '<', line: startLine, column: startColumn }
+    }
+
+    // Check for digit followed by redirect (e.g., 2>&1, 2>file, 1>out)
+    if (/[0-9]/.test(ch)) {
+      const nextCh = this.peek(1)
+      if (nextCh === '>' || nextCh === '<') {
+        const fd = parseInt(this.advance(), 10)
+        const redirectCh = this.advance()
+
+        if (redirectCh === '>') {
+          if (this.peek() === '>') {
+            this.advance()
+            return { type: 'REDIRECT_APPEND', value: '>>', line: startLine, column: startColumn, fd }
+          }
+          if (this.peek() === '&') {
+            this.advance()
+            return { type: 'REDIRECT_OUT', value: '>&', line: startLine, column: startColumn, fd }
+          }
+          return { type: 'REDIRECT_OUT', value: '>', line: startLine, column: startColumn, fd }
+        } else {
+          // <
+          if (this.peek() === '<') {
+            this.advance()
+            if (this.peek() === '<') {
+              this.advance()
+              return { type: 'REDIRECT_HERESTRING', value: '<<<', line: startLine, column: startColumn, fd }
+            }
+            return { type: 'REDIRECT_HEREDOC', value: '<<', line: startLine, column: startColumn, fd }
+          }
+          if (this.peek() === '&') {
+            this.advance()
+            return { type: 'REDIRECT_IN', value: '<&', line: startLine, column: startColumn, fd }
+          }
+          return { type: 'REDIRECT_IN', value: '<', line: startLine, column: startColumn, fd }
+        }
+      }
     }
 
     // Words (including keywords)
@@ -590,7 +632,8 @@ class Parser {
     return token
   }
 
-  private expect(type: TokenType, message?: string): Token | null {
+  /** @internal Reserved for future use */
+  public expect(type: TokenType, message?: string): Token | null {
     const token = this.peek()
     if (token.type !== type) {
       if (message) {
@@ -628,7 +671,8 @@ class Parser {
       token.type === 'REDIRECT_APPEND' ||
       token.type === 'REDIRECT_IN' ||
       token.type === 'REDIRECT_HEREDOC' ||
-      token.type === 'REDIRECT_HERESTRING'
+      token.type === 'REDIRECT_HERESTRING' ||
+      token.type === 'REDIRECT_BOTH'
   }
 
   private parseRedirect(): Redirect | null {
@@ -653,7 +697,8 @@ class Parser {
       return null
     }
 
-    if (targetToken.type !== 'WORD' && targetToken.type !== 'ASSIGNMENT') {
+    // Accept WORD, ASSIGNMENT, or IN (which can be a filename like 'in')
+    if (targetToken.type !== 'WORD' && targetToken.type !== 'ASSIGNMENT' && targetToken.type !== 'IN') {
       this.errors.push({
         message: `Redirect incomplete: missing file after ${token.value}`,
         line: token.line,
@@ -673,13 +718,21 @@ class Parser {
       '<&': '<&',
       '<<': '<<',
       '<<<': '<<<',
+      '&>': '>&',  // &> is equivalent to >& for redirecting both stdout and stderr
     }
 
-    return {
+    const redirect: Redirect = {
       type: 'Redirect',
       op: opMap[token.value] ?? '>',
       target: { type: 'Word', value: target.value },
     }
+
+    // Include file descriptor if present
+    if (token.fd !== undefined) {
+      redirect.fd = token.fd
+    }
+
+    return redirect
   }
 
   private skipWhitespaceTokens(): void {
@@ -790,6 +843,15 @@ class Parser {
           } else {
             args.push(word)
           }
+        }
+      } else if (token.type === 'IN') {
+        // 'in' can appear as a filename (e.g., cmd < in), treat as word in command context
+        this.advance()
+        const word: Word = { type: 'Word', value: 'in' }
+        if (!name) {
+          name = word
+        } else {
+          args.push(word)
         }
       } else if (this.isCommandTerminator(token) || token.type === 'THEN' || token.type === 'DO' ||
         token.type === 'ELSE' || token.type === 'ELIF' || token.type === 'FI' ||
@@ -1008,6 +1070,103 @@ class Parser {
 
     const body: BashNode[] = []
 
+    // Check for C-style for loop: for ((...))
+    if (this.peek().type === 'LPAREN' && this.peek(1).type === 'LPAREN') {
+      this.advance() // consume first (
+      this.advance() // consume second (
+
+      // Parse the arithmetic expression until ))
+      let depth = 2
+      let exprContent = ''
+
+      while (depth > 0 && this.peek().type !== 'EOF') {
+        const currentToken = this.peek()
+
+        if (currentToken.type === 'LPAREN') {
+          depth++
+          exprContent += '('
+          this.advance()
+        } else if (currentToken.type === 'RPAREN') {
+          depth--
+          if (depth > 0) {
+            exprContent += ')'
+          }
+          this.advance()
+        } else {
+          exprContent += currentToken.value
+          this.advance()
+        }
+
+        // Add space between tokens (simplified)
+        if (depth > 0) {
+          exprContent += ' '
+        }
+      }
+
+      // Store the C-style expression
+      if (exprContent.trim()) {
+        body.push({
+          type: 'Command',
+          name: { type: 'Word', value: exprContent.trim() },
+          prefix: [],
+          args: [],
+          redirects: []
+        })
+      }
+
+      this.skipNewlines()
+
+      // Allow semicolon before do
+      if (this.peek().type === 'SEMICOLON') {
+        this.advance()
+        this.skipNewlines()
+      }
+
+      // Expect 'do'
+      if (this.peek().type !== 'DO') {
+        this.errors.push({
+          message: "Missing 'do' in for loop",
+          line: this.peek().line,
+          column: this.peek().column,
+          suggestion: "Add 'do' before the loop body",
+        })
+      } else {
+        this.advance()
+      }
+
+      this.skipNewlines()
+
+      // Parse loop body
+      while (this.peek().type !== 'DONE' && this.peek().type !== 'EOF') {
+        const node = this.parseCompoundList()
+        if (node) {
+          body.push(node)
+        } else {
+          break
+        }
+        this.skipNewlines()
+        if (this.peek().type === 'SEMICOLON') {
+          this.advance()
+          this.skipNewlines()
+        }
+      }
+
+      // Expect 'done'
+      if (this.peek().type !== 'DONE') {
+        this.errors.push({
+          message: "Missing 'done' to close for loop",
+          line: startToken.line,
+          column: startToken.column,
+          suggestion: "Add 'done' at the end",
+        })
+      } else {
+        this.advance()
+      }
+
+      return { type: 'CompoundCommand', kind: 'for', body }
+    }
+
+    // Standard for loop: for var in list
     // Parse variable name
     if (this.peek().type === 'WORD') {
       body.push({ type: 'Command', name: this.parseWord(), prefix: [], args: [], redirects: [] })
@@ -1249,13 +1408,21 @@ class Parser {
       const startToken = this.advance()
       const body: BashNode[] = []
 
-      // Parse test expression
+      // Parse test expression - [[ ]] can contain && and || as operators within the test
       while (this.peek().type !== 'DOUBLE_RBRACKET' && this.peek().type !== 'EOF') {
-        const word = this.parseWord()
-        if (word) {
-          body.push({ type: 'Command', name: word, prefix: [], args: [], redirects: [] })
+        const currentToken = this.peek()
+
+        // Handle && and || inside [[ ]]
+        if (currentToken.type === 'AND' || currentToken.type === 'OR') {
+          const opToken = this.advance()
+          body.push({ type: 'Command', name: { type: 'Word', value: opToken.value }, prefix: [], args: [], redirects: [] })
         } else {
-          break
+          const word = this.parseWord()
+          if (word) {
+            body.push({ type: 'Command', name: word, prefix: [], args: [], redirects: [] })
+          } else {
+            break
+          }
         }
       }
 
@@ -1303,6 +1470,14 @@ class Parser {
 
   private parsePipeline(): BashNode | null {
     const commands: Command[] = []
+    let negated = false
+
+    // Check for negation (! at start of pipeline)
+    if (this.peek().type === 'WORD' && this.peek().value === '!') {
+      negated = true
+      this.advance() // consume !
+      this.skipWhitespaceTokens()
+    }
 
     // Check for leading pipe (error)
     if (this.peek().type === 'PIPE') {
@@ -1370,13 +1545,13 @@ class Parser {
       }
     }
 
-    if (commands.length === 1) {
+    if (commands.length === 1 && !negated) {
       return commands[0]
     }
 
     return {
       type: 'Pipeline',
-      negated: false,
+      negated,
       commands,
     }
   }

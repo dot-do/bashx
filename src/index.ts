@@ -31,8 +31,8 @@
  * ```
  */
 
-import { RPC, http, type Transport } from 'rpc.do'
-import type { BashResult, BashOptions, BashClient, BashClientExtended } from './types.js'
+import { RPC, http } from 'rpc.do'
+import type { BashResult, BashOptions, BashClientExtended } from './types.js'
 
 export * from './types.js'
 

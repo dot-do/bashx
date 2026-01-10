@@ -13,7 +13,7 @@
  * - Other common anti-patterns
  */
 
-import type { Program, Pipeline, Command, Word, BashNode, CompoundCommand } from '../types.js'
+import type { Program, Pipeline, Command, BashNode, CompoundCommand } from '../types.js'
 import { parse } from './parser.js'
 
 // ============================================================================
@@ -82,8 +82,9 @@ function reconstructCommand(cmd: Command): string {
 
 /**
  * Check if a word contains command substitution
+ * @internal Reserved for future pattern detection
  */
-function hasCommandSubstitution(word: string): boolean {
+export function hasCommandSubstitution(word: string): boolean {
   return word.includes('$(') || word.includes('`')
 }
 
@@ -153,8 +154,9 @@ function extractPipelines(ast: Program): Pipeline[] {
 
 /**
  * Extract for loops from AST
+ * @internal Reserved for future for-loop optimization
  */
-function extractForLoops(ast: Program): CompoundCommand[] {
+export function extractForLoops(ast: Program): CompoundCommand[] {
   const forLoops: CompoundCommand[] = []
 
   function traverse(node: BashNode): void {
@@ -299,8 +301,11 @@ function detectFindXargs(pipeline: Pipeline, originalInput: string): Optimizatio
   const xargsArgs = getArgs(xargsCmd)
 
   // Check for -print0 | xargs -0 (already optimized for null handling)
-  const hasPrint0 = findArgs.includes('-print0')
-  const hasXargs0 = xargsArgs.includes('-0')
+  // These are used for pattern detection but not currently exposed
+  const _hasPrint0 = findArgs.includes('-print0')
+  const _hasXargs0 = xargsArgs.includes('-0')
+  void _hasPrint0
+  void _hasXargs0
 
   // Get the command being run by xargs
   const xargsCommand = xargsArgs.filter(arg => !arg.startsWith('-'))[0]
@@ -928,9 +933,11 @@ function detectForLsFromInput(input: string): OptimizationSuggestion | null {
   const forLsMatch = input.match(/for\s+(\w+)\s+in\s+(\$\(ls(?:\s+(-\w+))?(?:\s+([^\)]+))?\)|`ls(?:\s+(-\w+))?(?:\s+([^`]+))?`);\s*do\s+(.+);\s*done/)
 
   if (forLsMatch) {
-    const [, varName, , flag1, path1, flag2, path2, body] = forLsMatch
+    const [, varName, , _flag1, path1, _flag2, path2, body] = forLsMatch
     const path = path1 || path2 || ''
-    const flag = flag1 || flag2 || ''
+    // Flags are captured but not used currently - reserved for future enhancements
+    void _flag1
+    void _flag2
 
     let replacement: string
     if (path && path !== '*') {

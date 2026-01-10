@@ -352,6 +352,38 @@ Output: BashResult with full metadata
 - **<5ms** for Tier 2 (RPC) commands
 - **AST parsing** with tree-sitter WASM
 
+## Core Library
+
+For platform-agnostic usage without Cloudflare dependencies, use `@dotdo/bashx`:
+
+```typescript
+import {
+  shellEscape,
+  classifyInput,
+  analyze,
+  createProgram,
+  createCommand
+} from '@dotdo/bashx'
+
+// Escape values for shell interpolation
+const escaped = shellEscape('my file.txt')  // => 'my file.txt'
+
+// Classify input as command or natural language
+const result = await classifyInput('ls -la')
+// { type: 'command', confidence: 0.95, ... }
+
+// Analyze AST for safety
+const ast = createProgram([createCommand('rm', ['-rf', 'temp'])])
+const { classification, intent } = analyze(ast)
+// classification: { type: 'delete', impact: 'high', reversible: false, ... }
+```
+
+The core library provides:
+- **AST types and utilities** - Type guards, factory functions, serialization
+- **Safety analysis** - Command classification, intent extraction, danger checks
+- **Shell escaping** - Safe interpolation utilities
+- **Input classification** - Distinguish commands from natural language
+
 ## License
 
 MIT

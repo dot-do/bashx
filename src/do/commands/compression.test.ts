@@ -12,8 +12,7 @@
  * @module bashx/do/commands/compression.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import type { BashResult } from '../../types.js'
+import { describe, it, expect, beforeEach } from 'vitest'
 
 // Import the compression handlers (to be implemented)
 // These imports will fail until implementation exists

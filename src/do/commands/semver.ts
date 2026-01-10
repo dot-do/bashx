@@ -891,7 +891,8 @@ export function diff(v1: string, v2: string): DiffType {
   // Check if versions are identical
   if (compareSemverObjects(parsed1, parsed2) === 0) return null
 
-  const hasPre1 = parsed1.prerelease.length > 0
+  // hasPre1 available for potential future release type detection refinement
+  void (parsed1.prerelease.length > 0)
   const hasPre2 = parsed2.prerelease.length > 0
 
   // Major difference

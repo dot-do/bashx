@@ -15,6 +15,8 @@ export default defineWorkersConfig({
       'tests/undo-tracking.test.ts',
       // POSIX compliance tests require real shell execution
       'tests/posix/**/*.test.ts',
+      // Core package tests require Node.js file system access
+      'test/**/*.test.ts',
     ],
     poolOptions: {
       workers: {

@@ -14,7 +14,6 @@ import { promisify } from 'util'
 import type {
   BashResult,
   ExecOptions,
-  Intent,
   SafetyClassification,
   Program,
   Command,
@@ -23,12 +22,11 @@ import type {
   BashNode,
   Word,
 } from './types.js'
-import { analyze, classifyCommand } from './ast/analyze.js'
+import { analyze } from './ast/analyze.js'
 import {
   trackForUndo,
   recordUndoEntry,
   isReversible,
-  type UndoEntry,
 } from './undo.js'
 
 const execAsync = promisify(exec)
@@ -283,8 +281,6 @@ function parseSimpleCommand(input: string): Command {
     // Extract commands inside substitution
     const match = trimmed.match(/\$\(([^)]+)\)/)
     if (match) {
-      // Parse inner command for analysis
-      const innerParsed = parseSimpleCommand(match[1])
       // Return a command that includes the substitution
       return parseCommandParts(trimmed)
     }
@@ -623,13 +619,8 @@ function requiresConfirmation(command: string, classification: SafetyClassificat
   return false
 }
 
-/**
- * Extract intent from parsed AST
- */
-function extractIntent(ast: Program): Intent {
-  const { intent } = analyze(ast)
-  return intent
-}
+// extractIntent is unused - analysis is done inline in execute function
+// Keeping for future API enhancements
 
 // ============================================================================
 // Main Execute Function

@@ -27,7 +27,6 @@ import {
   matchCasePattern,
   parseCaseStatement,
   type CaseStatement,
-  type CaseClause,
 
   // Full variable expansion
   expandVariables,

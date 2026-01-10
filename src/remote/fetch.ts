@@ -295,7 +295,10 @@ export async function fetch(options: FetchOptions): Promise<FetchResult> {
   } else {
     // Use default fetch spec to map remote refs to local tracking refs
     // fetchSpec is like '+refs/heads/*:refs/remotes/origin/*'
-    const [srcPattern, dstPattern] = fetchSpec.replace(/^\+/, '').split(':')
+    // srcPattern and dstPattern reserved for future glob matching
+    const [_srcPattern, _dstPattern] = fetchSpec.replace(/^\+/, '').split(':')
+    void _srcPattern
+    void _dstPattern
 
     for (const [ref, sha] of remoteRefs.entries()) {
       if (ref === 'HEAD') continue

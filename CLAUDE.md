@@ -39,13 +39,30 @@ BashResult (rich metadata)
 ```
 
 **Key directories:**
-- `src/` - Main source code
-- `src/ast/` - AST parsing and analysis (tree-sitter integration)
+- `src/` - Main source code (platform-dependent, Cloudflare Workers)
+- `src/ast/` - AST parsing and analysis (tree-sitter WASM integration)
 - `src/mcp/` - MCP tool definition (single `bash` tool)
+- `src/do/` - Durable Object integration and command implementations
+- `core/` - Pure library with zero Cloudflare dependencies (@dotdo/bashx)
+- `core/ast/` - AST type guards, factory functions, and serialization
+- `core/safety/` - Safety analysis, classification, and intent extraction
+- `core/escape/` - Shell escaping utilities (POSIX-compliant)
+- `core/classify/` - Input classification (command vs natural language)
 
 **Key files:**
 - `src/types.ts` - Single source of truth for all TypeScript types
 - `src/index.ts` - SDK entry point, exports `bash` function and `Bash()` factory
+- `core/index.ts` - Pure library entry point (re-exports all core modules)
+- `core/types.ts` - Core type definitions (AST nodes, Intent, SafetyClassification)
+- `core/backend.ts` - Abstract backend interface for shell execution
+
+**Core module exports (@dotdo/bashx):**
+- `@dotdo/bashx` - Main entry point
+- `@dotdo/bashx/ast` - AST utilities
+- `@dotdo/bashx/safety` - Safety analysis
+- `@dotdo/bashx/classify` - Input classification
+- `@dotdo/bashx/escape` - Shell escaping
+- `@dotdo/bashx/backend` - Backend interface
 
 ## Development Approach
 

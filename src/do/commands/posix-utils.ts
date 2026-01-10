@@ -659,7 +659,7 @@ export interface WcOptions {
  * // => { lines: 2, words: 4, bytes: 20, chars: 20 }
  * ```
  */
-export function executeWc(input: string, options: WcOptions = {}): WcResult {
+export function executeWc(input: string, _options: WcOptions = {}): WcResult {
   // Count lines (number of newlines)
   const lines = (input.match(/\n/g) || []).length
 
@@ -1006,7 +1006,7 @@ const DATE_FORMATS: Record<string, (d: Date, utc: boolean) => string> = {
   },
   '%p': (d, utc) => (utc ? d.getUTCHours() : d.getHours()) < 12 ? 'AM' : 'PM',
   '%P': (d, utc) => (utc ? d.getUTCHours() : d.getHours()) < 12 ? 'am' : 'pm',
-  '%Z': (d, utc) => utc ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone,
+  '%Z': (_d, utc) => utc ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone,
   '%z': (d, utc) => {
     if (utc) return '+0000'
     const offset = d.getTimezoneOffset()

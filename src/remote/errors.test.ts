@@ -8,7 +8,7 @@
  * - Timeout handling
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll, beforeAll } from 'vitest'
+import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 
