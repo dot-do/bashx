@@ -61,7 +61,7 @@ const TAR_HEADER_SIZE = 512
 
 // Tar type flags
 const TAR_TYPE_FILE = '0'
-const TAR_TYPE_LINK = '1'
+// TAR_TYPE_LINK = '1' - Reserved for future link type support
 const TAR_TYPE_SYMLINK = '2'
 const TAR_TYPE_DIR = '5'
 

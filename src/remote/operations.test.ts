@@ -13,14 +13,14 @@
  * @module bashx/remote/operations.test
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 
 // Import the remote operation handlers (to be implemented)
 // These imports will fail until implementation exists
-import { clone, type CloneOptions, type CloneResult } from './clone.js'
-import { fetch, type FetchOptions, type FetchResult } from './fetch.js'
-import { push, type PushOptions, type PushResult } from './push.js'
-import { pull, type PullOptions, type PullResult } from './pull.js'
+import { clone } from './clone.js'
+import { fetch } from './fetch.js'
+import { push } from './push.js'
+import { pull } from './pull.js'
 
 // ============================================================================
 // MOCK INFRASTRUCTURE
@@ -85,37 +85,6 @@ function createMockRepo(): MockRepo {
     workingTree: new Map(),
     index: new Map(),
   }
-}
-
-/**
- * Helper to create a mock commit object
- */
-function createMockCommit(opts: {
-  tree: string
-  parents: string[]
-  message: string
-  author?: string
-  committer?: string
-}): { sha: string; data: Uint8Array } {
-  const author = opts.author ?? 'Test Author <test@example.com> 1704067200 +0000'
-  const committer = opts.committer ?? author
-  const parentLines = opts.parents.map(p => `parent ${p}`).join('\n')
-  const content = [
-    `tree ${opts.tree}`,
-    parentLines,
-    `author ${author}`,
-    `committer ${committer}`,
-    '',
-    opts.message,
-  ].filter(Boolean).join('\n')
-
-  const data = new TextEncoder().encode(content)
-  // Simulated SHA (in real impl would be hash of header + content)
-  const sha = Array.from(data.slice(0, 20))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('')
-
-  return { sha, data }
 }
 
 /**
@@ -583,7 +552,7 @@ describe('fetch', () => {
 
     it('should only fetch missing objects (efficient)', async () => {
       const remoteUrl = 'https://github.com/example/repo.git'
-      const existingCommit = 'localcommit1234567890123456789012345'
+      // existingCommit would be 'localcommit1234567890123456789012345' - not sent in pack
       const newCommit = 'brandnewcommit12345678901234567890'
 
       http.infoRefs.set(remoteUrl, {
@@ -793,7 +762,7 @@ describe('push', () => {
   describe('basic push operations', () => {
     it('should push commits to remote', async () => {
       const remoteUrl = 'https://github.com/example/repo.git'
-      const localCommit = 'localpushcommit123456789012345678901'
+      // localCommit = 'localpushcommit123456789012345678901'
 
       http.infoRefs.set(remoteUrl, {
         refs: new Map([
@@ -1156,7 +1125,7 @@ describe('pull', () => {
   describe('fast-forward pull', () => {
     it('should fast-forward when possible', async () => {
       const remoteUrl = 'https://github.com/example/repo.git'
-      const localCommit = 'localpullcommit12345678901234567890'
+      // localCommit = 'localpullcommit12345678901234567890'
       const newCommit = 'newremotepullcommit12345678901234567'
 
       // New remote commit has local commit as parent (fast-forward possible)

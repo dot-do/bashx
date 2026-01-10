@@ -510,7 +510,6 @@ describe('GitHttpClient - Upload-Pack (Fetch)', () => {
 
     it('should handle chunked transfer encoding', async () => {
       // Simulate chunked response by returning response in multiple parts
-      const encoder = new TextEncoder()
       const stream = new ReadableStream({
         start(controller) {
           // First chunk - PACK header
@@ -771,11 +770,9 @@ describe('GitHttpClient - Receive-Pack (Push)', () => {
     })
 
     it('should handle multiple ref updates', async () => {
-      let capturedBody: ArrayBuffer | null = null
-
       server.use(
         http.post('https://github.com/test/repo.git/git-receive-pack', async ({ request }) => {
-          capturedBody = await request.arrayBuffer()
+          await request.arrayBuffer() // consume body
           return new HttpResponse(
             '000eunpack ok\n0019ok refs/heads/main\n001cok refs/heads/feature\n0000',
             {

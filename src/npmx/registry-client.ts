@@ -5,7 +5,7 @@
  */
 
 import { resolveVersion } from './version-resolver.js'
-import { validateIntegrity, computeShasum } from './tarball.js'
+import { validateIntegrity } from './tarball.js'
 
 // =============================================================================
 // TYPES

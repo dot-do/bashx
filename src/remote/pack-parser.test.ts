@@ -39,7 +39,7 @@
  * ```
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 
 // Import the pack parser (to be implemented)
 // These imports will fail until implementation exists
@@ -55,7 +55,6 @@ import {
   type PackHeader,
   type PackEntry,
   type PackObject,
-  type DeltaInstruction,
   PackParseError,
   InvalidMagicError,
   UnsupportedVersionError,
@@ -162,39 +161,9 @@ const COMMIT_COMPRESSED = new Uint8Array([
   0x5c, 0x3a, 0x01, 0x4d, 0x1c, 0x23, 0x86,
 ])
 
-/**
- * Fixture: Tree object
- *
- * Generate:
- * git ls-tree HEAD
- * git cat-file tree HEAD | xxd
- *
- * Pack entry type 2 = OBJ_TREE
- */
-const TREE_COMPRESSED = new Uint8Array([
-  // Type-size byte: type=2 (tree), size
-  0x52, // 0101 0010 = type 2, size 18
-  // zlib compressed tree content
-  0x78, 0x9c, 0x33, 0x34, 0x30, 0x30, 0x33, 0x31, 0x51, 0x48,
-  0xcb, 0xcc, 0x49, 0xd5, 0x2b, 0xa9, 0x28, 0x00, 0x00, 0x1d, 0x0c, 0x04, 0x9c,
-])
-
-/**
- * Fixture: Tag object
- *
- * Generate:
- * git tag -a v1.0 -m "Release"
- * git cat-file tag v1.0 | xxd
- *
- * Pack entry type 4 = OBJ_TAG
- */
-const TAG_COMPRESSED = new Uint8Array([
-  // Type-size byte: type=4 (tag), size with continuation
-  0xc4, 0x01, // type 4, varint size = 196
-  // zlib compressed tag content
-  0x78, 0x9c, 0x4b, 0x4f, 0x4a, 0x4a, 0x4c, 0x56, 0x30, 0x34,
-  0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x00, 0x00, 0x0b, 0x7c, 0x02, 0x57,
-])
+// Tree and Tag fixture data available in pack-fixtures.md for reference
+// TREE_COMPRESSED: type=2 (tree), size 18, zlib content
+// TAG_COMPRESSED: type=4 (tag), varint size = 196, zlib content
 
 /**
  * Fixture: OFS_DELTA entry
@@ -258,23 +227,8 @@ const DELTA_COPY_INSTRUCTION = new Uint8Array([
   0x77, 0x6f, 0x72, 0x6c, 0x64, 0x0a, // "world\n"
 ])
 
-/**
- * Fixture: Complete minimal packfile
- *
- * Contains: header + 1 blob + SHA-1 checksum
- */
-const COMPLETE_PACK_BLOB = new Uint8Array([
-  // Header
-  0x50, 0x41, 0x43, 0x4b, // "PACK"
-  0x00, 0x00, 0x00, 0x02, // Version 2
-  0x00, 0x00, 0x00, 0x01, // 1 object
-  // Blob entry
-  0x36, // type=3 (blob), size=6
-  0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0xe7, 0x02, 0x00, 0x08, 0x4c, 0x02, 0x13,
-  // SHA-1 checksum (20 bytes) - placeholder, real value computed
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-])
+// COMPLETE_PACK_BLOB fixture available in pack-fixtures.md for reference
+// Contains: header + 1 blob + placeholder SHA-1 checksum
 
 /**
  * Fixture: Corrupted packfile (bad checksum)
@@ -999,11 +953,7 @@ describe('Checksum Verification', () => {
 
     it('should verify checksum is SHA-1 of pack data minus footer', () => {
       const pack = createValidPackWithChecksum()
-
-      // Footer is last 20 bytes
-      const dataWithoutFooter = pack.slice(0, -20)
-      const footer = pack.slice(-20)
-
+      // Note: Footer is last 20 bytes, data without footer is pack.slice(0, -20)
       const result = verifyPackChecksum(pack)
 
       // The footer should equal SHA-1(header + entries)
@@ -1458,8 +1408,8 @@ function createPackWithDeltas(): Uint8Array {
 
   // Calculate offset from delta entry to base entry
   // Header = 12 bytes, base entry = 1 + baseCompressed.length
+  // offsetToBase = 1 + 1 + deltaCompressed.length (delta type-size + offset byte + data)
   const baseEntrySize = 1 + baseCompressed.length
-  const offsetToBase = 1 + 1 + deltaCompressed.length // delta type-size + offset byte + data
 
   const parts: number[] = [
     // Header

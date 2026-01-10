@@ -14,20 +14,17 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   PackGenerator,
   type PackObject,
-  type PackResult,
   ObjectType,
   OBJ_COMMIT,
   OBJ_TREE,
   OBJ_BLOB,
   OBJ_TAG,
-  OBJ_OFS_DELTA,
-  OBJ_REF_DELTA,
   computeSha1,
   computeGitObjectHash,
 } from './pack-generator.js'
 
 // We'll also need PackParser for round-trip tests
-import { PackParser, type ParsedObject } from './pack-parser.js'
+import { PackParser } from './pack-parser.js'
 
 // Helper to create test objects
 function createTestBlob(content: string): PackObject {

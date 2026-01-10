@@ -12,7 +12,6 @@ import {
   executeTest,
   executeTestSync,
   isTestCommand,
-  createFileInfoProvider,
   type FileInfo,
   type FileInfoProvider,
 } from './test-command.js'

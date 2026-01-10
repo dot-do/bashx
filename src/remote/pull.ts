@@ -163,8 +163,8 @@ function generateMergeCommitSha(parent1: string, parent2: string): string {
  */
 function detectConflicts(
   localRepo: MockRepo,
-  localCommit: string,
-  remoteCommit: string,
+  _localCommit: string,
+  _remoteCommit: string,
   hasLocalDiverged: boolean
 ): string[] {
   const conflicts: string[] = []

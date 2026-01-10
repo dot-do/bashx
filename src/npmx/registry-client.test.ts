@@ -8,25 +8,16 @@
  * RED phase: These tests are written to fail until implementation is complete.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 
 // Imports from modules that don't exist yet (RED phase)
 import {
   NpmRegistryClient,
-  type NpmRegistryClientOptions,
-  type PackageMetadata,
-  type PackageVersion,
   type VersionDistribution,
-  type NpmAuthCredentials,
-  type SearchResult,
-  type SearchOptions,
-  type RegistryEndpoint,
 } from './registry-client.js'
 
 import {
   parsePackageSpec,
-  type PackageSpec,
-  type SemverRange,
   resolveVersion,
   matchesRange,
   sortVersions,
@@ -35,8 +26,6 @@ import {
 
 import {
   extractTarball,
-  type TarballEntry,
-  type TarballMetadata,
   validateIntegrity,
   computeShasum,
 } from './tarball.js'

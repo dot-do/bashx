@@ -9,31 +9,22 @@
  * - Protocol version detection and fallback
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, afterAll, beforeAll } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 
 import {
-  GIT_PROTOCOL_V2_HEADER,
   FLUSH_PKT,
   DELIM_PKT,
-  RESPONSE_END_PKT,
-  pktLine,
-  parsePktLines,
   parseV2Capabilities,
   generateLsRefsCommand,
   parseLsRefsResponse,
   generateFetchCommand,
-  demuxSideBand,
   parseFetchResponse,
-  type ProtocolV2Capabilities,
-  type V2RefInfo,
-  type FetchResult,
 } from './protocol-v2.js'
 
 import {
   parsePktLine,
-  parsePktLineBinary,
   generatePktLine,
   generateFlushPkt,
   generateDelimPkt,
@@ -397,8 +388,7 @@ describe('fetch Command', () => {
 describe('Side-band Demultiplexing', () => {
   describe('demuxSideBand', () => {
     it('should extract packfile data from channel 1', () => {
-      // Create side-band packet with channel 1 data
-      const channel1Data = new Uint8Array([0x01, 0x50, 0x41, 0x43, 0x4b]) // \x01PACK
+      // Create side-band packet with channel 1 data (format: \x01 + PACK bytes)
       const packet = createSideBandPacket(1, new Uint8Array([0x50, 0x41, 0x43, 0x4b]))
 
       const result = pktLineDemuxSideBand(packet)
@@ -552,7 +542,7 @@ describe('Protocol v2 Fetch Response', () => {
 // HTTP Client Protocol v2 Integration Tests
 // =============================================================================
 
-const MOCK_REPO_URL = 'https://github.com/test/repo.git'
+// Mock repo URL used in handlers below: https://github.com/test/repo.git
 
 const handlers = [
   // Protocol v2 capability advertisement
@@ -648,7 +638,7 @@ describe('GitHttpClient Protocol v2', () => {
     it('should fall back to v1 if server does not support v2', async () => {
       const client = new GitHttpClient('https://github.com/test/repo-v1.git')
 
-      const refs = await client.discoverRefs('upload-pack')
+      await client.discoverRefs('upload-pack')
 
       expect(client.getProtocolVersion()).toBe(1)
     })

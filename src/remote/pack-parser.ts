@@ -17,10 +17,10 @@
 
 import pako from 'pako'
 import {
-  OBJ_COMMIT,
-  OBJ_TREE,
+  OBJ_COMMIT as _OBJ_COMMIT,
+  OBJ_TREE as _OBJ_TREE,
   OBJ_BLOB,
-  OBJ_TAG,
+  OBJ_TAG as _OBJ_TAG,
   OBJ_OFS_DELTA,
   OBJ_REF_DELTA,
   type ObjectType,
@@ -768,14 +768,6 @@ export class PackParser {
       checksum,
     }
   }
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
-  }
-  return bytes
 }
 
 // =============================================================================

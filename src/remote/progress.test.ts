@@ -4,11 +4,9 @@
  * @module bashx/remote/progress.test
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   type ProgressEvent,
-  type ProgressPhase,
-  type ProgressCallback,
   type ProgressOptions,
   createProgressEvent,
   emitPhase,
@@ -17,9 +15,9 @@ import {
   EventProgressReporter,
   NoopProgressReporter,
 } from './progress.js'
-import { clone, type CloneOptions } from './clone.js'
-import { fetch, type FetchOptions } from './fetch.js'
-import { push, type PushOptions } from './push.js'
+import { clone } from './clone.js'
+import { fetch } from './fetch.js'
+import { push } from './push.js'
 
 // =============================================================================
 // Progress Module Tests

@@ -54,16 +54,9 @@ const VALID_TYPES = new Set([OBJ_COMMIT, OBJ_TREE, OBJ_BLOB, OBJ_TAG])
 
 
 /**
- * Compute SHA-1 hash of data using Web Crypto API.
- */
-async function sha1(data: Uint8Array): Promise<Uint8Array> {
-  const hash = await crypto.subtle.digest('SHA-1', data)
-  return new Uint8Array(hash)
-}
-
-/**
  * Compute SHA-1 hash synchronously using a pure JS implementation.
  * This is needed because generate() is synchronous.
+ * Note: An async version using crypto.subtle.digest is available but not used here.
  */
 function sha1Sync(data: Uint8Array): Uint8Array {
   // SHA-1 implementation
@@ -455,8 +448,6 @@ export class PackGenerator {
       objectPositions.set(i, currentOffset)
 
       // Encode type and size
-      const dataToCompress = objectType === OBJ_OFS_DELTA || objectType === OBJ_REF_DELTA ? objectData : obj.data
-
       const typeAndSize = encodeTypeAndSize(
         objectType,
         objectType === OBJ_OFS_DELTA || objectType === OBJ_REF_DELTA

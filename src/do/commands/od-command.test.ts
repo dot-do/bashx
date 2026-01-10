@@ -13,8 +13,6 @@ import {
   parseOdArgs,
   parseTypeSpec,
   isOdCommand,
-  type OdOptions,
-  type OutputTypeSpec,
 } from './od-command.js'
 
 // ============================================================================

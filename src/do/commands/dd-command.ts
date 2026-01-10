@@ -377,7 +377,7 @@ export function executeDd(input: Uint8Array, options: DdOptions = {}): DdResult 
   }
 
   // Apply conversions
-  combinedInput = applyConversions(combinedInput, convFlags)
+  combinedInput = applyConversions(combinedInput, convFlags) as Uint8Array<ArrayBuffer>
 
   // Handle seek (output offset)
   const seekBytes = seek * obs

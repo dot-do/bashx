@@ -246,7 +246,7 @@ describe('gzip', () => {
       expect(await fs.exists('/test.txt.gz')).toBe(false)
       // stdout should contain compressed data
       expect(result.stdout).toBeDefined()
-      expect(typeof result.stdout === 'string' || result.stdout instanceof Uint8Array).toBe(true)
+      expect(typeof result.stdout === 'string' || (result.stdout as unknown) instanceof Uint8Array).toBe(true)
     })
   })
 

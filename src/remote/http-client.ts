@@ -26,10 +26,7 @@ import {
 
 import {
   type ProgressOptions,
-  type ProgressCallback,
   emitPhase,
-  emitProgress,
-  createProgressEvent,
 } from './progress.js'
 
 import {
@@ -44,7 +41,6 @@ import {
   parseLsRefsResponse,
   generateFetchCommand,
   parseFetchResponse,
-  demuxSideBand as demuxSideBandV2,
 } from './protocol-v2.js'
 
 import {
@@ -52,13 +48,10 @@ import {
   AuthenticationError,
   RateLimitError,
   RepositoryNotFoundError,
-  PushRejectedError,
   TimeoutError,
   ServerError,
-  parseRateLimitHeaders,
   shouldRetry,
   calculateBackoff,
-  type RateLimitInfo,
 } from './errors.js'
 
 // =============================================================================
@@ -824,7 +817,7 @@ export class GitHttpClient {
   /**
    * Parse smart HTTP refs advertisement
    */
-  private parseSmartRefs(text: string, service: string): RefsDiscoveryResult {
+  private parseSmartRefs(text: string, _service: string): RefsDiscoveryResult {
     const lines = this.parsePktLines(text)
     const refs: RefAdvertisement[] = []
     const capabilities: ServerCapabilities = {}
@@ -1484,7 +1477,7 @@ export class GitHttpClient {
     }
 
     if (response.status === 403) {
-      const rateLimit = parseRateLimitHeaders(response.headers)
+      const rateLimit = this.parseRateLimitHeaders(response.headers)
       if (rateLimit && rateLimit.remaining === 0) {
         throw new RateLimitError(`Rate limit exceeded for ${host}`, { rateLimit })
       }
@@ -1518,16 +1511,27 @@ export class GitHttpClient {
   /**
    * Parse rate limit headers
    */
-  private parseRateLimitHeaders(headers: Headers): { limit: number; remaining: number; resetAt: Date } | undefined {
+  private parseRateLimitHeaders(headers: Headers): { limit: number; remaining: number; resetAt: Date; provider: 'github' | 'gitlab' | 'bitbucket' | 'unknown' } | undefined {
     const limit = headers.get('X-RateLimit-Limit')
     const remaining = headers.get('X-RateLimit-Remaining')
     const reset = headers.get('X-RateLimit-Reset')
 
     if (limit && remaining && reset) {
+      // Detect provider from headers
+      let provider: 'github' | 'gitlab' | 'bitbucket' | 'unknown' = 'unknown'
+      if (headers.get('X-GitHub-Request-Id')) {
+        provider = 'github'
+      } else if (headers.get('X-Gitlab-Meta')) {
+        provider = 'gitlab'
+      } else if (headers.get('X-Request-Id')?.includes('bitbucket')) {
+        provider = 'bitbucket'
+      }
+
       return {
         limit: parseInt(limit, 10),
         remaining: parseInt(remaining, 10),
         resetAt: new Date(parseInt(reset, 10) * 1000),
+        provider,
       }
     }
 

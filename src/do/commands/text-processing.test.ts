@@ -15,7 +15,7 @@
  * @module bashx/do/commands/text-processing.test
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { TieredExecutor, type TieredExecutorConfig, type SandboxBinding } from '../tiered-executor.js'
 import type { BashResult, ExecOptions, FsCapability } from '../../types.js'
 
@@ -31,7 +31,7 @@ function createMockFs(files: Record<string, string>): FsCapability {
   const storage = new Map<string, string>(Object.entries(files))
 
   return {
-    read: async (path: string, options?: { encoding?: string }) => {
+    read: async (path: string, _options?: { encoding?: string }) => {
       const content = storage.get(path)
       if (content === undefined) {
         throw new Error(`ENOENT: no such file or directory, open '${path}'`)
@@ -59,7 +59,7 @@ function createMockFs(files: Record<string, string>): FsCapability {
         birthtime: new Date(),
       }
     },
-    list: async (path: string, options?: { withFileTypes?: boolean }) => {
+    list: async (path: string, _options?: { withFileTypes?: boolean }) => {
       const entries: Array<{ name: string; isDirectory(): boolean }> = []
       for (const [filePath] of storage) {
         if (filePath.startsWith(path)) {
@@ -90,7 +90,7 @@ function createMockFs(files: Record<string, string>): FsCapability {
     },
     // Helper to get current storage state for assertions
     _getStorage: () => storage,
-  } as FsCapability & { _getStorage: () => Map<string, string> }
+  } as unknown as FsCapability & { _getStorage: () => Map<string, string> }
 }
 
 /**
@@ -101,7 +101,7 @@ function createMockSandbox(
   mockResponses: Record<string, { stdout: string; stderr: string; exitCode: number }>
 ): SandboxBinding {
   return {
-    execute: async (command: string, options?: ExecOptions): Promise<BashResult> => {
+    execute: async (command: string, _options?: ExecOptions): Promise<BashResult> => {
       // Find matching response by command prefix
       for (const [pattern, response] of Object.entries(mockResponses)) {
         if (command.startsWith(pattern) || command.includes(pattern)) {

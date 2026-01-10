@@ -88,7 +88,7 @@ export interface PushResult {
  * For mock, we check if we know about the remote commit through refs or objects
  */
 function canFastForward(
-  localSha: string,
+  _localSha: string,
   remoteSha: string,
   objects: Map<string, { type: string; data: Uint8Array }>,
   refs: Map<string, string>

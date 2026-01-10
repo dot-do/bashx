@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { TieredExecutor, type TieredExecutorConfig, type SandboxBinding, type RpcServiceBinding } from '../tiered-executor.js'
+import { TieredExecutor, type SandboxBinding } from '../tiered-executor.js'
 import type { FsCapability, BashResult } from '../../types.js'
 
 // ============================================================================
@@ -83,7 +83,8 @@ const NPM_OUTPUTS = {
 /**
  * Create a mock filesystem capability with package.json files
  */
-function createMockFsCapability(): FsCapability {
+// @ts-expect-error - defined for documentation purposes
+function _createMockFsCapability(): FsCapability {
   const files: Record<string, string> = {
     '/app/package.json': SAMPLE_PACKAGE_JSON.simple,
     '/minimal/package.json': SAMPLE_PACKAGE_JSON.minimal,
@@ -91,12 +92,12 @@ function createMockFsCapability(): FsCapability {
   }
 
   return {
-    read: async (path: string, options?: { encoding?: string }) => {
+    read: async (path: string, _options?: { encoding?: string }) => {
       if (files[path]) return files[path]
       throw new Error(`ENOENT: no such file: ${path}`)
     },
-    exists: async (path) => path in files,
-    list: async (path: string, options?: { withFileTypes?: boolean }) => [],
+    exists: async (path: string) => path in files,
+    list: async (_path: string, _options?: { withFileTypes?: boolean }) => [],
     stat: async (path: string) => {
       if (files[path]) {
         return {
@@ -161,7 +162,7 @@ function createMockRpcResponse(options: {
       ok: false,
       json: async () => { throw new Error('Invalid JSON') },
       text: async () => options.stderr ?? 'RPC service error',
-    } as Response
+    } as unknown as Response
   }
 
   return {
@@ -1796,7 +1797,7 @@ describe('npm fallback behavior', () => {
       sandbox: mockSandbox,
     })
 
-    const result = await executor.execute('npm install')
+    await executor.execute('npm install')
 
     // Expected: When RPC HTTP call fails (ok: false), should fall back to sandbox
     expect(mockSandbox.execute).toHaveBeenCalled()
