@@ -55,6 +55,30 @@ import {
   executeXargs,
   TEXT_PROCESSING_COMMANDS,
 } from './commands/text-processing.js'
+import {
+  executeCut,
+  executeSort,
+  executeTr,
+  executeUniq,
+  executeWc,
+  executeBasename,
+  executeDirname,
+  executeEcho,
+  executePrintf,
+  executeDate,
+  executeDd,
+  executeOd,
+  POSIX_UTILS_COMMANDS,
+  type CutOptions,
+  type SortOptions,
+  type TrOptions,
+  type UniqOptions,
+  type WcOptions,
+  type EchoOptions,
+  type DateOptions,
+  type DdOptions,
+  type OdOptions,
+} from './commands/posix-utils.js'
 
 // ============================================================================
 // TYPES
@@ -242,6 +266,16 @@ const TIER_1_TEXT_PROCESSING_COMMANDS = new Set([
   'sed', 'awk', 'diff', 'patch', 'tee', 'xargs',
 ])
 
+/**
+ * POSIX utility commands with native implementations
+ * These include: cut, sort, tr, uniq, wc, basename, dirname, echo, printf, date, dd, od
+ */
+const TIER_1_POSIX_UTILS_COMMANDS = new Set([
+  'cut', 'sort', 'tr', 'uniq', 'wc',
+  'basename', 'dirname', 'echo', 'printf',
+  'date', 'dd', 'od',
+])
+
 // ============================================================================
 // TIER 2: RPC COMMANDS
 // ============================================================================
@@ -421,6 +455,14 @@ export class TieredExecutor implements BashExecutor {
           reason: `Native text processing command (${cmd})`,
           handler: 'native',
           capability: 'text',
+        }
+      } else if (TIER_1_POSIX_UTILS_COMMANDS.has(cmd)) {
+        // POSIX utility commands (cut, sort, tr, uniq, wc, basename, dirname, echo, printf, date, dd, od)
+        return {
+          tier: 1,
+          reason: `Native POSIX utility command (${cmd})`,
+          handler: 'native',
+          capability: 'posix',
         }
       } else {
         // Pure computation commands
@@ -646,6 +688,11 @@ export class TieredExecutor implements BashExecutor {
     // Handle text processing commands (sed, awk, diff, patch, tee, xargs)
     if (TIER_1_TEXT_PROCESSING_COMMANDS.has(cmd)) {
       return this.executeTextProcessing(cmd, args, command, options)
+    }
+
+    // Handle POSIX utility commands (cut, sort, tr, uniq, wc, basename, dirname, echo, printf, date, dd, od)
+    if (TIER_1_POSIX_UTILS_COMMANDS.has(cmd)) {
+      return this.executePosixUtils(cmd, args, command, options)
     }
 
     // Handle pure computation commands
@@ -1839,6 +1886,326 @@ export class TieredExecutor implements BashExecutor {
 
         default:
           throw new Error(`Unsupported text processing command: ${cmd}`)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return this.createResult(fullCommand, '', message, 1, 1)
+    }
+  }
+
+  /**
+   * Execute POSIX utility commands (cut, sort, tr, uniq, wc, basename, dirname, echo, printf, date, dd, od)
+   */
+  private async executePosixUtils(
+    cmd: string,
+    args: string[],
+    fullCommand: string,
+    options?: ExecOptions
+  ): Promise<BashResult> {
+    try {
+      const input = options?.stdin || ''
+
+      switch (cmd) {
+        case 'cut': {
+          // Parse cut options
+          const cutOptions: CutOptions = {}
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-b' && args[i + 1]) {
+              cutOptions.bytes = args[++i]
+            } else if (arg.startsWith('-b')) {
+              cutOptions.bytes = arg.slice(2)
+            } else if (arg === '-c' && args[i + 1]) {
+              cutOptions.chars = args[++i]
+            } else if (arg.startsWith('-c')) {
+              cutOptions.chars = arg.slice(2)
+            } else if (arg === '-f' && args[i + 1]) {
+              cutOptions.fields = args[++i]
+            } else if (arg.startsWith('-f')) {
+              cutOptions.fields = arg.slice(2)
+            } else if (arg === '-d' && args[i + 1]) {
+              cutOptions.delimiter = args[++i]
+            } else if (arg.startsWith('-d')) {
+              cutOptions.delimiter = arg.slice(2)
+            } else if (arg === '--output-delimiter' && args[i + 1]) {
+              cutOptions.outputDelimiter = args[++i]
+            } else if (arg === '-s' || arg === '--only-delimited') {
+              cutOptions.onlyDelimited = true
+            } else if (arg === '--complement') {
+              cutOptions.complement = true
+            }
+          }
+          const stdout = executeCut(input, cutOptions)
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'sort': {
+          // Parse sort options
+          const sortOptions: SortOptions = {}
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-n' || arg === '--numeric-sort') {
+              sortOptions.numeric = true
+            } else if (arg === '-r' || arg === '--reverse') {
+              sortOptions.reverse = true
+            } else if (arg === '-u' || arg === '--unique') {
+              sortOptions.unique = true
+            } else if (arg === '-f' || arg === '--ignore-case') {
+              sortOptions.ignoreCase = true
+            } else if (arg === '-b' || arg === '--ignore-leading-blanks') {
+              sortOptions.ignoreLeadingBlanks = true
+            } else if (arg === '-h' || arg === '--human-numeric-sort') {
+              sortOptions.humanNumeric = true
+            } else if (arg === '-c' || arg === '--check') {
+              sortOptions.check = true
+            } else if (arg === '-k' && args[i + 1]) {
+              sortOptions.key = args[++i]
+            } else if (arg.startsWith('-k')) {
+              sortOptions.key = arg.slice(2)
+            } else if (arg === '-t' && args[i + 1]) {
+              sortOptions.separator = args[++i]
+            } else if (arg.startsWith('-t')) {
+              sortOptions.separator = arg.slice(2)
+            }
+          }
+          const lines = input.split('\n').filter((l, i, arr) => i < arr.length - 1 || l !== '')
+          const sorted = executeSort(lines, sortOptions)
+          const stdout = sorted.join('\n') + (sorted.length > 0 ? '\n' : '')
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'tr': {
+          // Parse tr options
+          const trOptions: TrOptions = {}
+          let set1 = ''
+          let set2: string | undefined
+          const nonFlagArgs: string[] = []
+
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-d' || arg === '--delete') {
+              trOptions.delete = true
+            } else if (arg === '-s' || arg === '--squeeze-repeats') {
+              trOptions.squeeze = true
+            } else if (arg === '-c' || arg === '-C' || arg === '--complement') {
+              trOptions.complement = true
+            } else if (!arg.startsWith('-')) {
+              nonFlagArgs.push(arg)
+            }
+          }
+
+          set1 = nonFlagArgs[0] || ''
+          set2 = nonFlagArgs[1]
+
+          const stdout = executeTr(input, set1, set2, trOptions)
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'uniq': {
+          // Parse uniq options
+          const uniqOptions: UniqOptions = {}
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-c' || arg === '--count') {
+              uniqOptions.count = true
+            } else if (arg === '-d' || arg === '--repeated') {
+              uniqOptions.repeated = true
+            } else if (arg === '-u' || arg === '--unique') {
+              uniqOptions.unique = true
+            } else if (arg === '-i' || arg === '--ignore-case') {
+              uniqOptions.ignoreCase = true
+            } else if (arg === '-f' && args[i + 1]) {
+              uniqOptions.skipFields = parseInt(args[++i], 10)
+            } else if (arg.startsWith('-f')) {
+              uniqOptions.skipFields = parseInt(arg.slice(2), 10)
+            } else if (arg === '-s' && args[i + 1]) {
+              uniqOptions.skipChars = parseInt(args[++i], 10)
+            } else if (arg.startsWith('-s')) {
+              uniqOptions.skipChars = parseInt(arg.slice(2), 10)
+            }
+          }
+          const lines = input.split('\n').filter((l, i, arr) => i < arr.length - 1 || l !== '')
+          const unique = executeUniq(lines, uniqOptions)
+          const stdout = unique.join('\n') + (unique.length > 0 ? '\n' : '')
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'wc': {
+          // Parse wc options
+          const wcOptions: WcOptions = {}
+          let hasOptions = false
+          for (const arg of args) {
+            if (arg === '-l' || arg === '--lines') {
+              wcOptions.lines = true
+              hasOptions = true
+            } else if (arg === '-w' || arg === '--words') {
+              wcOptions.words = true
+              hasOptions = true
+            } else if (arg === '-c' || arg === '--bytes') {
+              wcOptions.bytes = true
+              hasOptions = true
+            } else if (arg === '-m' || arg === '--chars') {
+              wcOptions.chars = true
+              hasOptions = true
+            }
+          }
+          const result = executeWc(input, wcOptions)
+
+          // Format output like GNU wc
+          let stdout = ''
+          if (!hasOptions) {
+            // Default: lines, words, bytes
+            stdout = `${result.lines} ${result.words} ${result.bytes}\n`
+          } else {
+            const parts: number[] = []
+            if (wcOptions.lines) parts.push(result.lines)
+            if (wcOptions.words) parts.push(result.words)
+            if (wcOptions.bytes) parts.push(result.bytes)
+            if (wcOptions.chars) parts.push(result.chars)
+            stdout = parts.join(' ') + '\n'
+          }
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'basename': {
+          const path = args.find(a => !a.startsWith('-')) || ''
+          const suffix = args.filter(a => !a.startsWith('-'))[1]
+          const stdout = executeBasename(path, suffix) + '\n'
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'dirname': {
+          const path = args.find(a => !a.startsWith('-')) || ''
+          const stdout = executeDirname(path) + '\n'
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'echo': {
+          // Parse echo options
+          const echoOptions: EchoOptions = {}
+          let startIdx = 0
+
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === '-n') {
+              echoOptions.noNewline = true
+              startIdx = i + 1
+            } else if (args[i] === '-e') {
+              echoOptions.interpretEscapes = true
+              startIdx = i + 1
+            } else if (args[i] === '-E') {
+              echoOptions.interpretEscapes = false
+              startIdx = i + 1
+            } else if (args[i] === '-en' || args[i] === '-ne') {
+              echoOptions.noNewline = true
+              echoOptions.interpretEscapes = true
+              startIdx = i + 1
+            } else {
+              break
+            }
+          }
+
+          const stdout = executeEcho(args.slice(startIdx), echoOptions)
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'printf': {
+          if (args.length === 0) {
+            return this.createResult(fullCommand, '', '', 0, 1)
+          }
+          const format = args[0]
+          const formatArgs = args.slice(1)
+          const stdout = executePrintf(format, formatArgs)
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'date': {
+          // Parse date options
+          const dateOptions: DateOptions = {}
+          let format: string | undefined
+
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-u' || arg === '--utc' || arg === '--universal') {
+              dateOptions.utc = true
+            } else if (arg === '-d' && args[i + 1]) {
+              dateOptions.date = args[++i]
+            } else if (arg.startsWith('--date=')) {
+              dateOptions.date = arg.slice(7)
+            } else if (arg.startsWith('+')) {
+              format = arg
+            }
+          }
+
+          const stdout = executeDate(format, dateOptions) + '\n'
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'dd': {
+          // Parse dd options (dd uses operand=value format)
+          const ddOptions: DdOptions = {}
+          for (const arg of args) {
+            if (arg.startsWith('bs=')) {
+              ddOptions.bs = parseInt(arg.slice(3), 10)
+            } else if (arg.startsWith('count=')) {
+              ddOptions.count = parseInt(arg.slice(6), 10)
+            } else if (arg.startsWith('skip=')) {
+              ddOptions.skip = parseInt(arg.slice(5), 10)
+            } else if (arg.startsWith('seek=')) {
+              ddOptions.seek = parseInt(arg.slice(5), 10)
+            } else if (arg.startsWith('ibs=')) {
+              ddOptions.ibs = parseInt(arg.slice(4), 10)
+            } else if (arg.startsWith('obs=')) {
+              ddOptions.obs = parseInt(arg.slice(4), 10)
+            }
+          }
+          const inputData = new TextEncoder().encode(input)
+          const outputData = executeDd(inputData, ddOptions)
+          const stdout = new TextDecoder().decode(outputData)
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        case 'od': {
+          // Parse od options
+          const odOptions: OdOptions = {}
+          for (let i = 0; i < args.length; i++) {
+            const arg = args[i]
+            if (arg === '-A' && args[i + 1]) {
+              odOptions.addressFormat = args[++i]
+            } else if (arg.startsWith('-A')) {
+              odOptions.addressFormat = arg.slice(2)
+            } else if (arg === '-t' && args[i + 1]) {
+              odOptions.format = args[++i]
+            } else if (arg.startsWith('-t')) {
+              odOptions.format = arg.slice(2)
+            } else if (arg === '-x') {
+              odOptions.format = 'x'
+            } else if (arg === '-c') {
+              odOptions.format = 'c'
+            } else if (arg === '-d') {
+              odOptions.format = 'd'
+            } else if (arg === '-o') {
+              odOptions.format = 'o'
+            } else if (arg === '-w' && args[i + 1]) {
+              odOptions.width = parseInt(args[++i], 10)
+            } else if (arg.startsWith('-w')) {
+              odOptions.width = parseInt(arg.slice(2), 10)
+            } else if (arg === '-j' && args[i + 1]) {
+              odOptions.skip = parseInt(args[++i], 10)
+            } else if (arg.startsWith('-j')) {
+              odOptions.skip = parseInt(arg.slice(2), 10)
+            } else if (arg === '-N' && args[i + 1]) {
+              odOptions.count = parseInt(args[++i], 10)
+            } else if (arg.startsWith('-N')) {
+              odOptions.count = parseInt(arg.slice(2), 10)
+            }
+          }
+          const inputData = new TextEncoder().encode(input)
+          const stdout = executeOd(inputData, odOptions)
+          return this.createResult(fullCommand, stdout, '', 0, 1)
+        }
+
+        default:
+          throw new Error(`Unsupported POSIX utility command: ${cmd}`)
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -10,6 +10,8 @@ export default defineConfig({
       'tests/sdk-client.test.ts',
       'tests/tree-sitter-integration.test.ts',
       'tests/undo-tracking.test.ts',
+      // POSIX compliance tests - run against real shell
+      'tests/posix/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },

@@ -13,6 +13,8 @@ export default defineWorkersConfig({
       'tests/sdk-client.test.ts',
       'tests/tree-sitter-integration.test.ts',
       'tests/undo-tracking.test.ts',
+      // POSIX compliance tests require real shell execution
+      'tests/posix/utilities/file-ops.test.ts',
     ],
     poolOptions: {
       workers: {
