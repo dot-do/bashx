@@ -25,8 +25,8 @@ import type {
   ShellResult,
   ShellExecOptions,
   ShellSpawnOptions,
-  DataCallback,
-  ExitCallback,
+  ShellDataCallback,
+  ShellExitCallback,
 } from '../../../core/rpc/index.js'
 
 // ============================================================================
@@ -67,9 +67,9 @@ function createMockShellStream(options: {
   _emitStderr: (chunk: string) => void
   _emitExit: (code: number, signal?: string) => void
 } {
-  const dataCallbacks: DataCallback[] = []
-  const stderrCallbacks: DataCallback[] = []
-  const exitCallbacks: ExitCallback[] = []
+  const dataCallbacks: ShellDataCallback[] = []
+  const stderrCallbacks: ShellDataCallback[] = []
+  const exitCallbacks: ShellExitCallback[] = []
   const stdoutBuffer: string[] = []
   const stderrBuffer: string[] = []
   let disposed = false
@@ -95,7 +95,7 @@ function createMockShellStream(options: {
       if (disposed) return
     },
 
-    onData: (callback: DataCallback) => {
+    onData: (callback: ShellDataCallback) => {
       if (disposed) throw new Error('Stream disposed')
       dataCallbacks.push(callback)
       // Send buffered data to late subscribers
@@ -108,7 +108,7 @@ function createMockShellStream(options: {
       }
     },
 
-    onStderr: (callback: DataCallback) => {
+    onStderr: (callback: ShellDataCallback) => {
       if (disposed) throw new Error('Stream disposed')
       stderrCallbacks.push(callback)
       // Send buffered data to late subscribers
@@ -121,7 +121,7 @@ function createMockShellStream(options: {
       }
     },
 
-    onExit: (callback: ExitCallback) => {
+    onExit: (callback: ShellExitCallback) => {
       if (disposed) throw new Error('Stream disposed')
       exitCallbacks.push(callback)
       // If already exited, call immediately
@@ -906,9 +906,9 @@ describe('Type Safety', () => {
       write: (data: string) => void
       closeStdin: () => void
       kill: (signal?: string) => void
-      onData: (callback: DataCallback) => () => void
-      onStderr: (callback: DataCallback) => () => void
-      onExit: (callback: ExitCallback) => () => void
+      onData: (callback: ShellDataCallback) => () => void
+      onStderr: (callback: ShellDataCallback) => () => void
+      onExit: (callback: ShellExitCallback) => () => void
       wait: () => Promise<ShellResult>
       [Symbol.dispose]: () => void
     }

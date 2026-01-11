@@ -90,14 +90,14 @@ export interface ShellSpawnOptions {
  * Callback for receiving stdout/stderr data chunks.
  * @param chunk - The data chunk as a string
  */
-export type DataCallback = (chunk: string) => void
+export type ShellDataCallback = (chunk: string) => void
 
 /**
  * Callback for process exit.
  * @param exitCode - The process exit code
  * @param signal - The signal that terminated the process, if any
  */
-export type ExitCallback = (exitCode: number, signal?: string) => void
+export type ShellExitCallback = (exitCode: number, signal?: string) => void
 
 /**
  * Handle to a spawned process with streaming I/O capabilities.
@@ -144,7 +144,7 @@ export interface ShellStream {
    * @param callback - Function to call with each stdout chunk
    * @returns Unsubscribe function
    */
-  onData(callback: DataCallback): () => void
+  onData(callback: ShellDataCallback): () => void
 
   /**
    * Register a callback for stderr data.
@@ -153,14 +153,14 @@ export interface ShellStream {
    * @param callback - Function to call with each stderr chunk
    * @returns Unsubscribe function
    */
-  onStderr(callback: DataCallback): () => void
+  onStderr(callback: ShellDataCallback): () => void
 
   /**
    * Register a callback for process exit.
    * @param callback - Function to call when process exits
    * @returns Unsubscribe function
    */
-  onExit(callback: ExitCallback): () => void
+  onExit(callback: ShellExitCallback): () => void
 
   /**
    * Wait for the process to complete.

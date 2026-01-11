@@ -13,8 +13,8 @@ export type {
   ShellSpawnOptions,
   // Stream types
   ShellStream,
-  DataCallback,
-  ExitCallback,
+  ShellDataCallback,
+  ShellExitCallback,
   // API interface
   ShellApi,
 } from './types.js'

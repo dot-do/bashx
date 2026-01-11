@@ -57,10 +57,10 @@ export type {
 // ============================================================================
 // Backend Interface
 // ============================================================================
+// Note: ShellResult is exported from RPC instead (see RPC Types below)
 
 export type {
   ShellBackend,
-  ShellResult,
   ShellOptions,
   BackendInfo,
 } from './backend.js'
@@ -179,3 +179,17 @@ export type {
   SequenceCallback,
   EventCallback,
 } from './pty/index.js'
+
+// ============================================================================
+// RPC Types (Remote Shell Execution)
+// ============================================================================
+
+export type {
+  ShellResult,
+  ShellExecOptions,
+  ShellSpawnOptions,
+  ShellStream,
+  ShellApi,
+  ShellDataCallback,
+  ShellExitCallback,
+} from './rpc/index.js'
