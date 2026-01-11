@@ -49,6 +49,7 @@ export class ShellApiImpl implements ShellApi {
         env,
         timeout,
         maxBuffer: maxOutput ?? 10 * 1024 * 1024, // 10MB default
+        encoding: 'utf-8' as const,
       }
 
       // Add cwd if specified
@@ -56,12 +57,12 @@ export class ShellApiImpl implements ShellApi {
         execOptions.cwd = cwd
       }
 
-      const { stdout, stderr } = await execPromise(command, execOptions)
+      const result = await execPromise(command, execOptions)
       const duration = Date.now() - startTime
 
       return {
-        stdout: stdout ?? '',
-        stderr: stderr ?? '',
+        stdout: String(result.stdout ?? ''),
+        stderr: String(result.stderr ?? ''),
         exitCode: 0,
         duration,
       }

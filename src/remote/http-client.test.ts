@@ -15,6 +15,7 @@ import { setupServer } from 'msw/node'
 // Import from files that don't exist yet - will fail until implemented
 import {
   GitHttpClient,
+  GitHttpError,
 } from './http-client.js'
 
 import {
@@ -247,10 +248,11 @@ describe('GitHttpClient - Refs Discovery', () => {
       try {
         await client.discoverRefs('upload-pack')
         expect.fail('Should have thrown')
-      } catch (error: any) {
-        expect(error.wwwAuthenticate).toBeDefined()
-        expect(error.wwwAuthenticate.scheme).toBe('Basic')
-        expect(error.wwwAuthenticate.realm).toBe('GitHub')
+      } catch (error) {
+        const httpError = error as GitHttpError
+        expect(httpError.wwwAuthenticate).toBeDefined()
+        expect(httpError.wwwAuthenticate?.scheme).toBe('Basic')
+        expect(httpError.wwwAuthenticate?.realm).toBe('GitHub')
       }
     })
 
@@ -1078,10 +1080,11 @@ describe('GitAuth - Authentication', () => {
       try {
         await client.discoverRefs('upload-pack')
         expect.fail('Should have thrown')
-      } catch (error: any) {
-        expect(error.message).toContain('Authentication required')
-        expect(error.message).toContain('github.com')
-        expect(error.hint).toContain('GITHUB_TOKEN')
+      } catch (error) {
+        const httpError = error as GitHttpError
+        expect(httpError.message).toContain('Authentication required')
+        expect(httpError.message).toContain('github.com')
+        expect(httpError.hint).toContain('GITHUB_TOKEN')
       }
     })
 
@@ -1107,11 +1110,12 @@ describe('GitAuth - Authentication', () => {
       try {
         await rateLimitClient.discoverRefs('upload-pack')
         expect.fail('Should have thrown')
-      } catch (error: any) {
-        expect(error.message).toContain('Rate limit exceeded')
-        expect(error.rateLimit).toBeDefined()
-        expect(error.rateLimit.remaining).toBe(0)
-        expect(error.rateLimit.resetAt).toBeInstanceOf(Date)
+      } catch (error) {
+        const httpError = error as GitHttpError
+        expect(httpError.message).toContain('Rate limit exceeded')
+        expect(httpError.rateLimit).toBeDefined()
+        expect(httpError.rateLimit?.remaining).toBe(0)
+        expect(httpError.rateLimit?.resetAt).toBeInstanceOf(Date)
       }
     })
 
@@ -1135,9 +1139,10 @@ describe('GitAuth - Authentication', () => {
       try {
         await authedClient.discoverRefs('upload-pack')
         expect.fail('Should have thrown')
-      } catch (error: any) {
-        expect(error.tokenExpired).toBe(true)
-        expect(error.message).toContain('token has expired')
+      } catch (error) {
+        const httpError = error as GitHttpError
+        expect(httpError.tokenExpired).toBe(true)
+        expect(httpError.message).toContain('token has expired')
       }
     })
 

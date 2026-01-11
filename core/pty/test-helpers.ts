@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-import { CSI, OSC, ESC, ST, SGR, DECModes, CSICommands, ESCCommands } from './constants.js'
+import { CSI, OSC, ESC, SGR, DECModes, CSICommands, ESCCommands } from './constants.js'
 
 // ============================================================================
 // CSI Sequence Builders

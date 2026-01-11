@@ -644,7 +644,7 @@ function processNode(node: BashNode, ctx: BuildContext): { firstNodeId: string; 
   }
 
   // Unknown node type - shouldn't happen in well-formed AST
-  throw new Error(`Unknown node type: ${(node as any).type}`)
+  throw new Error(`Unknown node type: ${(node as { type?: string }).type}`)
 }
 
 /**

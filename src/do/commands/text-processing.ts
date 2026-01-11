@@ -911,7 +911,7 @@ function formatNormalDiff(oldLines: string[], newLines: string[], edits: Array<{
     // Collect consecutive changes
     const changes: Array<{ type: 'delete' | 'insert'; oldIdx?: number; newIdx?: number }> = []
     while (i < edits.length && edits[i].type !== 'equal') {
-      changes.push(edits[i] as any)
+      changes.push(edits[i] as { type: 'delete' | 'insert'; oldIdx?: number; newIdx?: number })
       i++
     }
 

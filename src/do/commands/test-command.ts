@@ -115,27 +115,38 @@ export function createFileInfoProvider(fs: FsCapability): FileInfoProvider {
 
       const stats = await fs.stat(path)
 
+      // Cast to extended stats type for optional method access
+      type ExtendedStats = FsStats & {
+        mode?: number
+        isSymbolicLink?: () => boolean
+        isBlockDevice?: () => boolean
+        isCharacterDevice?: () => boolean
+        isFIFO?: () => boolean
+        isSocket?: () => boolean
+      }
+      const extStats = stats as ExtendedStats
+
       // Get mode from stats if available, otherwise use defaults
-      const mode = (stats as any).mode ?? 0o644
+      const mode = extStats.mode ?? 0o644
 
       return {
         exists: true,
         isFile: stats.isFile(),
         isDirectory: stats.isDirectory(),
-        isSymlink: typeof (stats as any).isSymbolicLink === 'function'
-          ? (stats as FsStats).isSymbolicLink()
+        isSymlink: typeof extStats.isSymbolicLink === 'function'
+          ? extStats.isSymbolicLink()
           : false,
-        isBlockDevice: typeof (stats as any).isBlockDevice === 'function'
-          ? (stats as FsStats).isBlockDevice()
+        isBlockDevice: typeof extStats.isBlockDevice === 'function'
+          ? extStats.isBlockDevice()
           : false,
-        isCharDevice: typeof (stats as any).isCharacterDevice === 'function'
-          ? (stats as FsStats).isCharacterDevice()
+        isCharDevice: typeof extStats.isCharacterDevice === 'function'
+          ? extStats.isCharacterDevice()
           : false,
-        isPipe: typeof (stats as any).isFIFO === 'function'
-          ? (stats as FsStats).isFIFO()
+        isPipe: typeof extStats.isFIFO === 'function'
+          ? extStats.isFIFO()
           : false,
-        isSocket: typeof (stats as any).isSocket === 'function'
-          ? (stats as FsStats).isSocket()
+        isSocket: typeof extStats.isSocket === 'function'
+          ? extStats.isSocket()
           : false,
         size: stats.size,
         mode,

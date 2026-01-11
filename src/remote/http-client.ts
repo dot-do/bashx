@@ -1416,18 +1416,18 @@ export class GitHttpClient {
       }
 
       return response
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (timeoutId) {
         clearTimeout(timeoutId)
       }
 
-      if (error.name === 'AbortError') {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw new TimeoutError('request', effectiveTimeout ?? 0)
       }
 
       // Convert network errors to NetworkError
       if (NetworkError.isRetryable(error)) {
-        throw NetworkError.fromError(error)
+        throw NetworkError.fromError(error as Error)
       }
 
       throw error

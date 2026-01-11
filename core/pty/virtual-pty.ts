@@ -30,11 +30,6 @@ import {
   VT,
   FF,
   CR,
-  SGR,
-  DECModes,
-  CSICommands,
-  ESCCommands,
-  OSCCommands,
 } from './constants.js'
 
 // ============================================================================

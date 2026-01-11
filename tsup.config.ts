@@ -14,5 +14,5 @@ export default defineConfig({
   clean: true,
   splitting: false,
   sourcemap: true,
-  external: ['rpc.do', 'mcp.do', 'drizzle-orm'],
+  external: ['rpc.do', 'mcp.do', 'drizzle-orm', 'cloudflare:workers'],
 })

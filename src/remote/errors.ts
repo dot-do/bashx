@@ -81,7 +81,7 @@ export class NetworkError extends GitRemoteError {
    * Create from a native fetch/network error
    */
   static fromError(error: Error): NetworkError {
-    const code = (error as any).code
+    const code = (error as Error & { code?: string }).code
     let message = error.message
 
     if (code === 'ECONNRESET') {
@@ -107,8 +107,8 @@ export class NetworkError extends GitRemoteError {
       return true
     }
 
-    const anyError = error as any
-    const code = anyError?.code
+    const errorWithCode = error as { code?: string }
+    const code = errorWithCode?.code
     const retryableCodes = [
       'ECONNRESET',
       'ETIMEDOUT',
@@ -118,7 +118,7 @@ export class NetworkError extends GitRemoteError {
       'EAI_AGAIN',
     ]
 
-    return retryableCodes.includes(code)
+    return code !== undefined && retryableCodes.includes(code)
   }
 }
 
@@ -507,9 +507,9 @@ export function shouldRetry(error: unknown, attempt: number, maxRetries: number)
   }
 
   // Check generic Error status property
-  const anyError = error as any
-  if (typeof anyError?.status === 'number') {
-    return ServerError.isRetryableStatus(anyError.status)
+  const errorWithStatus = error as { status?: number }
+  if (typeof errorWithStatus?.status === 'number') {
+    return ServerError.isRetryableStatus(errorWithStatus.status)
   }
 
   return false

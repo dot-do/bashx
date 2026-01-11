@@ -420,7 +420,7 @@ export function createDefaultRegistry(): SequenceHandlerRegistry {
   })
 
   // ---- Private CSI Modes ----
-  registry.registerPrivateCSI(DECModes.DECTCEM, (mode, enable, ctx) => {
+  registry.registerPrivateCSI(DECModes.DECTCEM, (_mode, enable, ctx) => {
     ctx.buffer.setCursorVisible(enable)
     ctx.emitScreenChange('cursor')
   })

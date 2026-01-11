@@ -613,10 +613,11 @@ describe('GitHttpClient - Rate Limiting', () => {
     try {
       await client.discoverRefs('upload-pack')
       expect.fail('Should have thrown')
-    } catch (error: any) {
+    } catch (error) {
       expect(error).toBeInstanceOf(RateLimitError)
-      expect(error.rateLimit.remaining).toBe(0)
-      expect(error.rateLimit.limit).toBe(60)
+      const rateLimitError = error as RateLimitError
+      expect(rateLimitError.rateLimit.remaining).toBe(0)
+      expect(rateLimitError.rateLimit.limit).toBe(60)
     }
   })
 
@@ -686,7 +687,7 @@ describe('GitHttpClient - Rate Limiting', () => {
     try {
       await client.discoverRefs('upload-pack')
       expect.fail('Should have thrown')
-    } catch (error: any) {
+    } catch (error) {
       expect(error).toBeInstanceOf(RateLimitError)
     }
   })

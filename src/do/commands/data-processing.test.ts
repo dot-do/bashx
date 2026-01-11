@@ -331,7 +331,7 @@ describe('jq - JSON Processor', () => {
       expect(result.exitCode).toBe(0)
       const parsed = JSON.parse(result.stdout)
       expect(parsed).toHaveLength(2)
-      expect(parsed.map((u: any) => u.name)).toEqual(['alice', 'charlie'])
+      expect(parsed.map((u: { name: string }) => u.name)).toEqual(['alice', 'charlie'])
     })
 
     it('filters with has: jq "select(has(\"name\"))"', async () => {

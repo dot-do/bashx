@@ -22,8 +22,6 @@ import {
   SOS_8BIT,
   PM_8BIT,
   APC_8BIT,
-  ByteRanges,
-  SpecialChars,
 } from './constants.js'
 
 // ============================================================================

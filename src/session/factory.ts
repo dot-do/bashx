@@ -17,6 +17,7 @@ import type {
   EnvChange,
   CwdChange,
   SessionMetricsCollector,
+  CommandHistoryEntry,
 } from './types.js'
 import { createInitialSessionState } from './types.js'
 import { Session } from './session.js'
@@ -258,7 +259,7 @@ function replayWALEntry(state: SessionState, entry: WALEntry): void {
   switch (entry.op) {
     case 'command':
       // Command entries contain full CommandHistoryEntry
-      state.history.push(entry.data as any)
+      state.history.push(entry.data as CommandHistoryEntry)
       state.metrics.commandCount++
       break
 
