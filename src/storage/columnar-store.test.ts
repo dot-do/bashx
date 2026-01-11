@@ -8,10 +8,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   WriteBufferCache,
+  ColumnarStore,
   ColumnarSessionStore,
   analyzeWorkloadCost,
   printCostReport,
   type CommandHistoryEntry,
+  type SchemaDefinition,
 } from './columnar-store.js'
 
 // Mock SqlStorage interface
@@ -403,9 +405,11 @@ describe('ColumnarSessionStore', () => {
       // Columnar: 5 row writes (one per session)
       expect(comparison.columnar.rowWrites).toBe(5)
 
-      // Normalized estimate: 5 sessions * (1 cwd + 3 env vars + 2 history) = 30 rows
+      // Normalized estimate: counts all fields including empty JSON columns
+      // Each session has: id(1) + cwd(1) + env(3) + history(2) + openFiles(1) + processes(1) + metadata(1) + createdAt(1) + updatedAt(1) + checkpointedAt(1) + version(1) = 14 per session
+      // 5 sessions * 14 = 70 rows in normalized schema
       expect(comparison.normalized.rowWrites).toBeGreaterThan(comparison.columnar.rowWrites)
-      expect(comparison.normalized.rowWrites).toBe(30) // 5 * 6 attributes each
+      expect(comparison.normalized.rowWrites).toBe(70) // 5 * 14 attributes each
     })
 
     it('should show cost reduction for attribute updates', async () => {
@@ -512,6 +516,162 @@ describe('printCostReport', () => {
     expect(report).toContain('Columnar Approach')
     expect(report).toContain('Cost Reduction')
     expect(report).toContain('90.0%')
+  })
+})
+
+// ============================================================================
+// Generic ColumnarStore<T> Tests
+// ============================================================================
+
+interface TestUser {
+  id: string
+  name: string
+  email: string
+  settings: Record<string, unknown>
+  tags: string[]
+  createdAt: Date
+  updatedAt: Date
+  version: number
+}
+
+const userSchema: SchemaDefinition<TestUser> = {
+  tableName: 'users',
+  primaryKey: 'id',
+  versionField: 'version',
+  updatedAtField: 'updatedAt',
+  createdAtField: 'createdAt',
+  columns: {
+    id: { type: 'text', required: true },
+    name: { type: 'text', required: true },
+    email: { type: 'text', required: true },
+    settings: { type: 'json', defaultValue: "'{}'" },
+    tags: { type: 'json', defaultValue: "'[]'" },
+    createdAt: { type: 'datetime', column: 'created_at', required: true },
+    updatedAt: { type: 'datetime', column: 'updated_at', required: true },
+    version: { type: 'integer', defaultValue: '1', required: true },
+  },
+}
+
+describe('ColumnarStore<T> Generic', () => {
+  let mockSql: ReturnType<typeof createMockSqlStorage>
+  let store: ColumnarStore<TestUser>
+
+  beforeEach(() => {
+    mockSql = createMockSqlStorage()
+    store = new ColumnarStore<TestUser>(
+      mockSql as unknown as import('@cloudflare/workers-types').SqlStorage,
+      userSchema,
+      {
+        checkpointTriggers: {
+          dirtyCount: 10,
+          intervalMs: 60000,
+          memoryPressureRatio: 0.9,
+        },
+      }
+    )
+  })
+
+  afterEach(() => {
+    store.stop()
+  })
+
+  describe('schema definition', () => {
+    it('should convert camelCase to snake_case for columns', () => {
+      expect(store.getColumnName('createdAt')).toBe('created_at')
+      expect(store.getColumnName('updatedAt')).toBe('updated_at')
+      expect(store.getColumnName('name')).toBe('name')
+    })
+
+    it('should use custom column name when specified', () => {
+      expect(store.getColumnName('createdAt')).toBe('created_at')
+    })
+  })
+
+  describe('CRUD operations', () => {
+    it('should create an entity with automatic timestamps', async () => {
+      const user: TestUser = {
+        id: 'user-1',
+        name: 'John Doe',
+        email: 'john@example.com',
+        settings: { theme: 'dark' },
+        tags: ['admin', 'active'],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        version: 1,
+      }
+
+      const created = await store.create(user)
+
+      expect(created.id).toBe('user-1')
+      expect(created.name).toBe('John Doe')
+      expect(created.settings).toEqual({ theme: 'dark' })
+      expect(created.tags).toEqual(['admin', 'active'])
+      expect(created.version).toBe(1)
+    })
+
+    it('should get an entity from cache', async () => {
+      const user: TestUser = {
+        id: 'user-1',
+        name: 'John Doe',
+        email: 'john@example.com',
+        settings: {},
+        tags: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        version: 1,
+      }
+
+      await store.create(user)
+      const retrieved = await store.get('user-1')
+
+      expect(retrieved).not.toBeNull()
+      expect(retrieved?.name).toBe('John Doe')
+    })
+
+    it('should update an entity and increment version', async () => {
+      const user: TestUser = {
+        id: 'user-1',
+        name: 'John Doe',
+        email: 'john@example.com',
+        settings: {},
+        tags: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        version: 1,
+      }
+
+      await store.create(user)
+      const updated = await store.update('user-1', { name: 'Jane Doe' })
+
+      expect(updated?.name).toBe('Jane Doe')
+      expect(updated?.version).toBe(2)
+    })
+
+    it('should return null when updating non-existent entity', async () => {
+      const updated = await store.update('non-existent', { name: 'Test' })
+      expect(updated).toBeNull()
+    })
+  })
+
+  describe('checkpointing', () => {
+    it('should checkpoint entities to database', async () => {
+      const user: TestUser = {
+        id: 'user-1',
+        name: 'John Doe',
+        email: 'john@example.com',
+        settings: { notifications: true },
+        tags: ['user'],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        version: 1,
+      }
+
+      await store.create(user)
+      const stats = await store.checkpoint()
+
+      expect(stats.sessionCount).toBe(1)
+      expect(stats.trigger).toBe('manual')
+    })
   })
 })
 

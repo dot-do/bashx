@@ -43,6 +43,74 @@ import type { SqlStorage } from '@cloudflare/workers-types'
 // ============================================================================
 
 /**
+ * Column type for schema definition
+ */
+export type ColumnType = 'text' | 'integer' | 'real' | 'blob' | 'json' | 'datetime'
+
+/**
+ * Column definition for a single field
+ */
+export interface ColumnDefinition<T, K extends keyof T> {
+  /** SQL column name (defaults to field name in snake_case) */
+  column?: string
+  /** Column type for SQL schema */
+  type: ColumnType
+  /** Whether this field is required (NOT NULL) */
+  required?: boolean
+  /** Default value for the column */
+  defaultValue?: string
+  /** Custom serializer for this field */
+  serialize?: (value: T[K]) => unknown
+  /** Custom deserializer for this field */
+  deserialize?: (raw: unknown) => T[K]
+}
+
+/**
+ * Schema definition for mapping type T to SQL columns
+ *
+ * @template T The entity type being stored
+ *
+ * @example
+ * ```typescript
+ * interface User {
+ *   id: string
+ *   name: string
+ *   metadata: Record<string, unknown>
+ *   createdAt: Date
+ * }
+ *
+ * const userSchema: SchemaDefinition<User> = {
+ *   tableName: 'users',
+ *   primaryKey: 'id',
+ *   columns: {
+ *     id: { type: 'text', required: true },
+ *     name: { type: 'text', required: true },
+ *     metadata: { type: 'json', defaultValue: '{}' },
+ *     createdAt: { type: 'datetime', column: 'created_at' },
+ *   },
+ * }
+ * ```
+ */
+export interface SchemaDefinition<T> {
+  /** SQL table name */
+  tableName: string
+  /** Primary key field name (must be a key of T) */
+  primaryKey: keyof T & string
+  /** Column definitions for each field */
+  columns: {
+    [K in keyof T]?: ColumnDefinition<T, K>
+  }
+  /** Version field for optimistic locking (optional) */
+  versionField?: keyof T & string
+  /** Updated at field for automatic timestamp (optional) */
+  updatedAtField?: keyof T & string
+  /** Created at field for automatic timestamp (optional) */
+  createdAtField?: keyof T & string
+  /** Checkpointed at field for tracking checkpoints (optional) */
+  checkpointedAtField?: keyof T & string
+}
+
+/**
  * Session state stored in columnar format
  */
 export interface SessionState {
@@ -161,16 +229,21 @@ export interface CheckpointTriggers {
 }
 
 /**
- * Options for ColumnarSessionStore
+ * Options for ColumnarStore<T>
  */
-export interface ColumnarSessionStoreOptions {
+export interface ColumnarStoreOptions<T> {
   /** Cache configuration */
-  cache?: WriteBufferCacheOptions<SessionState>
+  cache?: WriteBufferCacheOptions<T>
   /** Checkpoint trigger configuration */
   checkpointTriggers?: CheckpointTriggers
   /** Callback when checkpoint occurs */
-  onCheckpoint?: (sessions: SessionState[], stats: CheckpointStats) => void
+  onCheckpoint?: (entities: T[], stats: CheckpointStats) => void
 }
+
+/**
+ * Options for ColumnarSessionStore (backwards compatibility)
+ */
+export type ColumnarSessionStoreOptions = ColumnarStoreOptions<SessionState>
 
 /**
  * Statistics from a checkpoint operation
@@ -481,39 +554,91 @@ export class WriteBufferCache<V> {
 }
 
 // ============================================================================
-// Columnar Session Store
+// Generic Columnar Store
 // ============================================================================
 
 /**
- * Columnar Session Store with write buffering
- *
- * This store uses a columnar schema (one row per session with JSON columns)
- * combined with an LRU cache and batch checkpointing to minimize row writes.
+ * Utility to convert camelCase to snake_case
  */
-export class ColumnarSessionStore {
-  private sql: SqlStorage
-  private cache: WriteBufferCache<SessionState>
-  private triggers: Required<CheckpointTriggers>
-  private onCheckpoint?: (sessions: SessionState[], stats: CheckpointStats) => void
-  private initialized = false
-  private checkpointTimer: ReturnType<typeof setTimeout> | null = null
-  private lastCheckpointAt = 0
+function toSnakeCase(str: string): string {
+  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)
+}
+
+/**
+ * Generic Columnar Store with write buffering
+ *
+ * This store uses a columnar schema (one row per entity with JSON columns)
+ * combined with an LRU cache and batch checkpointing to minimize row writes.
+ *
+ * @template T The entity type being stored
+ *
+ * @example
+ * ```typescript
+ * interface User {
+ *   id: string
+ *   name: string
+ *   settings: Record<string, unknown>
+ *   createdAt: Date
+ *   updatedAt: Date
+ *   version: number
+ * }
+ *
+ * const userSchema: SchemaDefinition<User> = {
+ *   tableName: 'users',
+ *   primaryKey: 'id',
+ *   versionField: 'version',
+ *   updatedAtField: 'updatedAt',
+ *   createdAtField: 'createdAt',
+ *   columns: {
+ *     id: { type: 'text', required: true },
+ *     name: { type: 'text', required: true },
+ *     settings: { type: 'json', defaultValue: '{}' },
+ *     createdAt: { type: 'datetime', column: 'created_at' },
+ *     updatedAt: { type: 'datetime', column: 'updated_at' },
+ *     version: { type: 'integer', defaultValue: '1' },
+ *   },
+ * }
+ *
+ * const store = new ColumnarStore<User>(sql, userSchema)
+ * ```
+ */
+export class ColumnarStore<T extends object> {
+  protected sql: SqlStorage
+  protected schema: SchemaDefinition<T>
+  protected cache: WriteBufferCache<T>
+  protected triggers: Required<CheckpointTriggers>
+  protected onCheckpointCallback?: (entities: T[], stats: CheckpointStats) => void
+  protected initialized = false
+  protected checkpointTimer: ReturnType<typeof setTimeout> | null = null
+  protected lastCheckpointAt = 0
 
   // Cost tracking
-  private rowWriteCount = 0
-  private normalizedRowWriteEstimate = 0
+  protected rowWriteCount = 0
+  protected normalizedRowWriteEstimate = 0
 
-  constructor(sql: SqlStorage, options: ColumnarSessionStoreOptions = {}) {
+  // Derived column mappings
+  private columnNames: Map<keyof T, string> = new Map()
+  private fieldNames: Map<string, keyof T> = new Map()
+
+  constructor(sql: SqlStorage, schema: SchemaDefinition<T>, options: ColumnarStoreOptions<T> = {}) {
     this.sql = sql
+    this.schema = schema
     this.triggers = {
       dirtyCount: options.checkpointTriggers?.dirtyCount ?? 10,
       intervalMs: options.checkpointTriggers?.intervalMs ?? 5000,
       memoryPressureRatio: options.checkpointTriggers?.memoryPressureRatio ?? 0.8,
     }
-    this.onCheckpoint = options.onCheckpoint
+    this.onCheckpointCallback = options.onCheckpoint
+
+    // Build column mappings
+    for (const [field, def] of Object.entries(schema.columns) as [keyof T & string, ColumnDefinition<T, keyof T>][]) {
+      const columnName = def?.column ?? toSnakeCase(field as string)
+      this.columnNames.set(field, columnName)
+      this.fieldNames.set(columnName, field)
+    }
 
     // Create cache with eviction callback that triggers checkpoint
-    this.cache = new WriteBufferCache<SessionState>({
+    this.cache = new WriteBufferCache<T>({
       ...options.cache,
       onEvict: (key, value, reason) => {
         // If evicting dirty data, checkpoint first
@@ -526,49 +651,80 @@ export class ColumnarSessionStore {
   }
 
   /**
+   * Get the SQL column name for a field
+   */
+  getColumnName(field: keyof T): string {
+    return this.columnNames.get(field) ?? toSnakeCase(field as string)
+  }
+
+  /**
+   * Get the field name for a SQL column
+   */
+  getFieldName(column: string): keyof T | undefined {
+    return this.fieldNames.get(column)
+  }
+
+  /**
    * Initialize the database schema
    */
   async ensureSchema(): Promise<void> {
     if (this.initialized) return
 
-    // Columnar schema: ONE row per session, JSON columns for arrays/objects
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        cwd TEXT NOT NULL,
-        env TEXT NOT NULL DEFAULT '{}',
-        history TEXT NOT NULL DEFAULT '[]',
-        open_files TEXT NOT NULL DEFAULT '[]',
-        processes TEXT NOT NULL DEFAULT '[]',
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        checkpointed_at TEXT,
-        version INTEGER NOT NULL DEFAULT 1
-      )
-    `)
+    const columns: string[] = []
 
-    // For cost comparison, also create a normalized schema (not used in production)
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS sessions_normalized_example (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        attribute_type TEXT NOT NULL,
-        attribute_key TEXT NOT NULL,
-        attribute_value TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `)
+    for (const [field, def] of Object.entries(this.schema.columns) as [keyof T & string, ColumnDefinition<T, keyof T>][]) {
+      if (!def) continue
+
+      const columnName = this.getColumnName(field)
+      let sqlType: string
+
+      switch (def.type) {
+        case 'text':
+        case 'datetime':
+        case 'json':
+          sqlType = 'TEXT'
+          break
+        case 'integer':
+          sqlType = 'INTEGER'
+          break
+        case 'real':
+          sqlType = 'REAL'
+          break
+        case 'blob':
+          sqlType = 'BLOB'
+          break
+        default:
+          sqlType = 'TEXT'
+      }
+
+      let columnDef = `${columnName} ${sqlType}`
+
+      if (field === this.schema.primaryKey) {
+        columnDef += ' PRIMARY KEY'
+      }
+
+      if (def.required) {
+        columnDef += ' NOT NULL'
+      }
+
+      if (def.defaultValue !== undefined) {
+        columnDef += ` DEFAULT ${def.defaultValue}`
+      }
+
+      columns.push(columnDef)
+    }
+
+    const createSQL = `CREATE TABLE IF NOT EXISTS ${this.schema.tableName} (${columns.join(', ')})`
+    this.sql.exec(createSQL)
 
     this.initialized = true
     this.startCheckpointTimer()
   }
 
   /**
-   * Get or create a session
+   * Get an entity by its primary key
    */
-  async getSession(id: string): Promise<SessionState | null> {
+  async get(id: string): Promise<T | null> {
     await this.ensureSchema()
 
     // Check cache first
@@ -578,8 +734,9 @@ export class ColumnarSessionStore {
     }
 
     // Load from database
+    const pkColumn = this.getColumnName(this.schema.primaryKey)
     const cursor = this.sql.exec(
-      `SELECT * FROM sessions WHERE id = ?`,
+      `SELECT * FROM ${this.schema.tableName} WHERE ${pkColumn} = ?`,
       id
     )
     const rows = cursor.toArray()
@@ -589,65 +746,72 @@ export class ColumnarSessionStore {
     }
 
     const row = rows[0] as Record<string, unknown>
-    const session = this.rowToSession(row)
+    const entity = this.rowToEntity(row)
 
     // Add to cache (not dirty since it's from DB)
-    this.cache.set(id, session, { markDirty: false })
+    this.cache.set(id, entity, { markDirty: false })
 
-    return session
+    return entity
   }
 
   /**
-   * Create a new session
+   * Create a new entity
    */
-  async createSession(id: string, initialState?: Partial<SessionState>): Promise<SessionState> {
+  async create(entity: T): Promise<T> {
     await this.ensureSchema()
 
+    const id = entity[this.schema.primaryKey] as string
     const now = new Date()
-    const session: SessionState = {
-      id,
-      cwd: initialState?.cwd ?? '/',
-      env: initialState?.env ?? {},
-      history: initialState?.history ?? [],
-      openFiles: initialState?.openFiles ?? [],
-      processes: initialState?.processes ?? [],
-      metadata: initialState?.metadata ?? {},
-      createdAt: now,
-      updatedAt: now,
-      checkpointedAt: null,
-      version: 1,
+
+    // Apply automatic timestamps if configured
+    const entityWithTimestamps = { ...entity }
+    if (this.schema.createdAtField && !(this.schema.createdAtField in entity)) {
+      (entityWithTimestamps as Record<string, unknown>)[this.schema.createdAtField] = now
+    }
+    if (this.schema.updatedAtField) {
+      (entityWithTimestamps as Record<string, unknown>)[this.schema.updatedAtField] = now
+    }
+    if (this.schema.versionField && !(this.schema.versionField in entity)) {
+      (entityWithTimestamps as Record<string, unknown>)[this.schema.versionField] = 1
     }
 
     // Add to cache as dirty
-    this.cache.set(id, session)
+    this.cache.set(id, entityWithTimestamps)
 
-    // Track normalized estimate (would need many rows for each attribute)
-    this.normalizedRowWriteEstimate += this.estimateNormalizedRows(session)
+    // Track normalized estimate
+    this.normalizedRowWriteEstimate += this.estimateNormalizedRows(entityWithTimestamps)
 
     // Check if we should checkpoint
     this.maybeCheckpoint()
 
-    return session
+    return entityWithTimestamps
   }
 
   /**
-   * Update a session
+   * Update an existing entity
    */
-  async updateSession(id: string, updates: Partial<SessionState>): Promise<SessionState | null> {
+  async update(id: string, updates: Partial<T>): Promise<T | null> {
     await this.ensureSchema()
 
-    const session = await this.getSession(id)
-    if (!session) {
+    const entity = await this.get(id)
+    if (!entity) {
       return null
     }
 
     // Apply updates
-    const updated: SessionState = {
-      ...session,
+    const updated: T = {
+      ...entity,
       ...updates,
-      id, // Preserve ID
-      updatedAt: new Date(),
-      version: session.version + 1,
+      [this.schema.primaryKey]: id, // Preserve ID
+    }
+
+    // Apply automatic timestamps and version
+    if (this.schema.updatedAtField) {
+      (updated as Record<string, unknown>)[this.schema.updatedAtField] = new Date()
+    }
+    if (this.schema.versionField) {
+      const currentVersion = (entity as Record<string, unknown>)[this.schema.versionField] as number
+      (updated as Record<string, unknown>)[this.schema.versionField] = currentVersion + 1
     }
 
     // Update cache (marks as dirty)
@@ -664,56 +828,19 @@ export class ColumnarSessionStore {
   }
 
   /**
-   * Add a command to session history
+   * Delete an entity
    */
-  async addHistoryEntry(sessionId: string, entry: CommandHistoryEntry): Promise<void> {
+  async delete(id: string): Promise<boolean> {
     await this.ensureSchema()
 
-    const session = await this.getSession(sessionId)
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`)
-    }
+    // Remove from cache
+    this.cache.delete(id)
 
-    // Append to history
-    const updated = {
-      ...session,
-      history: [...session.history, entry],
-      updatedAt: new Date(),
-      version: session.version + 1,
-    }
+    // Delete from database
+    const pkColumn = this.getColumnName(this.schema.primaryKey)
+    this.sql.exec(`DELETE FROM ${this.schema.tableName} WHERE ${pkColumn} = ?`, id)
 
-    this.cache.set(sessionId, updated)
-
-    // In normalized schema, this would be a new row
-    this.normalizedRowWriteEstimate += 1
-
-    this.maybeCheckpoint()
-  }
-
-  /**
-   * Update environment variable
-   */
-  async setEnvVar(sessionId: string, key: string, value: string): Promise<void> {
-    await this.ensureSchema()
-
-    const session = await this.getSession(sessionId)
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`)
-    }
-
-    const updated = {
-      ...session,
-      env: { ...session.env, [key]: value },
-      updatedAt: new Date(),
-      version: session.version + 1,
-    }
-
-    this.cache.set(sessionId, updated)
-
-    // In normalized schema, this would be a new/updated row
-    this.normalizedRowWriteEstimate += 1
-
-    this.maybeCheckpoint()
+    return true
   }
 
   /**
@@ -734,52 +861,25 @@ export class ColumnarSessionStore {
       }
     }
 
-    const sessions: SessionState[] = []
+    const entities: T[] = []
     let totalBytes = 0
 
-    // Write all dirty sessions in a single transaction
-    for (const [id, session] of dirtyEntries) {
+    // Write all dirty entities in batch
+    for (const [, entity] of dirtyEntries) {
       const now = new Date().toISOString()
-      const envJson = JSON.stringify(session.env)
-      const historyJson = JSON.stringify(session.history)
-      const openFilesJson = JSON.stringify(session.openFiles)
-      const processesJson = JSON.stringify(session.processes)
-      const metadataJson = JSON.stringify(session.metadata)
 
-      totalBytes += envJson.length + historyJson.length + openFilesJson.length +
-                    processesJson.length + metadataJson.length
+      // Update checkpoint timestamp if configured
+      if (this.schema.checkpointedAtField) {
+        (entity as Record<string, unknown>)[this.schema.checkpointedAtField] = new Date(now)
+      }
 
-      this.sql.exec(
-        `INSERT INTO sessions (id, cwd, env, history, open_files, processes, metadata, created_at, updated_at, checkpointed_at, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           cwd = excluded.cwd,
-           env = excluded.env,
-           history = excluded.history,
-           open_files = excluded.open_files,
-           processes = excluded.processes,
-           metadata = excluded.metadata,
-           updated_at = excluded.updated_at,
-           checkpointed_at = excluded.checkpointed_at,
-           version = excluded.version`,
-        id,
-        session.cwd,
-        envJson,
-        historyJson,
-        openFilesJson,
-        processesJson,
-        metadataJson,
-        session.createdAt.toISOString(),
-        session.updatedAt.toISOString(),
-        now,
-        session.version
-      )
+      const { sql, params, bytes } = this.buildUpsertSQL(entity, now)
+      totalBytes += bytes
 
-      // Update session with checkpoint time
-      session.checkpointedAt = new Date(now)
-      sessions.push(session)
+      this.sql.exec(sql, ...params)
+      entities.push(entity)
 
-      // Each session = 1 row write (columnar approach)
+      // Each entity = 1 row write (columnar approach)
       this.rowWriteCount += 1
     }
 
@@ -788,13 +888,13 @@ export class ColumnarSessionStore {
     this.lastCheckpointAt = Date.now()
 
     const stats: CheckpointStats = {
-      sessionCount: sessions.length,
+      sessionCount: entities.length,
       totalBytes,
       durationMs: Date.now() - startTime,
       trigger,
     }
 
-    this.onCheckpoint?.(sessions, stats)
+    this.onCheckpointCallback?.(entities, stats)
 
     return stats
   }
@@ -847,43 +947,138 @@ export class ColumnarSessionStore {
     }
   }
 
-  // Private methods
+  // Protected methods for subclass access
 
-  private rowToSession(row: Record<string, unknown>): SessionState {
-    return {
-      id: row.id as string,
-      cwd: row.cwd as string,
-      env: JSON.parse((row.env as string) || '{}'),
-      history: JSON.parse((row.history as string) || '[]'),
-      openFiles: JSON.parse((row.open_files as string) || '[]'),
-      processes: JSON.parse((row.processes as string) || '[]'),
-      metadata: JSON.parse((row.metadata as string) || '{}'),
-      createdAt: new Date(row.created_at as string),
-      updatedAt: new Date(row.updated_at as string),
-      checkpointedAt: row.checkpointed_at ? new Date(row.checkpointed_at as string) : null,
-      version: row.version as number,
+  /**
+   * Convert a database row to an entity
+   */
+  protected rowToEntity(row: Record<string, unknown>): T {
+    const entity: Record<string, unknown> = {}
+
+    for (const [field, def] of Object.entries(this.schema.columns) as [keyof T & string, ColumnDefinition<T, keyof T>][]) {
+      if (!def) continue
+
+      const columnName = this.getColumnName(field)
+      const rawValue = row[columnName]
+
+      // Use custom deserializer if provided
+      if (def.deserialize) {
+        entity[field] = def.deserialize(rawValue)
+        continue
+      }
+
+      // Default deserialization based on type
+      switch (def.type) {
+        case 'json':
+          entity[field] = rawValue ? JSON.parse(rawValue as string) : (def.defaultValue ? JSON.parse(def.defaultValue) : null)
+          break
+        case 'datetime':
+          entity[field] = rawValue ? new Date(rawValue as string) : null
+          break
+        case 'integer':
+          entity[field] = rawValue as number
+          break
+        case 'real':
+          entity[field] = rawValue as number
+          break
+        default:
+          entity[field] = rawValue
+      }
+    }
+
+    return entity as T
+  }
+
+  /**
+   * Serialize an entity field value for SQL
+   */
+  protected serializeValue(_field: keyof T, value: unknown, def: ColumnDefinition<T, keyof T>): unknown {
+    // Use custom serializer if provided
+    if (def.serialize) {
+      return def.serialize(value as T[keyof T])
+    }
+
+    // Default serialization based on type
+    switch (def.type) {
+      case 'json':
+        return JSON.stringify(value ?? (def.defaultValue ? JSON.parse(def.defaultValue) : null))
+      case 'datetime':
+        return value instanceof Date ? value.toISOString() : value
+      default:
+        return value
     }
   }
 
-  private estimateNormalizedRows(session: SessionState): number {
-    // In normalized schema, each attribute would be a separate row:
-    // - 1 row for cwd
-    // - N rows for env vars
-    // - N rows for history entries
-    // - N rows for open files
-    // - N rows for processes
-    // - N rows for metadata entries
-    return (
-      1 + // cwd
-      Object.keys(session.env).length +
-      session.history.length +
-      session.openFiles.length +
-      session.processes.length +
-      Object.keys(session.metadata).length
-    )
+  /**
+   * Build UPSERT SQL statement
+   */
+  protected buildUpsertSQL(entity: T, _checkpointTime: string): { sql: string; params: unknown[]; bytes: number } {
+    const columns: string[] = []
+    const placeholders: string[] = []
+    const updateSets: string[] = []
+    const params: unknown[] = []
+    let bytes = 0
+
+    const pkColumn = this.getColumnName(this.schema.primaryKey)
+
+    for (const [field, def] of Object.entries(this.schema.columns) as [keyof T & string, ColumnDefinition<T, keyof T>][]) {
+      if (!def) continue
+
+      const columnName = this.getColumnName(field)
+      const value = entity[field]
+      const serialized = this.serializeValue(field, value, def)
+
+      columns.push(columnName)
+      placeholders.push('?')
+      params.push(serialized)
+
+      // Track bytes for JSON columns
+      if (def.type === 'json' && typeof serialized === 'string') {
+        bytes += serialized.length
+      }
+
+      // Add to update set (except primary key)
+      if (field !== this.schema.primaryKey) {
+        updateSets.push(`${columnName} = excluded.${columnName}`)
+      }
+    }
+
+    const sql = `INSERT INTO ${this.schema.tableName} (${columns.join(', ')})
+         VALUES (${placeholders.join(', ')})
+         ON CONFLICT(${pkColumn}) DO UPDATE SET ${updateSets.join(', ')}`
+
+    return { sql, params, bytes }
   }
 
-  private maybeCheckpoint(): void {
+  /**
+   * Estimate normalized row count for cost comparison
+   */
+  protected estimateNormalizedRows(entity: T): number {
+    let count = 0
+
+    for (const [field, def] of Object.entries(this.schema.columns) as [keyof T & string, ColumnDefinition<T, keyof T>][]) {
+      if (!def) continue
+
+      const value = entity[field]
+
+      if (def.type === 'json') {
+        // JSON columns would be multiple rows in normalized schema
+        if (Array.isArray(value)) {
+          count += value.length || 1
+        } else if (value && typeof value === 'object') {
+          count += Object.keys(value).length || 1
+        } else {
+          count += 1
+        }
+      } else {
+        count += 1
+      }
+    }
+
+    return count
+  }
+
+  protected maybeCheckpoint(): void {
     const stats = this.cache.getStats()
 
     // Check dirty count trigger
@@ -903,7 +1098,7 @@ export class ColumnarSessionStore {
     }
   }
 
-  private startCheckpointTimer(): void {
+  protected startCheckpointTimer(): void {
     if (this.checkpointTimer) return
 
     this.checkpointTimer = setInterval(() => {
@@ -916,41 +1111,154 @@ export class ColumnarSessionStore {
     }, this.triggers.intervalMs)
   }
 
-  private checkpointSync(entries: Array<{ key: string; value: SessionState }>): void {
-    // Synchronous checkpoint for eviction scenarios
+  protected checkpointSync(entries: Array<{ key: string; value: T }>): void {
     const now = new Date().toISOString()
 
-    for (const { key: id, value: session } of entries) {
-      if (!session) continue
+    for (const { value: entity } of entries) {
+      if (!entity) continue
 
-      this.sql.exec(
-        `INSERT INTO sessions (id, cwd, env, history, open_files, processes, metadata, created_at, updated_at, checkpointed_at, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           cwd = excluded.cwd,
-           env = excluded.env,
-           history = excluded.history,
-           open_files = excluded.open_files,
-           processes = excluded.processes,
-           metadata = excluded.metadata,
-           updated_at = excluded.updated_at,
-           checkpointed_at = excluded.checkpointed_at,
-           version = excluded.version`,
-        id,
-        session.cwd,
-        JSON.stringify(session.env),
-        JSON.stringify(session.history),
-        JSON.stringify(session.openFiles),
-        JSON.stringify(session.processes),
-        JSON.stringify(session.metadata),
-        session.createdAt.toISOString(),
-        session.updatedAt.toISOString(),
-        now,
-        session.version
-      )
+      const { sql, params } = this.buildUpsertSQL(entity, now)
+      this.sql.exec(sql, ...params)
 
       this.rowWriteCount += 1
     }
+  }
+}
+
+// ============================================================================
+// Session Schema Definition
+// ============================================================================
+
+/**
+ * Pre-defined schema for SessionState
+ */
+export const SESSION_SCHEMA: SchemaDefinition<SessionState> = {
+  tableName: 'sessions',
+  primaryKey: 'id',
+  versionField: 'version',
+  updatedAtField: 'updatedAt',
+  createdAtField: 'createdAt',
+  checkpointedAtField: 'checkpointedAt',
+  columns: {
+    id: { type: 'text', required: true },
+    cwd: { type: 'text', required: true },
+    env: { type: 'json', defaultValue: "'{}'" },
+    history: { type: 'json', defaultValue: "'[]'" },
+    openFiles: { type: 'json', column: 'open_files', defaultValue: "'[]'" },
+    processes: { type: 'json', defaultValue: "'[]'" },
+    metadata: { type: 'json', defaultValue: "'{}'" },
+    createdAt: { type: 'datetime', column: 'created_at', required: true },
+    updatedAt: { type: 'datetime', column: 'updated_at', required: true },
+    checkpointedAt: { type: 'datetime', column: 'checkpointed_at' },
+    version: { type: 'integer', defaultValue: '1', required: true },
+  },
+}
+
+// ============================================================================
+// Columnar Session Store (Backwards Compatibility)
+// ============================================================================
+
+/**
+ * Columnar Session Store with write buffering
+ *
+ * This is a specialized version of ColumnarStore for SessionState with
+ * convenience methods for session-specific operations.
+ */
+export class ColumnarSessionStore extends ColumnarStore<SessionState> {
+  constructor(sql: SqlStorage, options: ColumnarSessionStoreOptions = {}) {
+    super(sql, SESSION_SCHEMA, options)
+  }
+
+  /**
+   * Initialize the database schema (override to also create normalized example table)
+   */
+  async ensureSchema(): Promise<void> {
+    await super.ensureSchema()
+
+    // For cost comparison, also create a normalized schema (not used in production)
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS sessions_normalized_example (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        attribute_type TEXT NOT NULL,
+        attribute_key TEXT NOT NULL,
+        attribute_value TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
+  }
+
+  /**
+   * Get a session by ID (alias for get)
+   */
+  async getSession(id: string): Promise<SessionState | null> {
+    return this.get(id)
+  }
+
+  /**
+   * Create a new session
+   */
+  async createSession(id: string, initialState?: Partial<SessionState>): Promise<SessionState> {
+    const now = new Date()
+    const session: SessionState = {
+      id,
+      cwd: initialState?.cwd ?? '/',
+      env: initialState?.env ?? {},
+      history: initialState?.history ?? [],
+      openFiles: initialState?.openFiles ?? [],
+      processes: initialState?.processes ?? [],
+      metadata: initialState?.metadata ?? {},
+      createdAt: now,
+      updatedAt: now,
+      checkpointedAt: null,
+      version: 1,
+    }
+
+    return this.create(session)
+  }
+
+  /**
+   * Update a session (alias for update)
+   */
+  async updateSession(id: string, updates: Partial<SessionState>): Promise<SessionState | null> {
+    return this.update(id, updates)
+  }
+
+  /**
+   * Add a command to session history
+   */
+  async addHistoryEntry(sessionId: string, entry: CommandHistoryEntry): Promise<void> {
+    await this.ensureSchema()
+
+    const session = await this.getSession(sessionId)
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
+    await this.update(sessionId, {
+      history: [...session.history, entry],
+    })
+
+    // In normalized schema, this would be a new row (already counted in update)
+  }
+
+  /**
+   * Update environment variable
+   */
+  async setEnvVar(sessionId: string, key: string, value: string): Promise<void> {
+    await this.ensureSchema()
+
+    const session = await this.getSession(sessionId)
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
+    await this.update(sessionId, {
+      env: { ...session.env, [key]: value },
+    })
+
+    // In normalized schema, this would be a new/updated row (already counted in update)
   }
 }
 
