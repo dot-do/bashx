@@ -690,19 +690,11 @@ describe('ShellStream Callbacks', () => {
 
 describe('ShellStream Disposal', () => {
   describe('Symbol.dispose implementation', () => {
-    it('should kill running process on dispose', async () => {
-      const stream = createMockShellStream()
-      const killSpy = vi.spyOn(stream, 'kill')
-
-      // Dispose the stream (process still "running")
-      stream[Symbol.dispose]()
-
-      // Note: In real implementation, kill would be called
-      // Our mock doesn't call kill on dispose, but the test
-      // documents the expected behavior
-      expect(killSpy).not.toHaveBeenCalled() // Mock behavior
-      // Real implementation should call: expect(killSpy).toHaveBeenCalled()
-    })
+    // TODO: This test requires real ShellStream implementation
+    // The mock doesn't call kill() on dispose, but real implementation should
+    // When implementing, this test should verify that disposing a stream
+    // with a running process calls kill() to clean up
+    it.todo('should kill running process on dispose')
 
     it('should clear callback references on dispose', async () => {
       const stream = createMockShellStream()
@@ -781,51 +773,22 @@ describe('ShellStream Disposal', () => {
   })
 
   describe('Remote Stub Disposal', () => {
-    it('should trigger server-side cleanup on dispose', async () => {
-      // This test documents expected behavior for RPC stubs
-      // When the client disposes the ShellStream stub, the server
-      // should be notified to clean up resources
-
-      const stream = createMockShellStream()
-
-      // In a real implementation, dispose would send an RPC message
-      // to the server to release the process handle
-      stream[Symbol.dispose]()
-
-      // The mock doesn't have RPC, but we're documenting the contract
-      // A real implementation would verify server cleanup was triggered
-      expect(true).toBe(true) // Placeholder for RPC verification
-    })
+    // TODO: This test requires real RPC implementation
+    // When the client disposes the ShellStream stub, the server
+    // should be notified to clean up resources via RPC message
+    it.todo('should trigger server-side cleanup on dispose')
   })
 
   describe('Connection Close Triggers Disposal', () => {
-    it('should dispose stream when RPC connection closes', async () => {
-      // This test documents expected behavior for RPC connections
-      // When the WebSocket/RPC connection is lost, all streams should be disposed
+    // TODO: This test requires real RPC/WebSocket implementation
+    // When the WebSocket/RPC connection is lost, all streams should be disposed
+    // and enter disposed state (throwing on new callback registration)
+    it.todo('should dispose stream when RPC connection closes')
 
-      const stream = createMockShellStream()
-
-      // Simulate connection close
-      // In a real implementation, this would be triggered by WebSocket onclose
-      stream[Symbol.dispose]()
-
-      // Verify stream is in disposed state
-      expect(() => stream.onData(vi.fn())).toThrow()
-    })
-
-    it('should kill process when connection unexpectedly closes', async () => {
-      // Documents expected behavior: unexpected disconnection should
-      // clean up server-side resources
-
-      const stream = createMockShellStream()
-
-      // The process should be killed when connection is lost
-      // This prevents orphaned processes on the server
-      stream[Symbol.dispose]()
-
-      // In real implementation, server would receive cleanup signal
-      expect(true).toBe(true) // Placeholder for connection loss handling
-    })
+    // TODO: This test requires real RPC/WebSocket implementation
+    // Unexpected disconnection should clean up server-side resources
+    // by killing processes to prevent orphans
+    it.todo('should kill process when connection unexpectedly closes')
   })
 })
 
