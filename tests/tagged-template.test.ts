@@ -35,7 +35,7 @@ describe('Shell Escaping', () => {
 
     it('should not quote strings with colons and equals', () => {
       expect(shellEscapeArg('key=value')).toBe('key=value')
-      expect(shellEscapeArg('http://example.com')).toBe('http://example.com')
+      expect(shellEscapeArg('http://example.com.ai')).toBe('http://example.com.ai')
     })
 
     it('should not quote strings with at signs', () => {
@@ -241,8 +241,8 @@ describe('Real-World Command Examples', () => {
   })
 
   it('should safely build curl command', () => {
-    const url = 'https://api.example.com/data?foo=bar&baz=qux'
-    expect(template`curl ${url}`).toBe("curl 'https://api.example.com/data?foo=bar&baz=qux'")
+    const url = 'https://api.example.com.ai/data?foo=bar&baz=qux'
+    expect(template`curl ${url}`).toBe("curl 'https://api.example.com.ai/data?foo=bar&baz=qux'")
   })
 
   it('should safely build docker run command', () => {
@@ -261,9 +261,9 @@ describe('Real-World Command Examples', () => {
   })
 
   it('should safely build ssh command', () => {
-    const host = 'user@example.com'
+    const host = 'user@example.com.ai'
     const cmd = 'ls -la /var/log'
-    expect(template`ssh ${host} ${cmd}`).toBe("ssh user@example.com 'ls -la /var/log'")
+    expect(template`ssh ${host} ${cmd}`).toBe("ssh user@example.com.ai 'ls -la /var/log'")
   })
 })
 

@@ -749,7 +749,7 @@ export function uuidv1(): string {
  *
  * @example
  * ```ts
- * await uuidv3(UUID_NAMESPACES.URL, 'https://example.com')
+ * await uuidv3(UUID_NAMESPACES.URL, 'https://example.com.ai')
  * // Returns: 'e8b764da-5fe5-3576-8a15-4b8b24b8c3b0'
  * ```
  */
@@ -778,11 +778,11 @@ export async function uuidv3(namespace: string, name: string): Promise<string> {
  *
  * @example
  * ```ts
- * await uuidv5(UUID_NAMESPACES.URL, 'https://example.com')
+ * await uuidv5(UUID_NAMESPACES.URL, 'https://example.com.ai')
  * // Returns: '2ed6657d-e927-568b-95e1-2665a8aea6a2'
  *
  * // Using DNS namespace
- * await uuidv5(UUID_NAMESPACES.DNS, 'example.com')
+ * await uuidv5(UUID_NAMESPACES.DNS, 'example.com.ai')
  * ```
  */
 export async function uuidv5(namespace: string, name: string): Promise<string> {

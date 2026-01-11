@@ -449,10 +449,10 @@ describe('whoami command', () => {
 
 describe('hostname command', () => {
   it('returns hostname from context', () => {
-    const result = executeHostname([], { hostname: 'server.example.com' })
+    const result = executeHostname([], { hostname: 'server.example.com.ai' })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toBe('server.example.com\n')
+    expect(result.stdout).toBe('server.example.com.ai\n')
   })
 
   it('returns HOSTNAME from environment', () => {
@@ -477,38 +477,38 @@ describe('hostname command', () => {
   })
 
   it('handles -s flag for short hostname', () => {
-    const result = executeHostname(['-s'], { hostname: 'server.example.com' })
+    const result = executeHostname(['-s'], { hostname: 'server.example.com.ai' })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toBe('server\n')
   })
 
   it('handles --short flag', () => {
-    const result = executeHostname(['--short'], { hostname: 'server.example.com' })
+    const result = executeHostname(['--short'], { hostname: 'server.example.com.ai' })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toBe('server\n')
   })
 
   it('handles -f flag for full hostname', () => {
-    const result = executeHostname(['-f'], { hostname: 'server.example.com' })
+    const result = executeHostname(['-f'], { hostname: 'server.example.com.ai' })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toBe('server.example.com\n')
+    expect(result.stdout).toBe('server.example.com.ai\n')
   })
 
   it('handles --fqdn flag', () => {
-    const result = executeHostname(['--fqdn'], { hostname: 'server.example.com' })
+    const result = executeHostname(['--fqdn'], { hostname: 'server.example.com.ai' })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toBe('server.example.com\n')
+    expect(result.stdout).toBe('server.example.com.ai\n')
   })
 
   it('handles --long flag', () => {
-    const result = executeHostname(['--long'], { hostname: 'server.example.com' })
+    const result = executeHostname(['--long'], { hostname: 'server.example.com.ai' })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toBe('server.example.com\n')
+    expect(result.stdout).toBe('server.example.com.ai\n')
   })
 
   it('returns full hostname when no dots present with -s', () => {

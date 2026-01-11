@@ -803,7 +803,7 @@ describe('Edge Cases', () => {
       const sha = 'abc123def456789012345678901234567890'
       const input = [
         `003f${sha} HEAD\0caps\n`,
-        `004e${sha} refs/heads/feature/user@example.com/test\n`,
+        `004e${sha} refs/heads/feature/user@example.com.ai/test\n`,
         '0000',
       ].join('')
 
@@ -811,8 +811,8 @@ describe('Edge Cases', () => {
 
       expect(result.branches).toContainEqual({
         sha,
-        name: 'refs/heads/feature/user@example.com/test',
-        shortName: 'feature/user@example.com/test',
+        name: 'refs/heads/feature/user@example.com.ai/test',
+        shortName: 'feature/user@example.com.ai/test',
       })
     })
 

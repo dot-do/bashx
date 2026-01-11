@@ -974,7 +974,7 @@ describe('GitAuth - Authentication', () => {
     it('should support custom env var name', () => {
       process.env.MY_GIT_TOKEN = 'custom_token'
 
-      const token = getTokenFromEnv('custom.git.example.com', 'MY_GIT_TOKEN')
+      const token = getTokenFromEnv('custom.git.example.com.ai', 'MY_GIT_TOKEN')
 
       expect(token).toBe('custom_token')
     })
@@ -1238,11 +1238,11 @@ describe('GitAuth Class', () => {
 
   it('should expire cached credentials', async () => {
     const auth = new GitAuth({ token: 'short_lived' })
-    auth.cacheFor('example.com', 0.001) // 1ms TTL
+    auth.cacheFor('example.com.ai', 0.001) // 1ms TTL
 
     await new Promise((resolve) => setTimeout(resolve, 10))
 
-    const cached = GitAuth.getCached('example.com')
+    const cached = GitAuth.getCached('example.com.ai')
     expect(cached).toBeUndefined()
   })
 })

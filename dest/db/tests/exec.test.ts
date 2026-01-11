@@ -628,7 +628,7 @@ describe('Practical Usage', () => {
     const record: Partial<Exec> = {
       id: 'exec-curl-001',
       command: 'curl',
-      args: ['-s', 'https://api.example.com/data'],
+      args: ['-s', 'https://api.example.com.ai/data'],
       safetyType: 'network',
       safetyImpact: 'medium',
       safetyReversible: true,

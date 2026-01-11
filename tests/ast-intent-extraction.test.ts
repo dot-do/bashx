@@ -335,34 +335,34 @@ describe('Intent Extraction from Complex Commands', () => {
 
   describe('Network Command Patterns', () => {
     it('should extract intent from curl GET request', () => {
-      const ast = parse('curl https://api.example.com/data')
+      const ast = parse('curl https://api.example.com.ai/data')
       const intent = extractIntentFromAST(ast)
 
       expect(intent.action).toBe('fetch')
       expect(intent.object).toBe('URL')
-      expect(intent.url).toBe('https://api.example.com/data')
+      expect(intent.url).toBe('https://api.example.com.ai/data')
       expect(intent.method).toBe('GET')
-      expect(intent.description).toBe('fetch data from https://api.example.com/data')
+      expect(intent.description).toBe('fetch data from https://api.example.com.ai/data')
     })
 
     it('should extract intent from curl POST request', () => {
-      const ast = parse('curl -X POST https://api.example.com/users -d "name=test"')
+      const ast = parse('curl -X POST https://api.example.com.ai/users -d "name=test"')
       const intent = extractIntentFromAST(ast)
 
       expect(intent.action).toBe('send')
       expect(intent.method).toBe('POST')
-      expect(intent.url).toBe('https://api.example.com/users')
+      expect(intent.url).toBe('https://api.example.com.ai/users')
       expect(intent.description).toMatch(/send.*POST.*request/i)
     })
 
     it('should extract intent from wget download', () => {
-      const ast = parse('wget https://example.com/file.zip')
+      const ast = parse('wget https://example.com.ai/file.zip')
       const intent = extractIntentFromAST(ast)
 
       expect(intent.action).toBe('download')
       expect(intent.object).toBe('file')
-      expect(intent.url).toBe('https://example.com/file.zip')
-      expect(intent.description).toBe('download file from https://example.com/file.zip')
+      expect(intent.url).toBe('https://example.com.ai/file.zip')
+      expect(intent.description).toBe('download file from https://example.com.ai/file.zip')
     })
 
     it('should extract intent from ssh connection', () => {
@@ -563,7 +563,7 @@ describe('extractIntent() Function', () => {
 
   describe('Flag Detection', () => {
     it('should detect network flag from curl', () => {
-      const ast = parse('curl https://api.example.com')
+      const ast = parse('curl https://api.example.com.ai')
       const cmd = ast.body[0] as Command
       const intent = extractIntent([cmd])
 

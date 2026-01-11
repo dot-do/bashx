@@ -18,8 +18,8 @@
  *
  * // Multiple contexts
  * const { prod, staging } = $Contexts({
- *   prod: 'https://api.example.com',
- *   staging: 'https://staging.example.com'
+ *   prod: 'https://api.example.com.ai',
+ *   staging: 'https://staging.example.com.ai'
  * })
  *
  * // Parallel execution
@@ -99,7 +99,7 @@ let currentContext: ContextOptions = {}
  * const $ = $Context('https://startups.studio')
  *
  * // With options
- * const $ = $Context('https://api.example.com', { token: 'xxx' })
+ * const $ = $Context('https://api.example.com.ai', { token: 'xxx' })
  *
  * // With namespace
  * const $ = $Context('https://dotdo.dev').ns('my-workspace')
@@ -370,8 +370,8 @@ export function setContext(options: ContextOptions): void {
  * @example
  * ```typescript
  * const { prod, staging, dev } = $Contexts({
- *   prod: 'https://api.example.com',
- *   staging: 'https://staging.example.com',
+ *   prod: 'https://api.example.com.ai',
+ *   staging: 'https://staging.example.com.ai',
  *   dev: 'http://localhost:8787'
  * })
  * ```

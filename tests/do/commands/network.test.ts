@@ -50,10 +50,10 @@ import { TieredExecutor } from '../../../src/do/tiered-executor.js'
 describe('ping command', () => {
   describe('basic ping', () => {
     it('should ping a host N times with -c flag', async () => {
-      // ping -c 4 example.com
-      const result = await executePing('example.com', { count: 4 })
+      // ping -c 4 example.com.ai
+      const result = await executePing('example.com.ai', { count: 4 })
 
-      expect(result.host).toBe('example.com')
+      expect(result.host).toBe('example.com.ai')
       expect(result.transmitted).toBe(4)
       expect(result.received).toBeGreaterThanOrEqual(0)
       expect(result.received).toBeLessThanOrEqual(4)
@@ -61,8 +61,8 @@ describe('ping command', () => {
     })
 
     it('should calculate packet loss percentage', async () => {
-      // ping -c 4 example.com (reduced from 10 for faster tests)
-      const result = await executePing('example.com', { count: 4, interval: 100 })
+      // ping -c 4 example.com.ai (reduced from 10 for faster tests)
+      const result = await executePing('example.com.ai', { count: 4, interval: 100 })
 
       expect(result.packetLoss).toBeGreaterThanOrEqual(0)
       expect(result.packetLoss).toBeLessThanOrEqual(100)
@@ -73,8 +73,8 @@ describe('ping command', () => {
     })
 
     it('should calculate round-trip time statistics', async () => {
-      // ping -c 4 example.com
-      const result = await executePing('example.com', { count: 4 })
+      // ping -c 4 example.com.ai
+      const result = await executePing('example.com.ai', { count: 4 })
 
       if (result.received > 0) {
         expect(result.min).toBeGreaterThan(0)
@@ -86,7 +86,7 @@ describe('ping command', () => {
     })
 
     it('should return individual timing for each ping', async () => {
-      const result = await executePing('example.com', { count: 3 })
+      const result = await executePing('example.com.ai', { count: 3 })
 
       result.times.forEach((time) => {
         expect(time).toBeGreaterThan(0)
@@ -97,8 +97,8 @@ describe('ping command', () => {
 
   describe('ping with timeout', () => {
     it('should respect timeout with -W flag', async () => {
-      // ping -c 1 -W 5 example.com (5 second timeout)
-      const result = await executePing('example.com', { count: 1, timeout: 5000 })
+      // ping -c 1 -W 5 example.com.ai (5 second timeout)
+      const result = await executePing('example.com.ai', { count: 1, timeout: 5000 })
 
       expect(result.transmitted).toBe(1)
       // If succeeded, time should be less than timeout
@@ -117,7 +117,7 @@ describe('ping command', () => {
     })
 
     it('should timeout individual requests', async () => {
-      // ping -c 3 -W 1 slow.example.com
+      // ping -c 3 -W 1 slow.example.com.ai
       const startTime = Date.now()
       const result = await executePing('slow.example.invalid', { count: 3, timeout: 1000 })
       const elapsed = Date.now() - startTime
@@ -130,8 +130,8 @@ describe('ping command', () => {
 
   describe('quiet mode', () => {
     it('should support quiet mode with -q flag', async () => {
-      // ping -q example.com - only shows summary
-      const result = await executePing('example.com', { count: 4, quiet: true })
+      // ping -q example.com.ai - only shows summary
+      const result = await executePing('example.com.ai', { count: 4, quiet: true })
 
       // In quiet mode, only summary stats should be meaningful
       expect(result.transmitted).toBe(4)
@@ -144,7 +144,7 @@ describe('ping command', () => {
 
   describe('output format', () => {
     it('should format output like real ping', async () => {
-      const result = await executePing('example.com', { count: 4 })
+      const result = await executePing('example.com.ai', { count: 4 })
       const output = formatPingOutput(result)
 
       // Should contain summary line
@@ -161,9 +161,9 @@ describe('ping command', () => {
 
   describe('interval between pings', () => {
     it('should respect interval with -i flag', async () => {
-      // ping -c 3 -i 0.5 example.com (500ms between pings)
+      // ping -c 3 -i 0.5 example.com.ai (500ms between pings)
       const startTime = Date.now()
-      await executePing('example.com', { count: 3, interval: 500 })
+      await executePing('example.com.ai', { count: 3, interval: 500 })
       const elapsed = Date.now() - startTime
 
       // Should take at least (count - 1) * interval milliseconds
@@ -179,10 +179,10 @@ describe('ping command', () => {
 describe('dig command', () => {
   describe('A record lookup', () => {
     it('should lookup A record by default', async () => {
-      // dig example.com
-      const result = await executeDig('example.com')
+      // dig example.com.ai
+      const result = await executeDig('example.com.ai')
 
-      expect(result.question.name).toBe('example.com')
+      expect(result.question.name).toBe('example.com.ai')
       expect(result.question.type).toBe('A')
       expect(result.status).toBe(0) // NOERROR
       expect(result.answer.length).toBeGreaterThan(0)
@@ -199,8 +199,8 @@ describe('dig command', () => {
 
   describe('AAAA record lookup (IPv6)', () => {
     it('should lookup AAAA record', async () => {
-      // dig example.com AAAA
-      const result = await executeDig('example.com', { type: 'AAAA' })
+      // dig example.com.ai AAAA
+      const result = await executeDig('example.com.ai', { type: 'AAAA' })
 
       expect(result.question.type).toBe('AAAA')
 
@@ -218,8 +218,8 @@ describe('dig command', () => {
 
   describe('MX record lookup', () => {
     it('should lookup MX record for mail servers', async () => {
-      // dig example.com MX
-      const result = await executeDig('example.com', { type: 'MX' })
+      // dig example.com.ai MX
+      const result = await executeDig('example.com.ai', { type: 'MX' })
 
       expect(result.question.type).toBe('MX')
 
@@ -235,8 +235,8 @@ describe('dig command', () => {
 
   describe('TXT record lookup', () => {
     it('should lookup TXT records', async () => {
-      // dig example.com TXT
-      const result = await executeDig('example.com', { type: 'TXT' })
+      // dig example.com.ai TXT
+      const result = await executeDig('example.com.ai', { type: 'TXT' })
 
       expect(result.question.type).toBe('TXT')
 
@@ -248,8 +248,8 @@ describe('dig command', () => {
     })
 
     it('should handle SPF records in TXT', async () => {
-      // dig example.com TXT - SPF is stored in TXT
-      const result = await executeDig('example.com', { type: 'TXT' })
+      // dig example.com.ai TXT - SPF is stored in TXT
+      const result = await executeDig('example.com.ai', { type: 'TXT' })
 
       const spfRecords = result.answer.filter(
         (r) => r.type === 'TXT' && r.data.includes('v=spf1')
@@ -261,8 +261,8 @@ describe('dig command', () => {
 
   describe('NS record lookup', () => {
     it('should lookup NS records for nameservers', async () => {
-      // dig example.com NS
-      const result = await executeDig('example.com', { type: 'NS' })
+      // dig example.com.ai NS
+      const result = await executeDig('example.com.ai', { type: 'NS' })
 
       expect(result.question.type).toBe('NS')
       expect(result.answer.length).toBeGreaterThan(0)
@@ -278,8 +278,8 @@ describe('dig command', () => {
 
   describe('CNAME record lookup', () => {
     it('should lookup CNAME records', async () => {
-      // dig www.example.com CNAME
-      const result = await executeDig('www.example.com', { type: 'CNAME' })
+      // dig www.example.com.ai CNAME
+      const result = await executeDig('www.example.com.ai', { type: 'CNAME' })
 
       expect(result.question.type).toBe('CNAME')
       // www may or may not be a CNAME
@@ -288,8 +288,8 @@ describe('dig command', () => {
 
   describe('SOA record lookup', () => {
     it('should lookup SOA record', async () => {
-      // dig example.com SOA
-      const result = await executeDig('example.com', { type: 'SOA' })
+      // dig example.com.ai SOA
+      const result = await executeDig('example.com.ai', { type: 'SOA' })
 
       expect(result.question.type).toBe('SOA')
       // May be in answer or authority section
@@ -298,8 +298,8 @@ describe('dig command', () => {
 
   describe('short output mode', () => {
     it('should support +short output', async () => {
-      // dig +short example.com
-      const result = await executeDig('example.com', { short: true })
+      // dig +short example.com.ai
+      const result = await executeDig('example.com.ai', { short: true })
 
       // In short mode, should just return the answer data
       expect(result.answer.length).toBeGreaterThan(0)
@@ -307,7 +307,7 @@ describe('dig command', () => {
     })
 
     it('should return only IP addresses for A record +short', async () => {
-      const result = await executeDig('example.com', { type: 'A', short: true })
+      const result = await executeDig('example.com.ai', { type: 'A', short: true })
       const shortOutput = formatDigShort(result)
 
       // Should be just IP addresses, one per line
@@ -322,25 +322,25 @@ describe('dig command', () => {
 
   describe('specific resolver', () => {
     it('should use specific resolver with @ syntax', async () => {
-      // dig @8.8.8.8 example.com - maps to Google DoH
+      // dig @8.8.8.8 example.com.ai - maps to Google DoH
       // In Workers environment, external DoH endpoints may be blocked or rate-limited
-      const result = await executeDig('example.com', { resolver: '8.8.8.8' })
+      const result = await executeDig('example.com.ai', { resolver: '8.8.8.8' })
 
       // Accept either success (0) or SERVFAIL (2) due to Workers network restrictions
       expect([0, 2]).toContain(result.status)
     })
 
     it('should use Cloudflare DNS', async () => {
-      // dig @1.1.1.1 example.com - uses Cloudflare DoH which should always work
-      const result = await executeDig('example.com', { resolver: '1.1.1.1' })
+      // dig @1.1.1.1 example.com.ai - uses Cloudflare DoH which should always work
+      const result = await executeDig('example.com.ai', { resolver: '1.1.1.1' })
 
       expect(result.status).toBe(0)
     })
 
     it('should use custom DoH endpoint', async () => {
-      // dig @https://dns.google/dns-query example.com
+      // dig @https://dns.google/dns-query example.com.ai
       // Google DoH may be blocked or rate-limited in Workers
-      const result = await executeDig('example.com', {
+      const result = await executeDig('example.com.ai', {
         resolver: 'https://dns.google/dns-query',
       })
 
@@ -368,7 +368,7 @@ describe('dig command', () => {
 
   describe('full output format', () => {
     it('should format output like real dig', async () => {
-      const result = await executeDig('example.com')
+      const result = await executeDig('example.com.ai')
       const output = formatDigOutput(result)
 
       // Should contain sections
@@ -382,15 +382,15 @@ describe('dig command', () => {
 describe('nslookup command', () => {
   describe('basic lookup', () => {
     it('should lookup hostname', async () => {
-      // nslookup example.com
-      const result = await executeNslookup('example.com')
+      // nslookup example.com.ai
+      const result = await executeNslookup('example.com.ai')
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
       expect(result.addresses.length).toBeGreaterThan(0)
     })
 
     it('should return multiple addresses if available', async () => {
-      const result = await executeNslookup('example.com')
+      const result = await executeNslookup('example.com.ai')
 
       // May have multiple A records
       result.addresses.forEach((addr) => {
@@ -401,9 +401,9 @@ describe('nslookup command', () => {
 
   describe('specific server', () => {
     it('should use specific DNS server', async () => {
-      // nslookup example.com 8.8.8.8 - Google DNS might not work in Workers
+      // nslookup example.com.ai 8.8.8.8 - Google DNS might not work in Workers
       // Use Cloudflare DNS (1.1.1.1) which always works in Workers
-      const result = await executeNslookup('example.com', { server: '1.1.1.1' })
+      const result = await executeNslookup('example.com.ai', { server: '1.1.1.1' })
 
       expect(result.addresses.length).toBeGreaterThan(0)
     })
@@ -411,17 +411,17 @@ describe('nslookup command', () => {
 
   describe('query types', () => {
     it('should support -type=MX', async () => {
-      // nslookup -type=MX example.com
-      const result = await executeNslookup('example.com', { type: 'MX' })
+      // nslookup -type=MX example.com.ai
+      const result = await executeNslookup('example.com.ai', { type: 'MX' })
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
       // MX records come back differently
     })
   })
 
   describe('output format', () => {
     it('should format output like real nslookup', async () => {
-      const result = await executeNslookup('example.com')
+      const result = await executeNslookup('example.com.ai')
       const output = formatNslookupOutput(result)
 
       expect(output).toContain('Server:')
@@ -438,15 +438,15 @@ describe('nslookup command', () => {
 describe('host command', () => {
   describe('simple lookup', () => {
     it('should perform simple hostname lookup', async () => {
-      // host example.com
-      const result = await executeHost('example.com')
+      // host example.com.ai
+      const result = await executeHost('example.com.ai')
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
       expect(result.addresses.length).toBeGreaterThan(0)
     })
 
     it('should show all addresses', async () => {
-      const result = await executeHost('example.com')
+      const result = await executeHost('example.com.ai')
 
       result.addresses.forEach((addr) => {
         expect(addr).toMatch(/^[\d.:a-fA-F]+$/)
@@ -456,24 +456,24 @@ describe('host command', () => {
 
   describe('specific record type', () => {
     it('should lookup MX records with -t MX', async () => {
-      // host -t MX example.com
-      const result = await executeHost('example.com', { type: 'MX' })
+      // host -t MX example.com.ai
+      const result = await executeHost('example.com.ai', { type: 'MX' })
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
     })
 
     it('should lookup NS records with -t NS', async () => {
-      // host -t NS example.com
-      const result = await executeHost('example.com', { type: 'NS' })
+      // host -t NS example.com.ai
+      const result = await executeHost('example.com.ai', { type: 'NS' })
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
     })
 
     it('should lookup TXT records with -t TXT', async () => {
-      // host -t TXT example.com
-      const result = await executeHost('example.com', { type: 'TXT' })
+      // host -t TXT example.com.ai
+      const result = await executeHost('example.com.ai', { type: 'TXT' })
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
     })
   })
 
@@ -497,16 +497,16 @@ describe('host command', () => {
 
   describe('verbose mode', () => {
     it('should support verbose output with -v', async () => {
-      // host -v example.com
-      const result = await executeHost('example.com', { verbose: true })
+      // host -v example.com.ai
+      const result = await executeHost('example.com.ai', { verbose: true })
 
-      expect(result.hostname).toBe('example.com')
+      expect(result.hostname).toBe('example.com.ai')
     })
   })
 
   describe('output format', () => {
     it('should format output like real host', async () => {
-      const result = await executeHost('example.com')
+      const result = await executeHost('example.com.ai')
       const output = formatHostOutput(result)
 
       expect(output).toContain('has address')
@@ -521,39 +521,39 @@ describe('host command', () => {
 describe('nc / netcat command', () => {
   describe('port check with -z', () => {
     it('should check if port is open', async () => {
-      // nc -z example.com 80
-      const result = await executeNc('example.com', 80, { zero: true })
+      // nc -z example.com.ai 80
+      const result = await executeNc('example.com.ai', 80, { zero: true })
 
-      expect(result.host).toBe('example.com')
+      expect(result.host).toBe('example.com.ai')
       expect(result.port).toBe(80)
       expect(typeof result.open).toBe('boolean')
     })
 
     it('should report open port for HTTP', async () => {
-      // nc -z example.com 80
-      const result = await executeNc('example.com', 80, { zero: true })
+      // nc -z example.com.ai 80
+      const result = await executeNc('example.com.ai', 80, { zero: true })
 
-      // HTTP port should be open on example.com
+      // HTTP port should be open on example.com.ai
       expect(result.open).toBe(true)
     })
 
     it('should report open port for HTTPS', async () => {
-      // nc -z example.com 443
-      const result = await executeNc('example.com', 443, { zero: true })
+      // nc -z example.com.ai 443
+      const result = await executeNc('example.com.ai', 443, { zero: true })
 
       expect(result.open).toBe(true)
     })
 
     it('should report closed port', async () => {
-      // nc -z example.com 12345 - use short timeout to avoid long waits
-      const result = await executeNc('example.com', 12345, { zero: true, timeout: 2000 })
+      // nc -z example.com.ai 12345 - use short timeout to avoid long waits
+      const result = await executeNc('example.com.ai', 12345, { zero: true, timeout: 2000 })
 
       // Random high port should be closed
       expect(result.open).toBe(false)
     })
 
     it('should measure latency when checking port', async () => {
-      const result = await executeNc('example.com', 443, { zero: true })
+      const result = await executeNc('example.com.ai', 443, { zero: true })
 
       if (result.open && result.latency !== undefined) {
         expect(result.latency).toBeGreaterThan(0)
@@ -563,8 +563,8 @@ describe('nc / netcat command', () => {
 
   describe('port range scan', () => {
     it('should scan port range', async () => {
-      // nc -z example.com 80-82 with short timeout for speed
-      const results = await executeNcRange('example.com', 80, 82, { timeout: 2000 })
+      // nc -z example.com.ai 80-82 with short timeout for speed
+      const results = await executeNcRange('example.com.ai', 80, 82, { timeout: 2000 })
 
       expect(results).toHaveLength(3)
       results.forEach((result) => {
@@ -576,7 +576,7 @@ describe('nc / netcat command', () => {
 
   describe('timeout handling', () => {
     it('should respect timeout with -w flag', async () => {
-      // nc -z -w 2 example.com 80
+      // nc -z -w 2 example.com.ai 80
       const startTime = Date.now()
       const result = await executeNc('unreachable.invalid', 80, {
         zero: true,
@@ -591,14 +591,14 @@ describe('nc / netcat command', () => {
 
   describe('simple HTTP via nc', () => {
     it('should send simple HTTP request', async () => {
-      // echo "GET / HTTP/1.0\r\n\r\n" | nc example.com 80
-      const response = await executeNcHttp('example.com', 80, 'GET / HTTP/1.0\r\n\r\n')
+      // echo "GET / HTTP/1.0\r\n\r\n" | nc example.com.ai 80
+      const response = await executeNcHttp('example.com.ai', 80, 'GET / HTTP/1.0\r\n\r\n')
 
       expect(response).toContain('HTTP/')
     })
 
     it('should receive response headers', async () => {
-      const response = await executeNcHttp('example.com', 80, 'GET / HTTP/1.0\r\nHost: example.com\r\n\r\n')
+      const response = await executeNcHttp('example.com.ai', 80, 'GET / HTTP/1.0\r\nHost: example.com.ai\r\n\r\n')
 
       expect(response).toContain('HTTP/1')
       expect(response.toLowerCase()).toMatch(/content-type/i)
@@ -607,10 +607,10 @@ describe('nc / netcat command', () => {
 
   describe('verbose mode', () => {
     it('should support verbose output with -v', async () => {
-      // nc -zv example.com 80
-      const result = await executeNc('example.com', 80, { zero: true, verbose: true })
+      // nc -zv example.com.ai 80
+      const result = await executeNc('example.com.ai', 80, { zero: true, verbose: true })
 
-      expect(result.host).toBe('example.com')
+      expect(result.host).toBe('example.com.ai')
     })
   })
 
@@ -631,23 +631,23 @@ describe('nc / netcat command', () => {
 describe('wget --spider (URL existence check)', () => {
   describe('basic spider', () => {
     it('should check if URL exists', async () => {
-      // wget --spider https://example.com
-      const result = await executeWgetSpider('https://example.com')
+      // wget --spider https://example.com.ai
+      const result = await executeWgetSpider('https://example.com.ai')
 
-      expect(result.url).toBe('https://example.com')
+      expect(result.url).toBe('https://example.com.ai')
       expect(result.exists).toBe(true)
     })
 
     it('should detect non-existent URL', async () => {
-      // wget --spider https://example.com/nonexistent-page-12345
-      const result = await executeWgetSpider('https://example.com/nonexistent-page-12345')
+      // wget --spider https://example.com.ai/nonexistent-page-12345
+      const result = await executeWgetSpider('https://example.com.ai/nonexistent-page-12345')
 
       expect(result.exists).toBe(false)
       expect(result.status).toBe(404)
     })
 
     it('should return status code', async () => {
-      const result = await executeWgetSpider('https://example.com')
+      const result = await executeWgetSpider('https://example.com.ai')
 
       expect(result.status).toBe(200)
     })
@@ -655,14 +655,14 @@ describe('wget --spider (URL existence check)', () => {
 
   describe('redirect handling', () => {
     it('should follow redirects by default', async () => {
-      // wget --spider http://example.com (usually redirects to https)
-      const result = await executeWgetSpider('http://example.com')
+      // wget --spider http://example.com.ai (usually redirects to https)
+      const result = await executeWgetSpider('http://example.com.ai')
 
       expect(result.exists).toBe(true)
     })
 
     it('should report redirect chain', async () => {
-      const result = await executeWgetSpider('http://example.com', { followRedirects: true })
+      const result = await executeWgetSpider('http://example.com.ai', { followRedirects: true })
 
       // May or may not have redirects
       expect(typeof result.exists).toBe('boolean')
@@ -685,16 +685,16 @@ describe('wget --spider (URL existence check)', () => {
 describe('curl -I (headers only)', () => {
   describe('basic HEAD request', () => {
     it('should fetch only headers', async () => {
-      // curl -I https://example.com
-      const result = await executeCurlHead('https://example.com')
+      // curl -I https://example.com.ai
+      const result = await executeCurlHead('https://example.com.ai')
 
-      expect(result.url).toBe('https://example.com')
+      expect(result.url).toBe('https://example.com.ai')
       expect(result.headers).toBeDefined()
       expect(result.status).toBe(200)
     })
 
     it('should include common headers', async () => {
-      const result = await executeCurlHead('https://example.com')
+      const result = await executeCurlHead('https://example.com.ai')
 
       expect(result.headers).toBeDefined()
       const headers = result.headers!
@@ -705,7 +705,7 @@ describe('curl -I (headers only)', () => {
     })
 
     it('should include server header', async () => {
-      const result = await executeCurlHead('https://example.com')
+      const result = await executeCurlHead('https://example.com.ai')
 
       const headers = result.headers!
       // Many servers include server header
@@ -716,7 +716,7 @@ describe('curl -I (headers only)', () => {
     })
 
     it('should include content-length when available', async () => {
-      const result = await executeCurlHead('https://example.com')
+      const result = await executeCurlHead('https://example.com.ai')
 
       const headers = result.headers!
       // Some responses include content-length
@@ -729,7 +729,7 @@ describe('curl -I (headers only)', () => {
 
   describe('different HTTP methods response', () => {
     it('should handle redirects in HEAD', async () => {
-      const result = await executeCurlHead('http://example.com')
+      const result = await executeCurlHead('http://example.com.ai')
 
       expect([200, 301, 302, 307, 308]).toContain(result.status)
     })
@@ -739,36 +739,36 @@ describe('curl -I (headers only)', () => {
 describe('curl -w timing info', () => {
   describe('timing metrics', () => {
     it('should provide total time', async () => {
-      // curl -w "%{time_total}" https://example.com
-      const result = await executeCurlWithTiming('https://example.com')
+      // curl -w "%{time_total}" https://example.com.ai
+      const result = await executeCurlWithTiming('https://example.com.ai')
 
       expect(result.timing).toBeDefined()
       expect(result.timing!.total).toBeGreaterThan(0)
     })
 
     it('should provide DNS lookup time', async () => {
-      // curl -w "%{time_namelookup}" https://example.com
-      const result = await executeCurlWithTiming('https://example.com')
+      // curl -w "%{time_namelookup}" https://example.com.ai
+      const result = await executeCurlWithTiming('https://example.com.ai')
 
       expect(result.timing!.dns).toBeGreaterThanOrEqual(0)
     })
 
     it('should provide connect time', async () => {
-      // curl -w "%{time_connect}" https://example.com
-      const result = await executeCurlWithTiming('https://example.com')
+      // curl -w "%{time_connect}" https://example.com.ai
+      const result = await executeCurlWithTiming('https://example.com.ai')
 
       expect(result.timing!.connect).toBeGreaterThanOrEqual(0)
     })
 
     it('should provide time to first byte (TTFB)', async () => {
-      // curl -w "%{time_starttransfer}" https://example.com
-      const result = await executeCurlWithTiming('https://example.com')
+      // curl -w "%{time_starttransfer}" https://example.com.ai
+      const result = await executeCurlWithTiming('https://example.com.ai')
 
       expect(result.timing!.ttfb).toBeGreaterThan(0)
     })
 
     it('should have timing in correct order', async () => {
-      const result = await executeCurlWithTiming('https://example.com')
+      const result = await executeCurlWithTiming('https://example.com.ai')
       const timing = result.timing!
 
       // DNS should be before connect
@@ -783,7 +783,7 @@ describe('curl -w timing info', () => {
   describe('custom format string', () => {
     it('should support custom timing format', async () => {
       // curl -w "DNS: %{time_namelookup}s, Total: %{time_total}s" URL
-      const result = await executeCurlWithTiming('https://example.com', {
+      const result = await executeCurlWithTiming('https://example.com.ai', {
         format: 'DNS: %{time_namelookup}s, Total: %{time_total}s',
       })
 
@@ -793,7 +793,7 @@ describe('curl -w timing info', () => {
 
   describe('output format', () => {
     it('should format timing like real curl -w', async () => {
-      const result = await executeCurlWithTiming('https://example.com')
+      const result = await executeCurlWithTiming('https://example.com.ai')
       const output = formatCurlTiming(result)
 
       expect(output).toContain('time_total')
@@ -811,7 +811,7 @@ describe('Network commands via TieredExecutor', () => {
   describe('ping integration', () => {
     it('should classify ping as network command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('ping -c 4 example.com')
+      const classification = executor.classifyCommand('ping -c 4 example.com.ai')
       // ping is classified as tier 4 (sandbox) or tier 1 (native network) depending on implementation
       expect(classification.tier).toBeGreaterThanOrEqual(1)
       expect(classification.tier).toBeLessThanOrEqual(4)
@@ -821,13 +821,13 @@ describe('Network commands via TieredExecutor', () => {
   describe('dig integration', () => {
     it('should classify dig as network command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('dig example.com')
+      const classification = executor.classifyCommand('dig example.com.ai')
       expect(classification.tier).toBeGreaterThanOrEqual(1)
     })
 
     it('should classify dig +short as network command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('dig +short example.com')
+      const classification = executor.classifyCommand('dig +short example.com.ai')
       expect(classification.tier).toBeGreaterThanOrEqual(1)
     })
   })
@@ -835,7 +835,7 @@ describe('Network commands via TieredExecutor', () => {
   describe('nslookup integration', () => {
     it('should classify nslookup as network command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('nslookup example.com')
+      const classification = executor.classifyCommand('nslookup example.com.ai')
       expect(classification.tier).toBeGreaterThanOrEqual(1)
     })
   })
@@ -843,7 +843,7 @@ describe('Network commands via TieredExecutor', () => {
   describe('host integration', () => {
     it('should classify host as network command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('host example.com')
+      const classification = executor.classifyCommand('host example.com.ai')
       expect(classification.tier).toBeGreaterThanOrEqual(1)
     })
   })
@@ -851,7 +851,7 @@ describe('Network commands via TieredExecutor', () => {
   describe('nc integration', () => {
     it('should classify nc as network command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('nc -z example.com 80')
+      const classification = executor.classifyCommand('nc -z example.com.ai 80')
       // nc is listed in TIER_4_SANDBOX_COMMANDS
       expect(classification.tier).toBe(4)
     })
@@ -860,21 +860,21 @@ describe('Network commands via TieredExecutor', () => {
   describe('curl/wget integration', () => {
     it('should classify wget as tier 1 http command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('wget --spider https://example.com')
+      const classification = executor.classifyCommand('wget --spider https://example.com.ai')
       expect(classification.tier).toBe(1)
       expect(classification.capability).toBe('http')
     })
 
     it('should classify curl as tier 1 http command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('curl -I https://example.com')
+      const classification = executor.classifyCommand('curl -I https://example.com.ai')
       expect(classification.tier).toBe(1)
       expect(classification.capability).toBe('http')
     })
 
     it('should classify curl -w as tier 1 http command', async () => {
       const executor = new TieredExecutor({})
-      const classification = executor.classifyCommand('curl -w "%{time_total}" https://example.com')
+      const classification = executor.classifyCommand('curl -w "%{time_total}" https://example.com.ai')
       expect(classification.tier).toBe(1)
       expect(classification.capability).toBe('http')
     })
@@ -887,62 +887,62 @@ describe('Network commands via TieredExecutor', () => {
 
 describe('Network command parsing', () => {
   describe('ping command parsing', () => {
-    it('should parse ping -c 4 example.com', () => {
-      const parsed = parsePingCommand('ping -c 4 example.com')
+    it('should parse ping -c 4 example.com.ai', () => {
+      const parsed = parsePingCommand('ping -c 4 example.com.ai')
       expect(parsed).toEqual({
-        host: 'example.com',
+        host: 'example.com.ai',
         count: 4,
       })
     })
 
-    it('should parse ping -c 1 -W 5 example.com', () => {
-      const parsed = parsePingCommand('ping -c 1 -W 5 example.com')
+    it('should parse ping -c 1 -W 5 example.com.ai', () => {
+      const parsed = parsePingCommand('ping -c 1 -W 5 example.com.ai')
       expect(parsed).toEqual({
-        host: 'example.com',
+        host: 'example.com.ai',
         count: 1,
         timeout: 5000,
       })
     })
 
-    it('should parse ping -q example.com', () => {
-      const parsed = parsePingCommand('ping -q example.com')
+    it('should parse ping -q example.com.ai', () => {
+      const parsed = parsePingCommand('ping -q example.com.ai')
       expect(parsed).toEqual({
-        host: 'example.com',
+        host: 'example.com.ai',
         quiet: true,
       })
     })
   })
 
   describe('dig command parsing', () => {
-    it('should parse dig example.com', () => {
-      const parsed = parseDigCommand('dig example.com')
+    it('should parse dig example.com.ai', () => {
+      const parsed = parseDigCommand('dig example.com.ai')
       expect(parsed).toEqual({
-        domain: 'example.com',
+        domain: 'example.com.ai',
         type: 'A',
       })
     })
 
-    it('should parse dig example.com MX', () => {
-      const parsed = parseDigCommand('dig example.com MX')
+    it('should parse dig example.com.ai MX', () => {
+      const parsed = parseDigCommand('dig example.com.ai MX')
       expect(parsed).toEqual({
-        domain: 'example.com',
+        domain: 'example.com.ai',
         type: 'MX',
       })
     })
 
-    it('should parse dig +short example.com', () => {
-      const parsed = parseDigCommand('dig +short example.com')
+    it('should parse dig +short example.com.ai', () => {
+      const parsed = parseDigCommand('dig +short example.com.ai')
       expect(parsed).toEqual({
-        domain: 'example.com',
+        domain: 'example.com.ai',
         type: 'A',
         short: true,
       })
     })
 
-    it('should parse dig @8.8.8.8 example.com', () => {
-      const parsed = parseDigCommand('dig @8.8.8.8 example.com')
+    it('should parse dig @8.8.8.8 example.com.ai', () => {
+      const parsed = parseDigCommand('dig @8.8.8.8 example.com.ai')
       expect(parsed).toEqual({
-        domain: 'example.com',
+        domain: 'example.com.ai',
         type: 'A',
         resolver: '8.8.8.8',
       })
@@ -951,18 +951,18 @@ describe('Network command parsing', () => {
 
   describe('nc command parsing', () => {
     it('should parse nc -z host port', () => {
-      const parsed = parseNcCommand('nc -z example.com 80')
+      const parsed = parseNcCommand('nc -z example.com.ai 80')
       expect(parsed).toEqual({
-        host: 'example.com',
+        host: 'example.com.ai',
         port: 80,
         zero: true,
       })
     })
 
     it('should parse nc -zv host port', () => {
-      const parsed = parseNcCommand('nc -zv example.com 443')
+      const parsed = parseNcCommand('nc -zv example.com.ai 443')
       expect(parsed).toEqual({
-        host: 'example.com',
+        host: 'example.com.ai',
         port: 443,
         zero: true,
         verbose: true,

@@ -757,9 +757,9 @@ describe('Shell Escape Utilities', () => {
     })
 
     it('should build safe curl with URL', () => {
-      const url = 'https://api.example.com/path?foo=bar&baz=qux'
+      const url = 'https://api.example.com.ai/path?foo=bar&baz=qux'
       expect(template`curl ${url}`).toBe(
-        "curl 'https://api.example.com/path?foo=bar&baz=qux'"
+        "curl 'https://api.example.com.ai/path?foo=bar&baz=qux'"
       )
     })
 

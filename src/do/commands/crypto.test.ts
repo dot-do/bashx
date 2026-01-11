@@ -589,7 +589,7 @@ describe('uuid', () => {
 
   describe('UUID v5 (namespace-based)', () => {
     it('generates UUID v5 with ns:URL namespace', async () => {
-      const result = await executor.execute('uuid -v 5 ns:URL "https://example.com"')
+      const result = await executor.execute('uuid -v 5 ns:URL "https://example.com.ai"')
 
       expect(result.exitCode).toBe(0)
       // UUID v5 version byte is 5xxx
@@ -599,7 +599,7 @@ describe('uuid', () => {
     })
 
     it('generates UUID v5 with ns:DNS namespace', async () => {
-      const result = await executor.execute('uuid -v 5 ns:DNS "example.com"')
+      const result = await executor.execute('uuid -v 5 ns:DNS "example.com.ai"')
 
       expect(result.exitCode).toBe(0)
       expect(result.stdout.trim()).toMatch(
@@ -626,14 +626,14 @@ describe('uuid', () => {
     })
 
     it('generates deterministic UUID v5 for same input', async () => {
-      const result1 = await executor.execute('uuid -v 5 ns:URL "https://example.com"')
-      const result2 = await executor.execute('uuid -v 5 ns:URL "https://example.com"')
+      const result1 = await executor.execute('uuid -v 5 ns:URL "https://example.com.ai"')
+      const result2 = await executor.execute('uuid -v 5 ns:URL "https://example.com.ai"')
 
       expect(result1.stdout.trim()).toBe(result2.stdout.trim())
     })
 
     it('generates different UUID v5 for different inputs', async () => {
-      const result1 = await executor.execute('uuid -v 5 ns:URL "https://example.com"')
+      const result1 = await executor.execute('uuid -v 5 ns:URL "https://example.com.ai"')
       const result2 = await executor.execute('uuid -v 5 ns:URL "https://different.com"')
 
       expect(result1.stdout.trim()).not.toBe(result2.stdout.trim())
@@ -653,7 +653,7 @@ describe('uuid', () => {
 
   describe('UUID v3 (MD5-based namespace)', () => {
     it('generates UUID v3 with namespace', async () => {
-      const result = await executor.execute('uuid -v 3 ns:URL "https://example.com"')
+      const result = await executor.execute('uuid -v 3 ns:URL "https://example.com.ai"')
 
       expect(result.exitCode).toBe(0)
       // UUID v3 version byte is 3xxx

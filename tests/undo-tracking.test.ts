@@ -549,7 +549,7 @@ describe('Undo Tracking - Non-Reversible Operations', () => {
   })
 
   it('should mark network operations as non-reversible', async () => {
-    const result = await execute('curl -X POST https://api.example.com/data', { confirm: true, timeout: 1000 })
+    const result = await execute('curl -X POST https://api.example.com.ai/data', { confirm: true, timeout: 1000 })
 
     expect(result.classification.reversible).toBe(false)
     expect(result.undo).toBeUndefined()

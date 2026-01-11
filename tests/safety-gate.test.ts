@@ -146,7 +146,7 @@ describe('Safety Gate - Command Execution', () => {
     })
 
     it('should block network commands like curl POST without confirmation', async () => {
-      const result = await execute('curl -X POST https://api.example.com/data')
+      const result = await execute('curl -X POST https://api.example.com.ai/data')
 
       expect(result.blocked).toBe(true)
       expect(result.requiresConfirm).toBe(true)

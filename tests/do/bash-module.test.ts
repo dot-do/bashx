@@ -380,7 +380,7 @@ describe('withBash mixin', () => {
     const factoryFn = vi.fn().mockReturnValue(createMockExecutor())
 
     class BaseClass {
-      config = { endpoint: 'http://example.com' }
+      config = { endpoint: 'http://example.com.ai' }
     }
 
     const MixedClass = withBash(BaseClass, factoryFn)
@@ -389,7 +389,7 @@ describe('withBash mixin', () => {
     const _ = instance.bash
 
     expect(factoryFn).toHaveBeenCalledWith(instance)
-    expect(factoryFn.mock.calls[0][0].config.endpoint).toBe('http://example.com')
+    expect(factoryFn.mock.calls[0][0].config.endpoint).toBe('http://example.com.ai')
   })
 
   it('should preserve constructor arguments', () => {
@@ -446,7 +446,7 @@ describe('withBash mixin', () => {
 
   it('should support async executor creation', async () => {
     class BaseClass {
-      env = { containerEndpoint: 'https://container.example.com' }
+      env = { containerEndpoint: 'https://container.example.com.ai' }
     }
 
     const executor = createMockExecutor({
@@ -455,7 +455,7 @@ describe('withBash mixin', () => {
 
     const MixedClass = withBash(BaseClass, (instance) => {
       // Can access instance properties when creating executor
-      expect(instance.env.containerEndpoint).toBe('https://container.example.com')
+      expect(instance.env.containerEndpoint).toBe('https://container.example.com.ai')
       return executor
     })
 

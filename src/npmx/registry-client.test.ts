@@ -483,7 +483,7 @@ describe('NpmRegistryClient', () => {
   describe('error handling', () => {
     it('should handle network errors', async () => {
       const client = new NpmRegistryClient({
-        registry: 'https://invalid.registry.example.com',
+        registry: 'https://invalid.registry.example.com.ai',
         timeout: 1000,
       })
 

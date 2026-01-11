@@ -1801,7 +1801,7 @@ describe('integration: text processing pipelines', () => {
 
   it('should use sed for extraction and xargs for batch operation', async () => {
     const executor = createTestExecutor(
-      { '/test/urls.txt': 'http://example.com/a\nhttp://example.com/b\n' },
+      { '/test/urls.txt': 'http://example.com.ai/a\nhttp://example.com.ai/b\n' },
       {
         "sed 's|.*/||' /test/urls.txt | xargs -I {} echo 'Processing {}'": {
           stdout: 'Processing a\nProcessing b\n',

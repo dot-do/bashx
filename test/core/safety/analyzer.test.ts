@@ -120,13 +120,13 @@ describe('Dangerous Commands', () => {
 describe('Network Access Commands', () => {
   describe('curl', () => {
     it('should classify curl GET as network type', () => {
-      const result = analyze('curl https://example.com')
+      const result = analyze('curl https://example.com.ai')
       expect(result.classification.type).toBe('network')
       expect(result.intent.network).toBe(true)
     })
 
     it('should classify curl POST as medium impact', () => {
-      const result = analyze('curl -X POST https://api.example.com/data -d "secret=123"')
+      const result = analyze('curl -X POST https://api.example.com.ai/data -d "secret=123"')
       expect(result.classification.type).toBe('network')
       expect(result.classification.impact).toBe('medium')
     })
@@ -145,7 +145,7 @@ describe('Network Access Commands', () => {
 
   describe('wget', () => {
     it('should classify wget as network type', () => {
-      const result = analyze('wget https://example.com/file.zip')
+      const result = analyze('wget https://example.com.ai/file.zip')
       expect(result.classification.type).toBe('network')
       expect(result.intent.network).toBe(true)
     })
@@ -190,7 +190,7 @@ describe('Network Access Commands', () => {
 
   describe('telnet', () => {
     it('should classify telnet as network type', () => {
-      const result = analyze('telnet example.com 80')
+      const result = analyze('telnet example.com.ai 80')
       expect(result.classification.type).toBe('network')
     })
   })
@@ -661,7 +661,7 @@ describe('classifyCommand function', () => {
   })
 
   it('should classify curl command', () => {
-    const result = classifyCommand('curl', ['https://example.com'])
+    const result = classifyCommand('curl', ['https://example.com.ai'])
     expect(result.type).toBe('network')
   })
 
@@ -776,7 +776,7 @@ describe('Edge Cases', () => {
       const script = `
         ls -la
         rm -rf /tmp/old
-        curl https://example.com
+        curl https://example.com.ai
       `
       const result = analyze(script)
       expect(result.classification.type).toBe('mixed')

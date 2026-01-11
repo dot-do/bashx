@@ -293,7 +293,7 @@ describe('Structural Safety: File Operations', () => {
 describe('Structural Safety: Network Operations', () => {
   describe('HTTP Clients', () => {
     it('should classify curl GET as network read', () => {
-      const ast = program(simpleCommand('curl', ['https://example.com']))
+      const ast = program(simpleCommand('curl', ['https://example.com.ai']))
       const result = analyze(ast)
 
       expect(result.classification.type).toBe('network')
@@ -301,7 +301,7 @@ describe('Structural Safety: Network Operations', () => {
     })
 
     it('should classify curl POST as higher impact network', () => {
-      const ast = program(simpleCommand('curl', ['-X', 'POST', 'https://api.example.com/data']))
+      const ast = program(simpleCommand('curl', ['-X', 'POST', 'https://api.example.com.ai/data']))
       const result = analyze(ast)
 
       expect(result.classification.type).toBe('network')
@@ -309,7 +309,7 @@ describe('Structural Safety: Network Operations', () => {
     })
 
     it('should classify wget as network operation', () => {
-      const ast = program(simpleCommand('wget', ['https://example.com/file.tar.gz']))
+      const ast = program(simpleCommand('wget', ['https://example.com.ai/file.tar.gz']))
       const result = analyze(ast)
 
       expect(result.classification.type).toBe('network')
@@ -929,21 +929,21 @@ describe('classifyCommand() Direct Tests', () => {
   })
 
   it('should classify curl DELETE as medium network impact', () => {
-    const result = classifyCommand('curl', ['-X', 'DELETE', 'https://api.example.com/resource'])
+    const result = classifyCommand('curl', ['-X', 'DELETE', 'https://api.example.com.ai/resource'])
 
     expect(result.type).toBe('network')
     expect(result.impact).toBe('medium')
   })
 
   it('should classify curl PUT as medium network impact', () => {
-    const result = classifyCommand('curl', ['-X', 'PUT', 'https://api.example.com/resource'])
+    const result = classifyCommand('curl', ['-X', 'PUT', 'https://api.example.com.ai/resource'])
 
     expect(result.type).toBe('network')
     expect(result.impact).toBe('medium')
   })
 
   it('should classify curl PATCH as medium network impact', () => {
-    const result = classifyCommand('curl', ['--request', 'PATCH', 'https://api.example.com/resource'])
+    const result = classifyCommand('curl', ['--request', 'PATCH', 'https://api.example.com.ai/resource'])
 
     expect(result.type).toBe('network')
     expect(result.impact).toBe('medium')
@@ -978,7 +978,7 @@ describe('Intent Extraction from Classification', () => {
   })
 
   it('should extract network intent for curl', () => {
-    const ast = program(simpleCommand('curl', ['https://example.com']))
+    const ast = program(simpleCommand('curl', ['https://example.com.ai']))
     const result = analyze(ast)
 
     expect(result.intent.network).toBe(true)

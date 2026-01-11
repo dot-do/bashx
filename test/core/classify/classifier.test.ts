@@ -322,8 +322,8 @@ describe('Command Classifier', () => {
   // ==========================================================================
   describe('Network Operations', () => {
     describe('fetch operations', () => {
-      it('should classify "curl https://api.example.com" as network/fetch', async () => {
-        const result = await classifyCommand('curl https://api.example.com')
+      it('should classify "curl https://api.example.com.ai" as network/fetch', async () => {
+        const result = await classifyCommand('curl https://api.example.com.ai')
         expect(result.category).toBe('network')
         expect(result.operation).toBe('fetch')
       })
@@ -335,13 +335,13 @@ describe('Command Classifier', () => {
       })
 
       it('should classify "curl -o file.zip url" as network/fetch', async () => {
-        const result = await classifyCommand('curl -o file.zip https://example.com/file.zip')
+        const result = await classifyCommand('curl -o file.zip https://example.com.ai/file.zip')
         expect(result.category).toBe('network')
         expect(result.operation).toBe('fetch')
       })
 
-      it('should classify "wget https://example.com/file" as network/fetch', async () => {
-        const result = await classifyCommand('wget https://example.com/file')
+      it('should classify "wget https://example.com.ai/file" as network/fetch', async () => {
+        const result = await classifyCommand('wget https://example.com.ai/file')
         expect(result.category).toBe('network')
         expect(result.operation).toBe('fetch')
       })
@@ -448,14 +448,14 @@ describe('Command Classifier', () => {
         expect(result.operation).toBe('diagnostic')
       })
 
-      it('should classify "nslookup example.com" as network/diagnostic', async () => {
-        const result = await classifyCommand('nslookup example.com')
+      it('should classify "nslookup example.com.ai" as network/diagnostic', async () => {
+        const result = await classifyCommand('nslookup example.com.ai')
         expect(result.category).toBe('network')
         expect(result.operation).toBe('diagnostic')
       })
 
-      it('should classify "dig example.com" as network/diagnostic', async () => {
-        const result = await classifyCommand('dig example.com')
+      it('should classify "dig example.com.ai" as network/diagnostic', async () => {
+        const result = await classifyCommand('dig example.com.ai')
         expect(result.category).toBe('network')
         expect(result.operation).toBe('diagnostic')
       })

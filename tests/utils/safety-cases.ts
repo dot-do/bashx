@@ -337,7 +337,7 @@ export const DANGEROUS_COMMANDS: SafetyTestCase[] = [
     },
   },
   {
-    command: 'curl -X POST https://api.example.com/data',
+    command: 'curl -X POST https://api.example.com.ai/data',
     description: 'HTTP POST request',
     expectedClassification: {
       type: 'network',

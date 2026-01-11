@@ -223,14 +223,14 @@ describe('TieredExecutor - Command Classification', () => {
 
   describe('Tier 1 HTTP Classification', () => {
     it('classifies curl commands as Tier 1 (http)', () => {
-      const classification = executor.classifyCommand('curl https://example.com')
+      const classification = executor.classifyCommand('curl https://example.com.ai')
       expect(classification.tier).toBe(1)
       expect(classification.handler).toBe('native')
       expect(classification.capability).toBe('http')
     })
 
     it('classifies wget commands as Tier 1 (http)', () => {
-      const classification = executor.classifyCommand('wget https://example.com/file.txt')
+      const classification = executor.classifyCommand('wget https://example.com.ai/file.txt')
       expect(classification.tier).toBe(1)
       expect(classification.handler).toBe('native')
       expect(classification.capability).toBe('http')
@@ -410,9 +410,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl https://api.example.com/data')
+      const result = await executor.execute('curl https://api.example.com.ai/data')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/data', {
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com.ai/data', {
         method: 'GET',
         headers: undefined,
         body: undefined,
@@ -432,9 +432,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl -d {"name":"test"} https://api.example.com/create')
+      const result = await executor.execute('curl -d {"name":"test"} https://api.example.com.ai/create')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/create', {
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com.ai/create', {
         method: 'POST',
         headers: undefined,
         body: '{"name":"test"}',
@@ -454,9 +454,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl -H "Authorization: Bearer token123" https://api.example.com/secure')
+      const result = await executor.execute('curl -H "Authorization: Bearer token123" https://api.example.com.ai/secure')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/secure', {
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com.ai/secure', {
         method: 'GET',
         headers: { 'Authorization': 'Bearer token123' },
         body: undefined,
@@ -475,9 +475,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl -L https://example.com/redirect')
+      const result = await executor.execute('curl -L https://example.com.ai/redirect')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://example.com/redirect', {
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com.ai/redirect', {
         method: 'GET',
         headers: undefined,
         body: undefined,
@@ -496,9 +496,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl -X DELETE https://api.example.com/resource/123')
+      const result = await executor.execute('curl -X DELETE https://api.example.com.ai/resource/123')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/resource/123', {
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com.ai/resource/123', {
         method: 'DELETE',
         headers: undefined,
         body: undefined,
@@ -520,9 +520,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl -I https://example.com')
+      const result = await executor.execute('curl -I https://example.com.ai')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://example.com', {
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com.ai', {
         method: 'HEAD',
         headers: undefined,
         body: undefined,
@@ -549,7 +549,7 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl https://example.com/notfound')
+      const result = await executor.execute('curl https://example.com.ai/notfound')
 
       expect(result.exitCode).toBe(1)
     })
@@ -564,9 +564,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('wget -O - https://example.com/file.txt')
+      const result = await executor.execute('wget -O - https://example.com.ai/file.txt')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://example.com/file.txt', {
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com.ai/file.txt', {
         method: 'GET',
         headers: undefined,
         redirect: 'follow',
@@ -585,9 +585,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('wget -O - --header "Authorization: token" https://example.com/secure')
+      const result = await executor.execute('wget -O - --header "Authorization: token" https://example.com.ai/secure')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://example.com/secure', {
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com.ai/secure', {
         method: 'GET',
         headers: { 'Authorization': 'token' },
         redirect: 'follow',
@@ -606,7 +606,7 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'))
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('curl https://unreachable.example.com')
+      const result = await executor.execute('curl https://unreachable.example.com.ai')
 
       expect(result.stderr).toContain('curl:')
       expect(result.stderr).toContain('Network error')
@@ -617,7 +617,7 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       const mockFetch = vi.fn().mockRejectedValue(new Error('Connection refused'))
       vi.stubGlobal('fetch', mockFetch)
 
-      const result = await executor.execute('wget -O - https://unreachable.example.com')
+      const result = await executor.execute('wget -O - https://unreachable.example.com.ai')
 
       expect(result.stderr).toContain('wget:')
       expect(result.stderr).toContain('Connection refused')
@@ -634,9 +634,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      await executor.execute('curl example.com/api')
+      await executor.execute('curl example.com.ai/api')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://example.com/api', expect.any(Object))
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com.ai/api', expect.any(Object))
     })
 
     it('curl with basic auth -u', async () => {
@@ -649,9 +649,9 @@ describe('TieredExecutor - Tier 1 Execution', () => {
       })
       vi.stubGlobal('fetch', mockFetch)
 
-      await executor.execute('curl -u user:pass https://api.example.com/secure')
+      await executor.execute('curl -u user:pass https://api.example.com.ai/secure')
 
-      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/secure', {
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com.ai/secure', {
         method: 'GET',
         headers: { 'Authorization': 'Basic dXNlcjpwYXNz' }, // base64 of "user:pass"
         body: undefined,

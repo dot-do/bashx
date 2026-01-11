@@ -157,7 +157,7 @@ describe('Intent Extraction', () => {
   describe('Network Operation Detection', () => {
     it('should identify curl as network operation', () => {
       const curlCase = getSafetyCaseByCommand(
-        'curl -X POST https://api.example.com/data'
+        'curl -X POST https://api.example.com.ai/data'
       )
       expect(curlCase).toBeDefined()
       expect(curlCase!.expectedIntent.network).toBe(true)

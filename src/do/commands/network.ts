@@ -43,12 +43,12 @@ interface DnsCacheEntry {
  * @example
  * ```typescript
  * // Cache automatically used by executeDig
- * const result1 = await executeDig('example.com') // Network request
- * const result2 = await executeDig('example.com') // Served from cache
+ * const result1 = await executeDig('example.com.ai') // Network request
+ * const result2 = await executeDig('example.com.ai') // Served from cache
  *
  * // Manual cache control
  * dnsCache.clear() // Clear all cached entries
- * dnsCache.delete('example.com:A') // Remove specific entry
+ * dnsCache.delete('example.com.ai:A') // Remove specific entry
  * ```
  */
 class DnsCache {
@@ -298,7 +298,7 @@ function calculateStatistics(values: number[]): Statistics {
  * @example
  * ```typescript
  * const result: PingResult = {
- *   host: 'example.com',
+ *   host: 'example.com.ai',
  *   transmitted: 4,
  *   received: 4,
  *   packetLoss: 0,
@@ -356,8 +356,8 @@ export interface DnsRecord {
  * @example
  * ```typescript
  * const result: DnsResult = {
- *   question: { name: 'example.com', type: 'A' },
- *   answer: [{ name: 'example.com', type: 'A', ttl: 300, data: '93.184.216.34' }],
+ *   question: { name: 'example.com.ai', type: 'A' },
+ *   answer: [{ name: 'example.com.ai', type: 'A', ttl: 300, data: '93.184.216.34' }],
  *   status: 0, // NOERROR
  *   queryTime: 45
  * }
@@ -409,7 +409,7 @@ export interface HostResult {
  * @example
  * ```typescript
  * const result: PortCheckResult = {
- *   host: 'example.com',
+ *   host: 'example.com.ai',
  *   port: 443,
  *   open: true,
  *   latency: 45.2
@@ -572,7 +572,7 @@ const DEFAULT_DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query'
  * Supports multiple formats:
  * - IP addresses: '8.8.8.8', '1.1.1.1', '9.9.9.9'
  * - Friendly names: 'cloudflare', 'google', 'quad9'
- * - Full URLs: 'https://custom-doh.example.com/dns-query'
+ * - Full URLs: 'https://custom-doh.example.com.ai/dns-query'
  *
  * @param resolver - Resolver specification (IP, name, or URL)
  * @returns DoH endpoint URL
@@ -638,15 +638,15 @@ export interface PingOptions {
  * @example
  * ```typescript
  * // Basic ping
- * const result = await executePing('example.com', { count: 4 })
+ * const result = await executePing('example.com.ai', { count: 4 })
  * console.log(`${result.received}/${result.transmitted} packets, ${result.packetLoss}% loss`)
  *
  * // Quick connectivity check
- * const quick = await executePing('api.example.com', { count: 1, timeout: 2000 })
+ * const quick = await executePing('api.example.com.ai', { count: 1, timeout: 2000 })
  * if (quick.received === 0) console.log('Host unreachable')
  *
  * // Detailed timing
- * const detailed = await executePing('cdn.example.com', { count: 10, interval: 500 })
+ * const detailed = await executePing('cdn.example.com.ai', { count: 10, interval: 500 })
  * console.log(`Latency: ${detailed.avg.toFixed(1)}ms (${detailed.mdev.toFixed(1)}ms jitter)`)
  * ```
  */
@@ -717,14 +717,14 @@ export async function executePing(host: string, options: PingOptions = {}): Prom
  *
  * @example
  * ```typescript
- * const result = await executePing('example.com', { count: 3 })
+ * const result = await executePing('example.com.ai', { count: 3 })
  * console.log(formatPingOutput(result))
- * // PING example.com: 3 packets transmitted
- * // example.com: icmp_seq=0 time=42.123 ms
- * // example.com: icmp_seq=1 time=45.678 ms
- * // example.com: icmp_seq=2 time=41.234 ms
+ * // PING example.com.ai: 3 packets transmitted
+ * // example.com.ai: icmp_seq=0 time=42.123 ms
+ * // example.com.ai: icmp_seq=1 time=45.678 ms
+ * // example.com.ai: icmp_seq=2 time=41.234 ms
  * //
- * // --- example.com ping statistics ---
+ * // --- example.com.ai ping statistics ---
  * // 3 packets transmitted, 3 received, 0% packet loss
  * // rtt min/avg/max/mdev = 41.234/43.012/45.678/1.876 ms
  * ```
@@ -766,16 +766,16 @@ export function formatPingOutput(result: PingResult): string {
  * - `-i N`: Interval in seconds between packets
  * - `-q`: Quiet mode (summary only)
  *
- * @param cmd - Full ping command string (e.g., "ping -c 4 example.com")
+ * @param cmd - Full ping command string (e.g., "ping -c 4 example.com.ai")
  * @returns Parsed options with host and flags
  *
  * @example
  * ```typescript
- * parsePingCommand('ping -c 4 example.com')
- * // { host: 'example.com', count: 4 }
+ * parsePingCommand('ping -c 4 example.com.ai')
+ * // { host: 'example.com.ai', count: 4 }
  *
- * parsePingCommand('ping -c 1 -W 5 -q example.com')
- * // { host: 'example.com', count: 1, timeout: 5000, quiet: true }
+ * parsePingCommand('ping -c 1 -W 5 -q example.com.ai')
+ * // { host: 'example.com.ai', count: 1, timeout: 5000, quiet: true }
  * ```
  */
 export function parsePingCommand(cmd: string): {
@@ -844,17 +844,17 @@ export interface DigOptions {
  * @example
  * ```typescript
  * // Basic A record lookup
- * const result = await executeDig('example.com')
+ * const result = await executeDig('example.com.ai')
  * console.log(result.answer[0].data) // '93.184.216.34'
  *
  * // Query specific record type
- * const mxResult = await executeDig('example.com', { type: 'MX' })
+ * const mxResult = await executeDig('example.com.ai', { type: 'MX' })
  *
  * // Use specific resolver
- * const googleResult = await executeDig('example.com', { resolver: '8.8.8.8' })
+ * const googleResult = await executeDig('example.com.ai', { resolver: '8.8.8.8' })
  *
  * // Force network lookup (skip cache)
- * const freshResult = await executeDig('example.com', { noCache: true })
+ * const freshResult = await executeDig('example.com.ai', { noCache: true })
  * ```
  */
 export async function executeDig(domain: string, options: DigOptions = {}): Promise<DnsResult> {
@@ -972,7 +972,7 @@ export async function executeDig(domain: string, options: DigOptions = {}): Prom
  *
  * @example
  * ```typescript
- * const result = await executeDig('example.com')
+ * const result = await executeDig('example.com.ai')
  * console.log(formatDigShort(result))
  * // 93.184.216.34
  * ```
@@ -1024,17 +1024,17 @@ function getStatusName(status: number): string {
  *
  * @example
  * ```typescript
- * const result = await executeDig('example.com', { type: 'A' })
+ * const result = await executeDig('example.com.ai', { type: 'A' })
  * console.log(formatDigOutput(result))
- * // ; <<>> DiG <<>> example.com A
+ * // ; <<>> DiG <<>> example.com.ai A
  * // ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 12345
  * // ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
  * //
  * // ;; QUESTION SECTION:
- * // ;example.com.                   IN      A
+ * // ;example.com.ai.                   IN      A
  * //
  * // ;; ANSWER SECTION:
- * // example.com.            300     IN      A       93.184.216.34
+ * // example.com.ai.            300     IN      A       93.184.216.34
  * //
  * // ;; Query time: 45 msec
  * // ;; SERVER: 1.1.1.1#53(cloudflare-dns.com)
@@ -1115,14 +1115,14 @@ export function formatDigOutput(result: DnsResult): string {
  *
  * @example
  * ```typescript
- * parseDigCommand('dig example.com')
- * // { domain: 'example.com', type: 'A' }
+ * parseDigCommand('dig example.com.ai')
+ * // { domain: 'example.com.ai', type: 'A' }
  *
- * parseDigCommand('dig @8.8.8.8 example.com MX')
- * // { domain: 'example.com', type: 'MX', resolver: '8.8.8.8' }
+ * parseDigCommand('dig @8.8.8.8 example.com.ai MX')
+ * // { domain: 'example.com.ai', type: 'MX', resolver: '8.8.8.8' }
  *
- * parseDigCommand('dig +short example.com AAAA')
- * // { domain: 'example.com', type: 'AAAA', short: true }
+ * parseDigCommand('dig +short example.com.ai AAAA')
+ * // { domain: 'example.com.ai', type: 'AAAA', short: true }
  * ```
  */
 export function parseDigCommand(cmd: string): {
@@ -1178,14 +1178,14 @@ export interface NslookupOptions {
  * @example
  * ```typescript
  * // Basic lookup
- * const result = await executeNslookup('example.com')
+ * const result = await executeNslookup('example.com.ai')
  * console.log(result.addresses) // ['93.184.216.34']
  *
  * // With specific server
- * const google = await executeNslookup('example.com', { server: '8.8.8.8' })
+ * const google = await executeNslookup('example.com.ai', { server: '8.8.8.8' })
  *
  * // Query MX records
- * const mx = await executeNslookup('example.com', { type: 'MX' })
+ * const mx = await executeNslookup('example.com.ai', { type: 'MX' })
  * ```
  */
 export async function executeNslookup(
@@ -1215,13 +1215,13 @@ export async function executeNslookup(
  *
  * @example
  * ```typescript
- * const result = await executeNslookup('example.com')
+ * const result = await executeNslookup('example.com.ai')
  * console.log(formatNslookupOutput(result))
  * // Server:    1.1.1.1
  * // Address:   1.1.1.1#53
  * //
  * // Non-authoritative answer:
- * // Name:  example.com
+ * // Name:  example.com.ai
  * // Address: 93.184.216.34
  * ```
  */
@@ -1273,7 +1273,7 @@ export interface HostOptions {
  * @example
  * ```typescript
  * // Forward lookup
- * const forward = await executeHost('example.com')
+ * const forward = await executeHost('example.com.ai')
  * console.log(forward.addresses) // ['93.184.216.34']
  *
  * // Reverse lookup (IP to hostname)
@@ -1281,7 +1281,7 @@ export interface HostOptions {
  * console.log(reverse.addresses) // ['dns.google']
  *
  * // MX record lookup
- * const mx = await executeHost('example.com', { type: 'MX' })
+ * const mx = await executeHost('example.com.ai', { type: 'MX' })
  * ```
  */
 export async function executeHost(target: string, options: HostOptions = {}): Promise<HostResult> {
@@ -1332,9 +1332,9 @@ export async function executeHost(target: string, options: HostOptions = {}): Pr
  *
  * @example
  * ```typescript
- * const result = await executeHost('example.com')
+ * const result = await executeHost('example.com.ai')
  * console.log(formatHostOutput(result))
- * // example.com has address 93.184.216.34
+ * // example.com.ai has address 93.184.216.34
  * ```
  */
 export function formatHostOutput(result: HostResult): string {
@@ -1410,7 +1410,7 @@ export interface NcOptions {
  * @example
  * ```typescript
  * // Check if port 443 is open
- * const result = await executeNc('example.com', 443, { zero: true })
+ * const result = await executeNc('example.com.ai', 443, { zero: true })
  * if (result.open) {
  *   console.log(`Port 443 is open (latency: ${result.latency}ms)`)
  * }
@@ -1489,7 +1489,7 @@ export async function executeNc(
  * @example
  * ```typescript
  * // Scan common HTTP ports
- * const results = await executeNcRange('example.com', 80, 83, { timeout: 2000 })
+ * const results = await executeNcRange('example.com.ai', 80, 83, { timeout: 2000 })
  * const openPorts = results.filter(r => r.open).map(r => r.port)
  * console.log('Open ports:', openPorts)
  * ```
@@ -1524,7 +1524,7 @@ export async function executeNcRange(
  * @example
  * ```typescript
  * // Simple HTTP request
- * const response = await executeNcHttp('example.com', 80, 'GET / HTTP/1.0\r\n\r\n')
+ * const response = await executeNcHttp('example.com.ai', 80, 'GET / HTTP/1.0\r\n\r\n')
  * console.log(response)
  * // HTTP/1.1 200 OK
  * // Content-Type: text/html
@@ -1572,16 +1572,16 @@ export async function executeNcHttp(host: string, port: number, request: string)
  * - `-w N`: Connection timeout in seconds
  * - `-l`: Listen mode (not supported)
  *
- * @param cmd - Full nc command string (e.g., "nc -zv example.com 80")
+ * @param cmd - Full nc command string (e.g., "nc -zv example.com.ai 80")
  * @returns Parsed options with host, port, and flags
  *
  * @example
  * ```typescript
- * parseNcCommand('nc -z example.com 80')
- * // { host: 'example.com', port: 80, zero: true }
+ * parseNcCommand('nc -z example.com.ai 80')
+ * // { host: 'example.com.ai', port: 80, zero: true }
  *
- * parseNcCommand('nc -zv -w 5 example.com 443')
- * // { host: 'example.com', port: 443, zero: true, verbose: true, timeout: 5000 }
+ * parseNcCommand('nc -zv -w 5 example.com.ai 443')
+ * // { host: 'example.com.ai', port: 443, zero: true, verbose: true, timeout: 5000 }
  * ```
  */
 export function parseNcCommand(cmd: string): {
@@ -1652,13 +1652,13 @@ export interface WgetSpiderOptions {
  * @example
  * ```typescript
  * // Check if URL exists
- * const result = await executeWgetSpider('https://example.com/page')
+ * const result = await executeWgetSpider('https://example.com.ai/page')
  * if (result.exists) {
  *   console.log(`URL exists with status ${result.status}`)
  * }
  *
  * // Check without following redirects
- * const noRedirect = await executeWgetSpider('http://example.com', {
+ * const noRedirect = await executeWgetSpider('http://example.com.ai', {
  *   followRedirects: false
  * })
  * ```
@@ -1710,7 +1710,7 @@ export async function executeWgetSpider(
  *
  * @example
  * ```typescript
- * const result = await executeCurlHead('https://example.com')
+ * const result = await executeCurlHead('https://example.com.ai')
  * console.log(`Status: ${result.status}`)
  * console.log(`Content-Type: ${result.headers?.['content-type']}`)
  * console.log(`Server: ${result.headers?.['server']}`)
@@ -1770,7 +1770,7 @@ export interface CurlTimingOptions {
  *
  * @example
  * ```typescript
- * const result = await executeCurlWithTiming('https://example.com')
+ * const result = await executeCurlWithTiming('https://example.com.ai')
  * console.log(`TTFB: ${result.timing?.ttfb.toFixed(2)}ms`)
  * console.log(`Total: ${result.timing?.total.toFixed(2)}ms`)
  *
@@ -1842,7 +1842,7 @@ export async function executeCurlWithTiming(
  *
  * @example
  * ```typescript
- * const result = await executeCurlWithTiming('https://example.com')
+ * const result = await executeCurlWithTiming('https://example.com.ai')
  * console.log(formatCurlTiming(result))
  * // time_namelookup: 0.000001s
  * // time_connect: 0.000001s
@@ -1884,15 +1884,15 @@ function sleep(ms: number): Promise<void> {
  * Tokenize a command string into arguments, respecting quotes.
  *
  * Handles both single and double quotes, similar to shell parsing.
- * Used for parsing command strings like "ping -c 4 example.com".
+ * Used for parsing command strings like "ping -c 4 example.com.ai".
  *
  * @param input - Command string to tokenize
  * @returns Array of argument tokens
  *
  * @example
  * ```typescript
- * tokenizeCommand('ping -c 4 example.com')
- * // ['ping', '-c', '4', 'example.com']
+ * tokenizeCommand('ping -c 4 example.com.ai')
+ * // ['ping', '-c', '4', 'example.com.ai']
  *
  * tokenizeCommand('echo "hello world"')
  * // ['echo', 'hello world']

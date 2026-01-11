@@ -639,10 +639,10 @@ export function executeWhoami(
  *
  * @example
  * ```typescript
- * executeHostname([], { hostname: 'server.example.com' })
- * // => { stdout: 'server.example.com\n', ... }
+ * executeHostname([], { hostname: 'server.example.com.ai' })
+ * // => { stdout: 'server.example.com.ai\n', ... }
  *
- * executeHostname(['-s'], { hostname: 'server.example.com' })
+ * executeHostname(['-s'], { hostname: 'server.example.com.ai' })
  * // => { stdout: 'server\n', ... }
  * ```
  */

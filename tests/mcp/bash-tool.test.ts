@@ -240,7 +240,7 @@ describe('MCP Tool Safety Analysis', () => {
     })
 
     it('should classify network commands appropriately', async () => {
-      const result = await handleBash({ input: 'curl https://example.com' })
+      const result = await handleBash({ input: 'curl https://example.com.ai' })
 
       expect(result.classification.type).toBe('network')
     })
@@ -315,7 +315,7 @@ describe('MCP Tool Safety Analysis', () => {
     })
 
     it('should detect network operations', async () => {
-      const result = await handleBash({ input: 'wget https://example.com/file.tar.gz' })
+      const result = await handleBash({ input: 'wget https://example.com.ai/file.tar.gz' })
 
       expect(result.intent.network).toBe(true)
     })

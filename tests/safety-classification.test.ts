@@ -101,7 +101,7 @@ describe('Safety Classification', () => {
 
     it('should classify network commands as network type', () => {
       const curlCase = getSafetyCaseByCommand(
-        'curl -X POST https://api.example.com/data'
+        'curl -X POST https://api.example.com.ai/data'
       )
       expect(curlCase).toBeDefined()
       expect(curlCase!.expectedClassification.type).toBe('network')
