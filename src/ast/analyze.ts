@@ -3,6 +3,17 @@
  *
  * Analyzes parsed AST to extract safety classification and intent.
  * Implements structural safety analysis without regex-based detection.
+ *
+ * NOTE: This module contains platform-specific extensions to the core safety
+ * analysis in core/safety/analyze.ts. The core module provides the pure library
+ * implementation, while this module adds Worker-specific features.
+ *
+ * Key differences from core/safety/analyze.ts:
+ * - Extended intent extraction with semantic descriptions
+ * - Additional type imports for Pipeline and List nodes
+ * - Platform-specific comments and documentation
+ *
+ * @module bashx/ast/analyze
  */
 
 import type {

@@ -1,8 +1,15 @@
 /**
- * AST Analysis
+ * AST Safety Analysis
+ *
+ * Canonical implementation of safety classification and intent extraction.
+ * This is the pure library version with zero platform dependencies.
  *
  * Analyzes parsed AST to extract safety classification and intent.
  * Implements structural safety analysis without regex-based detection.
+ *
+ * NOTE: src/ast/analyze.ts contains a parallel implementation with
+ * platform-specific extensions for Cloudflare Workers. When making
+ * changes to the core safety logic, both files should be updated.
  *
  * @packageDocumentation
  */
