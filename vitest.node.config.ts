@@ -18,6 +18,8 @@ export default defineConfig({
       'src/npmx/**/*.test.ts',
       // Core package architecture tests
       'test/core/**/*.test.ts',
+      // Storage patterns tests (pure unit tests)
+      'src/storage/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
