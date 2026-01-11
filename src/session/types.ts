@@ -578,6 +578,114 @@ export interface SessionRef {
 export type RefType = 'head' | 'branch' | 'fork' | 'experiment'
 
 // ============================================================================
+// Branch Types (for gitx integration)
+// ============================================================================
+
+/**
+ * A session branch with full metadata.
+ *
+ * Extends SessionRef with additional fields for branch-specific operations.
+ * Used with BranchStorage implementations like GitxBranchStorage.
+ *
+ * @example
+ * ```typescript
+ * const branch: SessionBranch = {
+ *   name: 'before-refactor',
+ *   checkpointHash: 'abc123...',
+ *   type: 'branch',
+ *   sessionId: 'session-123',
+ *   createdAt: Date.now(),
+ *   updatedAt: Date.now(),
+ *   metadata: { author: 'user', message: 'Before major refactor' }
+ * }
+ * ```
+ */
+export interface SessionBranch {
+  /** Branch name (without path prefix) */
+  name: string
+
+  /** Checkpoint hash this branch points to */
+  checkpointHash: string
+
+  /** Type is always 'branch' for SessionBranch */
+  type: 'branch'
+
+  /** Session ID this branch belongs to */
+  sessionId: SessionId
+
+  /** Timestamp when branch was created */
+  createdAt: number
+
+  /** Timestamp when branch was last updated */
+  updatedAt?: number
+
+  /** Additional metadata (author, message, etc.) */
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Abstract storage interface for session branches.
+ *
+ * This interface defines the contract for branch storage backends.
+ * Implementations can use different storage mechanisms:
+ * - In-memory (for testing)
+ * - R2/KV (default CheckpointStorage)
+ * - gitx RefStorage (for Git semantics)
+ *
+ * @example
+ * ```typescript
+ * // Using GitxBranchStorage
+ * const storage: BranchStorage = new GitxBranchStorage(sessionId, gitxAdapter)
+ *
+ * // Save a branch
+ * await storage.saveBranch(branch)
+ *
+ * // List branches
+ * const branches = await storage.listBranches()
+ * ```
+ */
+export interface BranchStorage {
+  /**
+   * Save a branch to storage.
+   * Creates or updates the branch.
+   *
+   * @param branch - The branch to save
+   */
+  saveBranch(branch: SessionBranch): Promise<void>
+
+  /**
+   * Get a branch by name.
+   *
+   * @param name - The branch name
+   * @returns The branch, or null if not found
+   */
+  getBranch(name: string): Promise<SessionBranch | null>
+
+  /**
+   * List all branches for the session.
+   *
+   * @returns Array of all branches
+   */
+  listBranches(): Promise<SessionBranch[]>
+
+  /**
+   * Delete a branch by name.
+   *
+   * @param name - The branch name to delete
+   * @returns true if deleted, false if branch didn't exist
+   */
+  deleteBranch(name: string): Promise<boolean>
+
+  /**
+   * Check if a branch exists.
+   *
+   * @param name - The branch name
+   * @returns true if branch exists
+   */
+  branchExists?(name: string): Promise<boolean>
+}
+
+// ============================================================================
 // Write-Ahead Log Types
 // ============================================================================
 

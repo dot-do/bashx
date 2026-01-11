@@ -25,3 +25,12 @@ export {
   type SessionDependencies,
   type CreateSessionOptions,
 } from './factory.js'
+
+// GitxBranchStorage adapter for gitx integration
+export {
+  GitxBranchStorage,
+  createGitxBranchStorage,
+  createMockGitxAdapter,
+  type GitxAdapter,
+  type GitxBranchStorageOptions,
+} from './gitx-branch-storage.js'
