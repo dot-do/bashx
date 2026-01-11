@@ -20,8 +20,19 @@
  * @see wrangler.toml - FSX service binding configuration
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { FsCapability, Stats, Dirent } from 'fsx.do'
+import { setupMockFSX, cleanupMockFSX } from './mock-fsx.js'
+
+// Setup mock FSX service before all tests
+beforeAll(() => {
+  setupMockFSX()
+})
+
+// Cleanup after all tests
+afterAll(() => {
+  cleanupMockFSX()
+})
 
 // ============================================================================
 // FSX Service Binding Tests
