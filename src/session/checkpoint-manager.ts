@@ -18,7 +18,9 @@ import type {
   WALStorage,
   WALEntry,
   SessionRef,
+  SessionMetricsCollector,
 } from './types.js'
+import { noopMetricsCollector } from './types.js'
 
 // ============================================================================
 // Checkpoint Manager
@@ -38,6 +40,7 @@ export class CheckpointManager {
   private pendingOps: number = 0
   private lastCheckpoint: number = Date.now()
   private latestCheckpointHash: string | null = null
+  private metricsCollector: SessionMetricsCollector
 
   constructor(
     private sessionId: SessionId,
@@ -45,8 +48,11 @@ export class CheckpointManager {
     private checkpointStorage: CheckpointStorage,
     private walStorage: WALStorage,
     private getTreeHash: () => Promise<string>,
-    private getState?: () => SessionState
-  ) {}
+    private getState?: () => SessionState,
+    metricsCollector?: SessionMetricsCollector
+  ) {
+    this.metricsCollector = metricsCollector ?? noopMetricsCollector
+  }
 
   /**
    * Called after each operation to potentially trigger checkpoint.
@@ -96,7 +102,15 @@ export class CheckpointManager {
     message?: string,
     state?: SessionState
   ): Promise<Checkpoint> {
-    const now = Date.now()
+    const startTime = Date.now()
+
+    // Emit checkpoint start event
+    this.metricsCollector.emit({
+      type: 'checkpoint:start',
+      sessionId: this.sessionId,
+      timestamp: startTime,
+      checkpointType: type,
+    })
 
     // Get current tree hash from filesystem
     const treeHash = await this.getTreeHash()
@@ -129,7 +143,7 @@ export class CheckpointManager {
       checkpointHash: checkpoint.hash,
       type: 'head',
       sessionId: this.sessionId,
-      updatedAt: now,
+      updatedAt: startTime,
     }
     await this.checkpointStorage.putRef(headRef)
 
@@ -139,8 +153,39 @@ export class CheckpointManager {
 
     // Update local state
     this.pendingOps = 0
-    this.lastCheckpoint = now
+    this.lastCheckpoint = startTime
     this.latestCheckpointHash = checkpoint.hash
+
+    const duration = Date.now() - startTime
+
+    // Update checkpoint metrics in session state
+    if (this.getState) {
+      const sessionState = this.getState()
+      sessionState.metrics.checkpointCount++
+      sessionState.metrics.lastCheckpointAt = startTime
+      sessionState.metrics.totalCheckpointDuration += duration
+      sessionState.metrics.avgCheckpointDuration =
+        sessionState.metrics.totalCheckpointDuration / sessionState.metrics.checkpointCount
+      sessionState.metrics.minCheckpointDuration = Math.min(
+        sessionState.metrics.minCheckpointDuration,
+        duration
+      )
+      sessionState.metrics.maxCheckpointDuration = Math.max(
+        sessionState.metrics.maxCheckpointDuration,
+        duration
+      )
+    }
+
+    // Emit checkpoint end event
+    this.metricsCollector.emit({
+      type: 'checkpoint:end',
+      sessionId: this.sessionId,
+      timestamp: Date.now(),
+      checkpointType: type,
+      hash: checkpoint.hash,
+      durationMs: duration,
+      sizeBytes: checkpoint.size,
+    })
 
     return checkpoint
   }

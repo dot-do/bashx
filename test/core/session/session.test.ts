@@ -1278,6 +1278,13 @@ describe('Type Definitions', () => {
         checkpointCount: 0,
         forkCount: 0,
         recoveryCount: 0,
+        experimentCount: 0,
+        recoverySuccessCount: 0,
+        recoveryFailureCount: 0,
+        totalCheckpointDuration: 0,
+        avgCheckpointDuration: 0,
+        minCheckpointDuration: Infinity,
+        maxCheckpointDuration: 0,
       },
     }
 

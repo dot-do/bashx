@@ -15,5 +15,13 @@ export { CheckpointManager } from './checkpoint-manager.js'
 // Re-export session class
 export { Session } from './session.js'
 
-// Factory function
-export { createSession, loadSession } from './factory.js'
+// Factory functions
+export {
+  createSession,
+  loadSession,
+  sessionExists,
+  listSessions,
+  deleteSession,
+  type SessionDependencies,
+  type CreateSessionOptions,
+} from './factory.js'

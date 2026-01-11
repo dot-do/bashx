@@ -6,20 +6,19 @@
  * @module bashx/session/factory
  */
 
-import type { BashResult, ExecOptions } from '../types.js'
+import type { BashResult } from '../types.js'
 import type {
   SessionState,
   SessionId,
   SessionConfig,
-  Checkpoint,
   CheckpointStorage,
   WALStorage,
   WALEntry,
   EnvChange,
   CwdChange,
-  FileChange,
+  SessionMetricsCollector,
 } from './types.js'
-import { createInitialSessionState, DEFAULT_SESSION_CONFIG } from './types.js'
+import { createInitialSessionState } from './types.js'
 import { Session } from './session.js'
 
 // ============================================================================
@@ -44,6 +43,9 @@ export interface SessionDependencies {
 
   /** Function to restore filesystem from tree hash */
   restoreFilesystem: (treeHash: string) => Promise<void>
+
+  /** Optional metrics collector for observability */
+  metricsCollector?: SessionMetricsCollector
 }
 
 /**
@@ -113,7 +115,8 @@ export async function createSession(
     deps.executor,
     deps.getTreeHash,
     createSessionFn,
-    deps.restoreFilesystem
+    deps.restoreFilesystem,
+    deps.metricsCollector
   )
 }
 
@@ -124,67 +127,128 @@ export async function loadSession(
   deps: SessionDependencies,
   sessionId: SessionId
 ): Promise<Session> {
-  // Try to load HEAD reference
-  const headRef = await deps.checkpointStorage.getRef(
-    `sessions/${sessionId}/HEAD`
-  )
+  const startTime = Date.now()
+  let checkpointHash: string | undefined
 
-  if (!headRef) {
-    throw new Error(`Session not found: ${sessionId}`)
-  }
+  try {
+    // Emit recovery start event
+    deps.metricsCollector?.emit({
+      type: 'recovery:start',
+      sessionId,
+      timestamp: startTime,
+      checkpointHash: '', // Will be set once we have it
+    })
 
-  // Load checkpoint
-  const checkpoint = await deps.checkpointStorage.getCheckpoint(
-    headRef.checkpointHash
-  )
-
-  if (!checkpoint) {
-    throw new Error(`Checkpoint not found: ${headRef.checkpointHash}`)
-  }
-
-  // Get WAL entries since checkpoint
-  const lastSeq = checkpoint.state.history.length
-  const walEntries = await deps.walStorage.getEntriesSince(sessionId, lastSeq)
-
-  // Replay WAL entries
-  const state = { ...checkpoint.state }
-
-  const maxReplay = state.config.checkpoint.maxReplayOps
-  const entriesToReplay = walEntries.length > maxReplay
-    ? walEntries.slice(-maxReplay)
-    : walEntries
-
-  for (const entry of entriesToReplay) {
-    replayWALEntry(state, entry)
-  }
-
-  if (walEntries.length > maxReplay) {
-    console.warn(
-      `Session ${sessionId}: ${walEntries.length - maxReplay} WAL entries exceeded limit and were dropped`
+    // Try to load HEAD reference
+    const headRef = await deps.checkpointStorage.getRef(
+      `sessions/${sessionId}/HEAD`
     )
+
+    if (!headRef) {
+      const error = `Session not found: ${sessionId}`
+      deps.metricsCollector?.emit({
+        type: 'recovery:failure',
+        sessionId,
+        timestamp: Date.now(),
+        error,
+        checkpointHash: undefined,
+      })
+      throw new Error(error)
+    }
+
+    checkpointHash = headRef.checkpointHash
+
+    // Load checkpoint
+    const checkpoint = await deps.checkpointStorage.getCheckpoint(checkpointHash)
+
+    if (!checkpoint) {
+      const error = `Checkpoint not found: ${checkpointHash}`
+      deps.metricsCollector?.emit({
+        type: 'recovery:failure',
+        sessionId,
+        timestamp: Date.now(),
+        error,
+        checkpointHash,
+      })
+      throw new Error(error)
+    }
+
+    // Get WAL entries since checkpoint
+    const lastSeq = checkpoint.state.history.length
+    const walEntries = await deps.walStorage.getEntriesSince(sessionId, lastSeq)
+
+    // Replay WAL entries
+    const state = { ...checkpoint.state }
+
+    const maxReplay = state.config.checkpoint.maxReplayOps
+    const entriesToReplay = walEntries.length > maxReplay
+      ? walEntries.slice(-maxReplay)
+      : walEntries
+
+    for (const entry of entriesToReplay) {
+      replayWALEntry(state, entry)
+    }
+
+    if (walEntries.length > maxReplay) {
+      console.warn(
+        `Session ${sessionId}: ${walEntries.length - maxReplay} WAL entries exceeded limit and were dropped`
+      )
+    }
+
+    // Update recovery metrics
+    state.metrics.recoveryCount++
+    state.metrics.recoverySuccessCount++
+    state.updatedAt = Date.now()
+
+    // Restore filesystem state
+    await deps.restoreFilesystem(state.treeHash)
+
+    const duration = Date.now() - startTime
+
+    // Emit recovery success event
+    deps.metricsCollector?.emit({
+      type: 'recovery:success',
+      sessionId,
+      timestamp: Date.now(),
+      checkpointHash,
+      durationMs: duration,
+      walEntriesReplayed: entriesToReplay.length,
+    })
+
+    // Create session factory for forks
+    const createSessionFn = async (forkId: SessionId): Promise<Session> => {
+      return loadSession(deps, forkId)
+    }
+
+    return new Session(
+      state,
+      deps.checkpointStorage,
+      deps.walStorage,
+      deps.executor,
+      deps.getTreeHash,
+      createSessionFn,
+      deps.restoreFilesystem,
+      deps.metricsCollector
+    )
+  } catch (error) {
+    // If we haven't already emitted a failure event (for specific cases handled above),
+    // emit a generic failure
+    if (error instanceof Error &&
+        !error.message.startsWith('Session not found:') &&
+        !error.message.startsWith('Checkpoint not found:')) {
+      deps.metricsCollector?.emit({
+        type: 'recovery:failure',
+        sessionId,
+        timestamp: Date.now(),
+        error: error.message,
+        checkpointHash,
+      })
+
+      // Update failure count if we can get the state
+      // (In practice this would be tracked at the deps level, not in the session state)
+    }
+    throw error
   }
-
-  // Update recovery metrics
-  state.metrics.recoveryCount++
-  state.updatedAt = Date.now()
-
-  // Restore filesystem state
-  await deps.restoreFilesystem(state.treeHash)
-
-  // Create session factory for forks
-  const createSessionFn = async (forkId: SessionId): Promise<Session> => {
-    return loadSession(deps, forkId)
-  }
-
-  return new Session(
-    state,
-    deps.checkpointStorage,
-    deps.walStorage,
-    deps.executor,
-    deps.getTreeHash,
-    createSessionFn,
-    deps.restoreFilesystem
-  )
 }
 
 /**

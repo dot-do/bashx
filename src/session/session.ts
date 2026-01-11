@@ -10,11 +10,9 @@ import type { BashResult, ExecOptions } from '../types.js'
 import type {
   SessionState,
   SessionId,
-  SessionConfig,
   Checkpoint,
   SessionRef,
   CommandHistoryEntry,
-  CommandResult,
   SessionMetrics,
   ForkOptions,
   ForkResult,
@@ -29,8 +27,9 @@ import type {
   WALStorage,
   WALEntry,
   SessionBashCapability,
+  SessionMetricsCollector,
 } from './types.js'
-import { createInitialSessionState } from './types.js'
+import { noopMetricsCollector } from './types.js'
 import { CheckpointManager } from './checkpoint-manager.js'
 
 // ============================================================================
@@ -50,26 +49,39 @@ export class Session implements SessionBashCapability {
   private _state: SessionState
   private checkpointManager: CheckpointManager
   private executor: BashExecutor
+  private metricsCollector: SessionMetricsCollector
+  private sessionCreatedAt: number
 
   constructor(
     state: SessionState,
     private checkpointStorage: CheckpointStorage,
-    private walStorage: WALStorage,
+    walStorage: WALStorage,
     executor: BashExecutor,
     private getTreeHash: () => Promise<string>,
     private createSessionFn: (id: SessionId) => Promise<Session>,
-    private restoreFilesystemFn: (treeHash: string) => Promise<void>
+    private restoreFilesystemFn: (treeHash: string) => Promise<void>,
+    metricsCollector?: SessionMetricsCollector
   ) {
     this._state = state
     this.executor = executor
+    this.metricsCollector = metricsCollector ?? noopMetricsCollector
+    this.sessionCreatedAt = Date.now()
     this.checkpointManager = new CheckpointManager(
       state.id,
       state.config.checkpoint,
       checkpointStorage,
       walStorage,
       getTreeHash,
-      () => this._state
+      () => this._state,
+      this.metricsCollector
     )
+
+    // Emit session created event
+    this.metricsCollector.emit({
+      type: 'session:created',
+      sessionId: state.id,
+      timestamp: this.sessionCreatedAt,
+    })
   }
 
   /** Current session state (read-only view) */
@@ -108,6 +120,15 @@ export class Session implements SessionBashCapability {
     const startTime = Date.now()
     const treeBeforeHash = await this.getTreeHash()
 
+    // Emit command start event
+    this.metricsCollector.emit({
+      type: 'command:start',
+      sessionId: this._state.id,
+      timestamp: startTime,
+      command,
+      seq,
+    })
+
     // Execute via backend
     const result = await this.executor.execute(command, {
       cwd: options?.cwd || this._state.cwd,
@@ -117,6 +138,18 @@ export class Session implements SessionBashCapability {
 
     const duration = Date.now() - startTime
     const treeAfterHash = await this.getTreeHash()
+
+    // Emit command end event
+    this.metricsCollector.emit({
+      type: 'command:end',
+      sessionId: this._state.id,
+      timestamp: Date.now(),
+      command: result.command,
+      seq,
+      exitCode: result.exitCode,
+      durationMs: duration,
+      generated: result.generated,
+    })
 
     // Create history entry
     const historyEntry: CommandHistoryEntry = {
@@ -174,6 +207,16 @@ export class Session implements SessionBashCapability {
    * Fork the current session, creating an independent copy.
    */
   async fork(options: ForkOptions = {}): Promise<ForkResult> {
+    const startTime = Date.now()
+
+    // Emit fork start event
+    this.metricsCollector.emit({
+      type: 'fork:start',
+      sessionId: this._state.id,
+      timestamp: startTime,
+      forkName: options.name,
+    })
+
     // Use specified checkpoint or create new one at current state
     let checkpoint: Checkpoint
     if (options.fromCheckpoint) {
@@ -212,6 +255,13 @@ export class Session implements SessionBashCapability {
         checkpointCount: 0,
         forkCount: 0,
         recoveryCount: 0,
+        experimentCount: 0,
+        recoverySuccessCount: 0,
+        recoveryFailureCount: 0,
+        totalCheckpointDuration: 0,
+        avgCheckpointDuration: 0,
+        minCheckpointDuration: Infinity,
+        maxCheckpointDuration: 0,
       },
     }
 
@@ -241,6 +291,18 @@ export class Session implements SessionBashCapability {
 
     // Update parent's fork count
     this._state.metrics.forkCount++
+
+    const duration = Date.now() - startTime
+
+    // Emit fork end event
+    this.metricsCollector.emit({
+      type: 'fork:end',
+      sessionId: this._state.id,
+      timestamp: Date.now(),
+      forkSessionId: newSessionId,
+      forkPointHash: checkpoint.hash,
+      durationMs: duration,
+    })
 
     return {
       sessionId: newSessionId,
@@ -277,6 +339,15 @@ export class Session implements SessionBashCapability {
       },
     }
     await this.checkpointStorage.putRef(ref)
+
+    // Emit branch created event
+    this.metricsCollector.emit({
+      type: 'branch:created',
+      sessionId: this._state.id,
+      timestamp: Date.now(),
+      branchName: options.name,
+      checkpointHash: checkpoint.hash,
+    })
 
     return {
       ref,
@@ -344,6 +415,8 @@ export class Session implements SessionBashCapability {
    * Run parallel experiments and compare results.
    */
   async experiment(config: ExperimentConfig): Promise<ExperimentComparison> {
+    const startTime = Date.now()
+
     // Determine experiments to run
     const experiments = config.commands
       ? config.commands.map(cmd => ({ command: cmd, config: this._state.config }))
@@ -351,6 +424,17 @@ export class Session implements SessionBashCapability {
           command: config.command!,
           config: { ...this._state.config, ...cfg },
         }))
+
+    const commands = experiments.map(exp => exp.command)
+
+    // Emit experiment start event
+    this.metricsCollector.emit({
+      type: 'experiment:start',
+      sessionId: this._state.id,
+      timestamp: startTime,
+      experimentCount: experiments.length,
+      commands,
+    })
 
     // Create forks for each experiment
     const forks = await Promise.all(
@@ -372,7 +456,7 @@ export class Session implements SessionBashCapability {
         batch.map(async (fork, j) => {
           const forkSession = await this.createSessionFn(fork.sessionId)
           const expIndex = i + j
-          const startTime = Date.now()
+          const expStartTime = Date.now()
 
           try {
             const result = await forkSession.run(experiments[expIndex].command, {
@@ -385,7 +469,7 @@ export class Session implements SessionBashCapability {
               forkId: fork.sessionId,
               command: experiments[expIndex].command,
               result,
-              duration: Date.now() - startTime,
+              duration: Date.now() - expStartTime,
               treeHash,
             } as ExperimentResult
           } catch (error) {
@@ -393,7 +477,7 @@ export class Session implements SessionBashCapability {
               forkId: fork.sessionId,
               command: experiments[expIndex].command,
               result: null,
-              duration: Date.now() - startTime,
+              duration: Date.now() - expStartTime,
               treeHash: fork.state.treeHash,
               error: error instanceof Error ? error.message : String(error),
             } as ExperimentResult
@@ -414,6 +498,23 @@ export class Session implements SessionBashCapability {
         forks.map(fork => this.deleteSession(fork.sessionId))
       )
     }
+
+    // Update experiment count
+    this._state.metrics.experimentCount++
+
+    const duration = Date.now() - startTime
+    const successCount = results.filter(r => r.result && r.result.exitCode === 0).length
+
+    // Emit experiment end event
+    this.metricsCollector.emit({
+      type: 'experiment:end',
+      sessionId: this._state.id,
+      timestamp: Date.now(),
+      completedCount: results.length,
+      successCount,
+      durationMs: duration,
+      winnerId: comparison.winner,
+    })
 
     return comparison
   }
@@ -573,6 +674,23 @@ export class Session implements SessionBashCapability {
    * Dispose of resources.
    */
   dispose(): void {
+    const lifetimeMs = Date.now() - this.sessionCreatedAt
+
+    // Emit session disposed event
+    this.metricsCollector.emit({
+      type: 'session:disposed',
+      sessionId: this._state.id,
+      timestamp: Date.now(),
+      lifetimeMs,
+    })
+
+    // Flush metrics if the collector supports it
+    if (this.metricsCollector.flush) {
+      this.metricsCollector.flush().catch(() => {
+        // Ignore flush errors on dispose
+      })
+    }
+
     this.checkpointManager.dispose()
   }
 }

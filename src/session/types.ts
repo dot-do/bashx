@@ -193,6 +193,320 @@ export interface SessionMetrics {
 
   /** Number of times this session was recovered */
   recoveryCount: number
+
+  /** Number of experiments run */
+  experimentCount: number
+
+  /** Number of successful recoveries */
+  recoverySuccessCount: number
+
+  /** Number of failed recoveries */
+  recoveryFailureCount: number
+
+  /** Total checkpoint duration (ms) */
+  totalCheckpointDuration: number
+
+  /** Average checkpoint duration (ms) */
+  avgCheckpointDuration: number
+
+  /** Minimum checkpoint duration (ms) */
+  minCheckpointDuration: number
+
+  /** Maximum checkpoint duration (ms) */
+  maxCheckpointDuration: number
+}
+
+// ============================================================================
+// Metrics Collector Types
+// ============================================================================
+
+/**
+ * Event types emitted by session operations.
+ */
+export type SessionEventType =
+  | 'session:created'
+  | 'session:loaded'
+  | 'session:disposed'
+  | 'command:start'
+  | 'command:end'
+  | 'checkpoint:start'
+  | 'checkpoint:end'
+  | 'fork:start'
+  | 'fork:end'
+  | 'branch:created'
+  | 'experiment:start'
+  | 'experiment:end'
+  | 'recovery:start'
+  | 'recovery:success'
+  | 'recovery:failure'
+
+/**
+ * Base event data shared by all events.
+ */
+export interface SessionEventBase {
+  /** Event type */
+  type: SessionEventType
+
+  /** Session ID */
+  sessionId: SessionId
+
+  /** Event timestamp */
+  timestamp: number
+}
+
+/**
+ * Event emitted when a session is created.
+ */
+export interface SessionCreatedEvent extends SessionEventBase {
+  type: 'session:created'
+}
+
+/**
+ * Event emitted when a session is loaded from storage.
+ */
+export interface SessionLoadedEvent extends SessionEventBase {
+  type: 'session:loaded'
+
+  /** Checkpoint hash used for recovery */
+  checkpointHash: string
+
+  /** Number of WAL entries replayed */
+  walEntriesReplayed: number
+}
+
+/**
+ * Event emitted when a session is disposed.
+ */
+export interface SessionDisposedEvent extends SessionEventBase {
+  type: 'session:disposed'
+
+  /** Session lifetime in ms */
+  lifetimeMs: number
+}
+
+/**
+ * Event emitted when a command starts execution.
+ */
+export interface CommandStartEvent extends SessionEventBase {
+  type: 'command:start'
+
+  /** Command being executed */
+  command: string
+
+  /** Command sequence number */
+  seq: number
+}
+
+/**
+ * Event emitted when a command finishes execution.
+ */
+export interface CommandEndEvent extends SessionEventBase {
+  type: 'command:end'
+
+  /** Command that was executed */
+  command: string
+
+  /** Command sequence number */
+  seq: number
+
+  /** Exit code */
+  exitCode: number
+
+  /** Duration in ms */
+  durationMs: number
+
+  /** Whether the command was generated from natural language */
+  generated: boolean
+}
+
+/**
+ * Event emitted when a checkpoint starts.
+ */
+export interface CheckpointStartEvent extends SessionEventBase {
+  type: 'checkpoint:start'
+
+  /** Checkpoint type */
+  checkpointType: CheckpointType
+}
+
+/**
+ * Event emitted when a checkpoint completes.
+ */
+export interface CheckpointEndEvent extends SessionEventBase {
+  type: 'checkpoint:end'
+
+  /** Checkpoint type */
+  checkpointType: CheckpointType
+
+  /** Checkpoint hash */
+  hash: string
+
+  /** Duration in ms */
+  durationMs: number
+
+  /** Checkpoint size in bytes */
+  sizeBytes: number
+}
+
+/**
+ * Event emitted when a fork starts.
+ */
+export interface ForkStartEvent extends SessionEventBase {
+  type: 'fork:start'
+
+  /** Name of the fork (if provided) */
+  forkName?: string
+}
+
+/**
+ * Event emitted when a fork completes.
+ */
+export interface ForkEndEvent extends SessionEventBase {
+  type: 'fork:end'
+
+  /** New fork session ID */
+  forkSessionId: SessionId
+
+  /** Fork point checkpoint hash */
+  forkPointHash: string
+
+  /** Duration in ms */
+  durationMs: number
+}
+
+/**
+ * Event emitted when a branch is created.
+ */
+export interface BranchCreatedEvent extends SessionEventBase {
+  type: 'branch:created'
+
+  /** Branch name */
+  branchName: string
+
+  /** Checkpoint hash */
+  checkpointHash: string
+}
+
+/**
+ * Event emitted when an experiment starts.
+ */
+export interface ExperimentStartEvent extends SessionEventBase {
+  type: 'experiment:start'
+
+  /** Number of parallel experiments */
+  experimentCount: number
+
+  /** Commands being run */
+  commands: string[]
+}
+
+/**
+ * Event emitted when an experiment completes.
+ */
+export interface ExperimentEndEvent extends SessionEventBase {
+  type: 'experiment:end'
+
+  /** Number of experiments that completed */
+  completedCount: number
+
+  /** Number of successful experiments */
+  successCount: number
+
+  /** Total duration in ms */
+  durationMs: number
+
+  /** Winner session ID (if any) */
+  winnerId?: SessionId
+}
+
+/**
+ * Event emitted when recovery starts.
+ */
+export interface RecoveryStartEvent extends SessionEventBase {
+  type: 'recovery:start'
+
+  /** Checkpoint hash being recovered from */
+  checkpointHash: string
+}
+
+/**
+ * Event emitted when recovery succeeds.
+ */
+export interface RecoverySuccessEvent extends SessionEventBase {
+  type: 'recovery:success'
+
+  /** Checkpoint hash recovered from */
+  checkpointHash: string
+
+  /** Duration in ms */
+  durationMs: number
+
+  /** Number of WAL entries replayed */
+  walEntriesReplayed: number
+}
+
+/**
+ * Event emitted when recovery fails.
+ */
+export interface RecoveryFailureEvent extends SessionEventBase {
+  type: 'recovery:failure'
+
+  /** Error message */
+  error: string
+
+  /** Checkpoint hash attempted */
+  checkpointHash?: string
+}
+
+/**
+ * Union of all session events.
+ */
+export type SessionEvent =
+  | SessionCreatedEvent
+  | SessionLoadedEvent
+  | SessionDisposedEvent
+  | CommandStartEvent
+  | CommandEndEvent
+  | CheckpointStartEvent
+  | CheckpointEndEvent
+  | ForkStartEvent
+  | ForkEndEvent
+  | BranchCreatedEvent
+  | ExperimentStartEvent
+  | ExperimentEndEvent
+  | RecoveryStartEvent
+  | RecoverySuccessEvent
+  | RecoveryFailureEvent
+
+/**
+ * Interface for collecting session metrics and events.
+ *
+ * Implementations can:
+ * - Log events for debugging
+ * - Send to monitoring systems (e.g., CloudWatch, Datadog)
+ * - Aggregate for analytics
+ * - Store for audit trails
+ */
+export interface SessionMetricsCollector {
+  /**
+   * Record a session event.
+   * Called at key points in the session lifecycle.
+   */
+  emit(event: SessionEvent): void
+
+  /**
+   * Flush any buffered metrics.
+   * Called when session is disposed or at periodic intervals.
+   */
+  flush?(): Promise<void>
+}
+
+/**
+ * No-op metrics collector for when metrics are not needed.
+ */
+export const noopMetricsCollector: SessionMetricsCollector = {
+  emit: () => {},
+  flush: async () => {},
 }
 
 // ============================================================================
@@ -680,6 +994,13 @@ export function createInitialSessionState(
       checkpointCount: 0,
       forkCount: 0,
       recoveryCount: 0,
+      experimentCount: 0,
+      recoverySuccessCount: 0,
+      recoveryFailureCount: 0,
+      totalCheckpointDuration: 0,
+      avgCheckpointDuration: 0,
+      minCheckpointDuration: Infinity,
+      maxCheckpointDuration: 0,
     },
   }
 }
