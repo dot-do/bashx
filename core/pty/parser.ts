@@ -32,18 +32,6 @@ const PM_8BIT = 0x9e
 const APC_8BIT = 0x9f
 /** Bell */
 const BEL = 0x07
-/** Backspace */
-const BS = 0x08
-/** Horizontal Tab */
-const HT = 0x09
-/** Line Feed */
-const LF = 0x0a
-/** Vertical Tab */
-const VT = 0x0b
-/** Form Feed */
-const FF = 0x0c
-/** Carriage Return */
-const CR = 0x0d
 /** Cancel */
 const CAN = 0x18
 /** Substitute */
