@@ -10,10 +10,27 @@
  * - Container operations
  * - Any command not handled by higher tiers
  *
+ * Interface Contract:
+ * -------------------
+ * SandboxExecutor implements the TierExecutor interface:
+ * - canExecute(command): Returns true if sandbox is configured (fallback tier)
+ * - execute(command, options): Executes in sandbox and returns BashResult
+ *
+ * Dependency Injection:
+ * ---------------------
+ * - sandbox: SandboxBackend for executing commands in isolated environment
+ * - defaultTimeout: Optional timeout configuration
+ *
+ * Session Management:
+ * -------------------
+ * Supports persistent sessions for multi-command workflows where
+ * state (cwd, env) needs to be preserved between commands.
+ *
  * @module bashx/do/executors/sandbox-executor
  */
 
 import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle } from '../../types.js'
+import type { TierExecutor, BaseExecutorConfig } from './types.js'
 
 // ============================================================================
 // TYPES
@@ -59,13 +76,30 @@ export interface SandboxSession {
 }
 
 /**
- * Configuration for SandboxExecutor
+ * Configuration for SandboxExecutor.
+ *
+ * @example
+ * ```typescript
+ * const config: SandboxExecutorConfig = {
+ *   sandbox: {
+ *     execute: async (command, options) => {
+ *       // Execute in sandbox environment
+ *       return { input: command, command, ... }
+ *     },
+ *   },
+ *   defaultTimeout: 60000, // Longer timeout for sandbox ops
+ * }
+ * const executor = createSandboxExecutor(config)
+ * ```
  */
-export interface SandboxExecutorConfig {
-  /** Sandbox backend */
+export interface SandboxExecutorConfig extends BaseExecutorConfig {
+  /**
+   * Sandbox backend for executing commands.
+   *
+   * Without a sandbox backend, canExecute() returns false and
+   * execute() returns an error result.
+   */
   sandbox?: SandboxBackend
-  /** Default timeout for sandbox operations in milliseconds */
-  defaultTimeout?: number
 }
 
 /**
@@ -145,9 +179,32 @@ export const SANDBOX_CATEGORIES = {
  * SandboxExecutor - Execute commands in a full Linux sandbox
  *
  * Provides Tier 4 execution for commands that require full system access
- * and process isolation.
+ * and process isolation. This is the fallback tier for any command not
+ * handled by tiers 1-3.
+ *
+ * Implements the TierExecutor interface for composition with TieredExecutor.
+ *
+ * @example
+ * ```typescript
+ * // Create with a sandbox backend
+ * const executor = new SandboxExecutor({
+ *   sandbox: mySandboxBackend,
+ * })
+ *
+ * // Execute any command
+ * const result = await executor.execute('ps aux')
+ *
+ * // Create and use sessions
+ * const session = await executor.createSession()
+ * await session.setWorkingDirectory('/app')
+ * const result1 = await session.execute('ls')
+ * const result2 = await session.execute('pwd')
+ * await session.close()
+ * ```
+ *
+ * @implements {TierExecutor}
  */
-export class SandboxExecutor {
+export class SandboxExecutor implements TierExecutor {
   private readonly sandbox?: SandboxBackend
   readonly defaultTimeout: number
   private readonly sessions: Map<string, SandboxSession> = new Map()

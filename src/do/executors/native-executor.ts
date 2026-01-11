@@ -15,23 +15,47 @@
  * - Extended utilities (env, id, uname, tac)
  * - Pure computation (true, false, pwd, dirname, basename)
  *
+ * Interface Contract:
+ * -------------------
+ * NativeExecutor implements the TierExecutor interface:
+ * - canExecute(command): Returns true if command is in NATIVE_COMMANDS
+ * - execute(command, options): Executes and returns BashResult
+ *
+ * Dependency Injection:
+ * ---------------------
+ * - FsCapability: Optional filesystem capability for file operations
+ * - defaultTimeout: Optional timeout configuration
+ *
  * @module bashx/do/executors/native-executor
  */
 
 import type { BashResult, ExecOptions, FsCapability } from '../../types.js'
+import type { TierExecutor, BaseExecutorConfig } from './types.js'
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 /**
- * Configuration for NativeExecutor
+ * Configuration for NativeExecutor.
+ *
+ * @example
+ * ```typescript
+ * const config: NativeExecutorConfig = {
+ *   fs: myFsCapability,
+ *   defaultTimeout: 30000,
+ * }
+ * const executor = createNativeExecutor(config)
+ * ```
  */
-export interface NativeExecutorConfig {
-  /** Filesystem capability for file operations */
+export interface NativeExecutorConfig extends BaseExecutorConfig {
+  /**
+   * Filesystem capability for file operations.
+   *
+   * When provided, commands like cat, ls, head, tail can access the filesystem.
+   * Without this, filesystem commands will return an error.
+   */
   fs?: FsCapability
-  /** Default timeout for commands in milliseconds */
-  defaultTimeout?: number
 }
 
 /**
@@ -150,9 +174,28 @@ export const EXTENDED_UTILS_COMMANDS = new Set([
  * NativeExecutor - Execute commands natively in-Worker
  *
  * Provides Tier 1 execution for commands that don't require external
- * services or a sandbox environment.
+ * services or a sandbox environment. This is the fastest execution tier.
+ *
+ * Implements the TierExecutor interface for composition with TieredExecutor.
+ *
+ * @example
+ * ```typescript
+ * // Create executor with filesystem capability
+ * const executor = new NativeExecutor({ fs: myFsCapability })
+ *
+ * // Check if command can be handled
+ * if (executor.canExecute('echo hello')) {
+ *   const result = await executor.execute('echo hello')
+ *   console.log(result.stdout) // 'hello\n'
+ * }
+ *
+ * // Execute filesystem commands
+ * const catResult = await executor.execute('cat /path/to/file.txt')
+ * ```
+ *
+ * @implements {TierExecutor}
  */
-export class NativeExecutor {
+export class NativeExecutor implements TierExecutor {
   private readonly fs?: FsCapability
 
   constructor(config: NativeExecutorConfig = {}) {

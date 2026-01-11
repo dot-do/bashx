@@ -6,10 +6,27 @@
  * This module handles commands that are executed via RPC calls to
  * external services like jq.do, npm.do, git.do.
  *
+ * Interface Contract:
+ * -------------------
+ * RpcExecutor implements the TierExecutor interface:
+ * - canExecute(command): Returns true if a service binding exists for the command
+ * - execute(command, options): Makes RPC call and returns BashResult
+ *
+ * Dependency Injection:
+ * ---------------------
+ * - bindings: Map of service names to RPC endpoints
+ * - defaultTimeout: Optional timeout configuration
+ *
+ * Service Binding Types:
+ * ----------------------
+ * - HTTP endpoint (string URL): Makes POST to URL/execute
+ * - Service binding (object with fetch): Uses Cloudflare service binding
+ *
  * @module bashx/do/executors/rpc-executor
  */
 
 import type { BashResult, ExecOptions } from '../../types.js'
+import type { TierExecutor, BaseExecutorConfig } from './types.js'
 
 // ============================================================================
 // TYPES
@@ -33,13 +50,28 @@ export interface RpcServiceBinding {
 }
 
 /**
- * Configuration for RpcExecutor
+ * Configuration for RpcExecutor.
+ *
+ * @example
+ * ```typescript
+ * const config: RpcExecutorConfig = {
+ *   bindings: {
+ *     jq: { name: 'jq', endpoint: 'https://jq.do', commands: ['jq'] },
+ *     npm: { name: 'npm', endpoint: env.NPM_SERVICE, commands: ['npm', 'npx'] },
+ *   },
+ *   defaultTimeout: 30000,
+ * }
+ * const executor = createRpcExecutor(config)
+ * ```
  */
-export interface RpcExecutorConfig {
-  /** Service bindings by name */
+export interface RpcExecutorConfig extends BaseExecutorConfig {
+  /**
+   * Service bindings by name.
+   *
+   * If not provided, DEFAULT_RPC_SERVICES will be used.
+   * If provided (even empty object), only those bindings are used.
+   */
   bindings?: Record<string, RpcServiceBinding>
-  /** Default timeout for RPC calls in milliseconds */
-  defaultTimeout?: number
 }
 
 /**
@@ -101,9 +133,35 @@ export const DEFAULT_RPC_SERVICES: Record<string, RpcServiceBinding> = {
  * RpcExecutor - Execute commands via RPC to external services
  *
  * Provides Tier 2 execution for commands that require specialized
- * external services.
+ * external services. Supports both HTTP endpoints and Cloudflare service bindings.
+ *
+ * Implements the TierExecutor interface for composition with TieredExecutor.
+ *
+ * @example
+ * ```typescript
+ * // Create with default services (jq.do, npm.do, git.do)
+ * const executor = new RpcExecutor()
+ *
+ * // Check if command can be handled
+ * if (executor.canExecute('git status')) {
+ *   const result = await executor.execute('git status')
+ * }
+ *
+ * // Create with custom service bindings
+ * const customExecutor = new RpcExecutor({
+ *   bindings: {
+ *     myService: {
+ *       name: 'myService',
+ *       endpoint: 'https://my-service.example.com',
+ *       commands: ['my-cmd'],
+ *     },
+ *   },
+ * })
+ * ```
+ *
+ * @implements {TierExecutor}
  */
-export class RpcExecutor {
+export class RpcExecutor implements TierExecutor {
   private readonly bindings: Record<string, RpcServiceBinding>
   private readonly defaultTimeout: number
   private readonly commandToService: Map<string, string>

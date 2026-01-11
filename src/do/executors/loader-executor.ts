@@ -10,10 +10,28 @@
  * - Crypto (crypto-js, jose)
  * - Utility (lodash, date-fns, uuid)
  *
+ * Interface Contract:
+ * -------------------
+ * LoaderExecutor implements the TierExecutor interface:
+ * - canExecute(command): Returns true if command maps to a loadable module
+ * - execute(command, options): Loads module dynamically and executes
+ *
+ * Dependency Injection:
+ * ---------------------
+ * - loader: ModuleLoader for loading npm modules at runtime
+ * - workerLoaders: Worker loader bindings for Cloudflare Workers
+ * - defaultTimeout: Optional timeout configuration
+ *
+ * Module Loading:
+ * ---------------
+ * Modules are loaded on-demand and cached for subsequent calls.
+ * This provides flexibility at the cost of initial load time.
+ *
  * @module bashx/do/executors/loader-executor
  */
 
 import type { BashResult, ExecOptions } from '../../types.js'
+import type { TierExecutor, BaseExecutorConfig } from './types.js'
 
 // ============================================================================
 // TYPES
@@ -46,15 +64,36 @@ export interface WorkerLoaderBinding {
 }
 
 /**
- * Configuration for LoaderExecutor
+ * Configuration for LoaderExecutor.
+ *
+ * @example
+ * ```typescript
+ * const config: LoaderExecutorConfig = {
+ *   loader: {
+ *     load: async (name) => import(name),
+ *     isLoaded: (name) => loadedModules.has(name),
+ *     getAvailableModules: () => Array.from(LOADABLE_MODULES),
+ *     unload: async (name) => loadedModules.delete(name),
+ *   },
+ *   defaultTimeout: 30000,
+ * }
+ * const executor = createLoaderExecutor(config)
+ * ```
  */
-export interface LoaderExecutorConfig {
-  /** Module loader */
+export interface LoaderExecutorConfig extends BaseExecutorConfig {
+  /**
+   * Module loader for loading npm modules at runtime.
+   *
+   * Without a loader, execute() will return an error for all commands.
+   */
   loader?: ModuleLoader
-  /** Worker loader bindings by name */
+
+  /**
+   * Worker loader bindings for Cloudflare Workers.
+   *
+   * These provide an alternative loading mechanism for Workers environment.
+   */
   workerLoaders?: Record<string, WorkerLoaderBinding>
-  /** Default timeout for module operations in milliseconds */
-  defaultTimeout?: number
 }
 
 /**
@@ -121,9 +160,32 @@ export const MODULE_CATEGORIES = {
  * LoaderExecutor - Execute commands via dynamically loaded npm modules
  *
  * Provides Tier 3 execution for commands that can run via npm packages
- * loaded at runtime.
+ * loaded at runtime. Supports module caching for efficiency.
+ *
+ * Implements the TierExecutor interface for composition with TieredExecutor.
+ *
+ * @example
+ * ```typescript
+ * // Create with a module loader
+ * const executor = new LoaderExecutor({
+ *   loader: myModuleLoader,
+ * })
+ *
+ * // Check if command can be handled
+ * if (executor.canExecute('prettier --write')) {
+ *   const result = await executor.execute('prettier --write', {
+ *     stdin: 'const x=1',
+ *   })
+ * }
+ *
+ * // Load modules explicitly
+ * await executor.loadModule('typescript')
+ * const loadedModules = executor.getLoadedModules()
+ * ```
+ *
+ * @implements {TierExecutor}
  */
-export class LoaderExecutor {
+export class LoaderExecutor implements TierExecutor {
   private readonly loader?: ModuleLoader
   private readonly workerLoaders: Record<string, WorkerLoaderBinding>
   private readonly defaultTimeout: number
