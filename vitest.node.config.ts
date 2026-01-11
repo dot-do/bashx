@@ -50,6 +50,8 @@ export default defineConfig({
       'tests/do/circuit-breaker.test.ts',
       // MCP stateful shell tests (uses Node.js process.cwd, child_process)
       'src/mcp/stateful-shell.test.ts',
+      // Tier-specific executor tests (RED phase TDD tests for module extraction)
+      'test/do/executors/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
