@@ -31,6 +31,8 @@ export default defineConfig({
       'src/npmx/**/*.test.ts',
       // Core package architecture tests
       'test/core/**/*.test.ts',
+      // Infrastructure tests (FSX binding, etc.)
+      'test/infrastructure/**/*.test.ts',
       // RPC integration tests (uses Node.js child_process)
       'test/rpc/**/*.test.ts',
       'tests/rpc/**/*.test.ts',
@@ -44,6 +46,8 @@ export default defineConfig({
       'tests/types/**/*.test.ts',
       // DO utility tests that don't need Workers runtime
       'tests/do/terminal-renderer.test.ts',
+      // Circuit breaker tests (pure unit tests)
+      'tests/do/circuit-breaker.test.ts',
       // MCP stateful shell tests (uses Node.js process.cwd, child_process)
       'src/mcp/stateful-shell.test.ts',
     ],
