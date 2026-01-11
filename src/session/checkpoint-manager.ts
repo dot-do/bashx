@@ -44,7 +44,8 @@ export class CheckpointManager {
     private config: CheckpointConfig,
     private checkpointStorage: CheckpointStorage,
     private walStorage: WALStorage,
-    private getTreeHash: () => Promise<string>
+    private getTreeHash: () => Promise<string>,
+    private getState?: () => SessionState
   ) {}
 
   /**
@@ -145,12 +146,33 @@ export class CheckpointManager {
   }
 
   /**
-   * Build current session state from WAL and last checkpoint.
+   * Build current session state from the Session's live state.
+   * Uses the getState callback to access the session's current _state.
    */
   private async buildCurrentState(treeHash: string): Promise<SessionState> {
-    // This is a placeholder - in real implementation,
-    // we'd reconstruct state from the last checkpoint + WAL entries
-    throw new Error('buildCurrentState not yet implemented')
+    if (!this.getState) {
+      throw new Error('CheckpointManager requires getState callback to build current state')
+    }
+
+    // Get the current state from the Session
+    const currentState = this.getState()
+
+    // Return a deep copy of the state with the current tree hash
+    // Deep copy arrays and nested objects to prevent mutations from affecting the checkpoint
+    return {
+      ...currentState,
+      treeHash,
+      updatedAt: Date.now(),
+      // Deep copy mutable fields
+      env: { ...currentState.env },
+      history: [...currentState.history],  // Copy history array
+      processes: [...currentState.processes],
+      config: {
+        ...currentState.config,
+        checkpoint: { ...currentState.config.checkpoint }
+      },
+      metrics: { ...currentState.metrics },
+    }
   }
 
   /**

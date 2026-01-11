@@ -67,7 +67,8 @@ export class Session implements SessionBashCapability {
       state.config.checkpoint,
       checkpointStorage,
       walStorage,
-      getTreeHash
+      getTreeHash,
+      () => this._state
     )
   }
 
@@ -173,22 +174,37 @@ export class Session implements SessionBashCapability {
    * Fork the current session, creating an independent copy.
    */
   async fork(options: ForkOptions = {}): Promise<ForkResult> {
-    // Create checkpoint of current state
-    const checkpoint = await this.checkpointManager.checkpoint('fork')
+    // Use specified checkpoint or create new one at current state
+    let checkpoint: Checkpoint
+    if (options.fromCheckpoint) {
+      // Fork from a specific checkpoint
+      const existingCheckpoint = await this.checkpointStorage.getCheckpoint(options.fromCheckpoint)
+      if (!existingCheckpoint) {
+        throw new Error(`Checkpoint not found: ${options.fromCheckpoint}`)
+      }
+      checkpoint = existingCheckpoint
+    } else {
+      // Create checkpoint of current state
+      checkpoint = await this.checkpointManager.checkpoint('fork')
+    }
 
     // Generate new session ID
     const newSessionId = options.name
       ? `fork/${options.name}`
       : `fork-${crypto.randomUUID().slice(0, 8)}`
 
-    // Clone state with new ID
+    // Clone state with new ID (deep copy env and other nested objects)
     const forkedState: SessionState = {
       ...this._state,
       id: newSessionId,
       parentId: this._state.id,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      cwd: this._state.cwd,
+      env: { ...this._state.env },  // Deep copy env
       history: options.includeWAL ? [...this._state.history] : [],
+      processes: [...this._state.processes],  // Copy processes array
+      config: { ...this._state.config, checkpoint: { ...this._state.config.checkpoint } },  // Deep copy config
       metrics: {
         commandCount: options.includeWAL ? this._state.metrics.commandCount : 0,
         totalDuration: options.includeWAL ? this._state.metrics.totalDuration : 0,
@@ -202,7 +218,7 @@ export class Session implements SessionBashCapability {
     // Create fork checkpoint
     const forkCheckpoint = await this.createCheckpointForState(forkedState, 'fork')
 
-    // Create reference
+    // Create fork reference
     const ref: SessionRef = {
       name: `forks/${newSessionId}`,
       checkpointHash: forkCheckpoint.hash,
@@ -212,6 +228,16 @@ export class Session implements SessionBashCapability {
       metadata: options.metadata,
     }
     await this.checkpointStorage.putRef(ref)
+
+    // Create HEAD ref for the forked session so it can be loaded
+    const headRef: SessionRef = {
+      name: `sessions/${newSessionId}/HEAD`,
+      checkpointHash: forkCheckpoint.hash,
+      type: 'head',
+      sessionId: newSessionId,
+      updatedAt: Date.now(),
+    }
+    await this.checkpointStorage.putRef(headRef)
 
     // Update parent's fork count
     this._state.metrics.forkCount++
