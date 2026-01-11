@@ -66,6 +66,7 @@
   "dependencies": {
     "fflate": "^0.8.2",
     "fsx.do": "0.1.0",
+    "hono": "^4.11.3",
     "pako": "^2.1.0"
   },
   "devDependencies": {

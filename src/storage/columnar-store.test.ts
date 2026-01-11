@@ -350,7 +350,7 @@ describe('ColumnarSessionStore', () => {
 
       const stats = await store.checkpoint()
 
-      expect(stats.sessionCount).toBe(2)
+      expect(stats.entityCount).toBe(2)
       expect(stats.trigger).toBe('manual')
     })
 
@@ -446,17 +446,17 @@ describe('ColumnarSessionStore', () => {
 describe('analyzeWorkloadCost', () => {
   it('should calculate realistic cost savings', () => {
     const comparison = analyzeWorkloadCost({
-      sessions: 100,
-      attributesPerSession: 50,
-      updatesPerSessionPerHour: 60, // 1 update per minute per session
-      checkpointsPerSessionPerHour: 6, // Checkpoint every 10 minutes
+      entities: 100,
+      attributesPerEntity: 50,
+      updatesPerEntityPerHour: 60, // 1 update per minute per entity
+      checkpointsPerEntityPerHour: 6, // Checkpoint every 10 minutes
       hoursPerMonth: 720, // 30 days
     })
 
-    // Normalized: 100 sessions * 60 updates/hr * 720 hrs = 4,320,000 rows
+    // Normalized: 100 entities * 60 updates/hr * 720 hrs = 4,320,000 rows
     expect(comparison.normalized.rowWrites).toBe(100 * 60 * 720)
 
-    // Columnar: 100 sessions * 6 checkpoints/hr * 720 hrs = 432,000 rows
+    // Columnar: 100 entities * 6 checkpoints/hr * 720 hrs = 432,000 rows
     expect(comparison.columnar.rowWrites).toBe(100 * 6 * 720)
 
     // Should show 90% reduction (10x fewer writes)
@@ -466,10 +466,10 @@ describe('analyzeWorkloadCost', () => {
 
   it('should calculate costs correctly', () => {
     const comparison = analyzeWorkloadCost({
-      sessions: 1000,
-      attributesPerSession: 100,
-      updatesPerSessionPerHour: 120, // 2 updates per minute
-      checkpointsPerSessionPerHour: 12, // Every 5 minutes
+      entities: 1000,
+      attributesPerEntity: 100,
+      updatesPerEntityPerHour: 120, // 2 updates per minute
+      checkpointsPerEntityPerHour: 12, // Every 5 minutes
       hoursPerMonth: 720,
     })
 
@@ -486,10 +486,10 @@ describe('analyzeWorkloadCost', () => {
   it('should handle aggressive buffering scenario', () => {
     // Aggressive buffering: checkpoint once per minute instead of per update
     const comparison = analyzeWorkloadCost({
-      sessions: 100,
-      attributesPerSession: 50,
-      updatesPerSessionPerHour: 600, // 10 updates per minute (high activity)
-      checkpointsPerSessionPerHour: 1, // Once per hour (aggressive buffering)
+      entities: 100,
+      attributesPerEntity: 50,
+      updatesPerEntityPerHour: 600, // 10 updates per minute (high activity)
+      checkpointsPerEntityPerHour: 1, // Once per hour (aggressive buffering)
       hoursPerMonth: 720,
     })
 
@@ -502,10 +502,10 @@ describe('analyzeWorkloadCost', () => {
 describe('printCostReport', () => {
   it('should generate readable report', () => {
     const comparison = analyzeWorkloadCost({
-      sessions: 100,
-      attributesPerSession: 50,
-      updatesPerSessionPerHour: 60,
-      checkpointsPerSessionPerHour: 6,
+      entities: 100,
+      attributesPerEntity: 50,
+      updatesPerEntityPerHour: 60,
+      checkpointsPerEntityPerHour: 6,
       hoursPerMonth: 720,
     })
 
@@ -669,7 +669,7 @@ describe('ColumnarStore<T> Generic', () => {
       await store.create(user)
       const stats = await store.checkpoint()
 
-      expect(stats.sessionCount).toBe(1)
+      expect(stats.entityCount).toBe(1)
       expect(stats.trigger).toBe('manual')
     })
   })
@@ -726,7 +726,7 @@ describe('Integration Scenarios', () => {
     const stats = await store.checkpoint()
 
     // Verify: 10 sessions, each checkpointed as 1 row
-    expect(stats.sessionCount).toBe(10)
+    expect(stats.entityCount).toBe(10)
 
     // Get cost comparison
     const comparison = store.getCostComparison()
