@@ -1,0 +1,402 @@
+/**
+ * SandboxExecutor Module
+ *
+ * Tier 4 execution: Full Linux sandbox via Sandbox SDK.
+ *
+ * This module handles commands that require a full Linux environment
+ * with process isolation:
+ * - System commands (ps, top, htop, kill, pkill)
+ * - Process management
+ * - Container operations
+ * - Any command not handled by higher tiers
+ *
+ * @module bashx/do/executors/sandbox-executor
+ */
+
+import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle } from '../../types.js'
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+/**
+ * Sandbox backend interface for executing commands
+ */
+export interface SandboxBackend {
+  /** Execute a command in the sandbox */
+  execute: (command: string, options?: ExecOptions) => Promise<BashResult>
+  /** Spawn a command for streaming execution (optional) */
+  spawn?: (command: string, args?: string[], options?: SpawnOptions) => Promise<SpawnHandle>
+}
+
+/**
+ * Alias for SandboxBackend for test compatibility
+ */
+export type SandboxBinding = SandboxBackend
+
+/**
+ * Sandbox session for persistent execution
+ */
+export interface SandboxSession {
+  /** Session ID */
+  id: string
+  /** Execute a command in this session */
+  execute: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>
+  /** Spawn a command in this session */
+  spawn?: (command: string, args?: string[], options?: SpawnOptions) => Promise<SpawnHandle>
+  /** Get the current working directory */
+  getWorkingDirectory: () => string
+  /** Set the working directory */
+  setWorkingDirectory: (path: string) => Promise<void>
+  /** Get environment variables */
+  getEnvironment: () => Record<string, string>
+  /** Set environment variables */
+  setEnvironment: (env: Record<string, string>) => Promise<void>
+  /** Close the session */
+  close: () => Promise<void>
+  /** Check if session is active */
+  isActive: () => boolean
+}
+
+/**
+ * Configuration for SandboxExecutor
+ */
+export interface SandboxExecutorConfig {
+  /** Sandbox backend */
+  sandbox?: SandboxBackend
+  /** Default timeout for sandbox operations in milliseconds */
+  defaultTimeout?: number
+}
+
+/**
+ * Sandbox capability types
+ */
+export type SandboxCapability = 'execute' | 'spawn' | 'session' | 'filesystem' | 'network'
+
+/**
+ * Extended result from sandbox execution
+ */
+export interface SandboxResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+  duration?: number
+  memoryUsage?: number
+  cpuTime?: number
+}
+
+// ============================================================================
+// SANDBOX COMMAND SETS
+// ============================================================================
+
+/**
+ * Commands that require full sandbox execution
+ */
+export const SANDBOX_COMMANDS = new Set([
+  // System commands
+  'ps', 'top', 'htop', 'kill', 'pkill', 'pgrep', 'killall',
+  // Process management
+  'nohup', 'nice', 'renice', 'bg', 'fg', 'jobs',
+  // System info
+  'free', 'vmstat', 'iostat', 'mpstat', 'uptime', 'dmesg',
+  // System utilities
+  'sudo', 'su', 'chgrp',
+  // File system (advanced)
+  'mount', 'umount', 'df', 'du', 'fdisk', 'mkfs',
+  // Networking
+  'ip', 'ifconfig', 'netstat', 'ss', 'ping', 'traceroute',
+  'nc', 'ncat', 'nmap', 'tcpdump', 'iptables', 'ssh', 'scp',
+  // Container/VM
+  'docker', 'docker-compose', 'podman', 'kubectl', 'helm',
+  // Package management
+  'apt', 'apt-get', 'yum', 'dnf', 'pacman', 'apk', 'brew',
+  // Build tools / Compilers
+  'make', 'cmake', 'gcc', 'g++', 'clang', 'rustc', 'cargo', 'go',
+  // Scripting / Runtimes
+  'python', 'python3', 'ruby', 'perl', 'lua',
+  'node', 'deno', 'bun',
+  // Archives
+  'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'bzip2', 'xz',
+  // Text editors (interactive)
+  'vim', 'vi', 'nano', 'emacs',
+  // Shell
+  'bash', 'sh', 'zsh', 'fish',
+])
+
+/**
+ * Categories of sandbox commands
+ */
+export const SANDBOX_CATEGORIES = {
+  process: ['ps', 'kill', 'killall', 'top', 'htop', 'pkill', 'pgrep', 'nohup', 'nice', 'renice', 'bg', 'fg', 'jobs'],
+  network: ['ping', 'ssh', 'scp', 'nc', 'ncat', 'netstat', 'ss', 'ip', 'ifconfig', 'traceroute', 'nmap', 'tcpdump', 'iptables'],
+  container: ['docker', 'docker-compose', 'podman', 'kubectl', 'helm'],
+  compiler: ['gcc', 'g++', 'clang', 'rustc', 'cargo', 'make', 'cmake'],
+  runtime: ['python', 'python3', 'ruby', 'perl', 'go', 'lua', 'node', 'deno', 'bun'],
+  package: ['apt', 'apt-get', 'yum', 'dnf', 'pacman', 'apk', 'brew'],
+  shell: ['bash', 'sh', 'zsh', 'fish'],
+  system: ['sudo', 'su', 'chgrp', 'mount', 'umount', 'df', 'du'],
+} as const
+
+// ============================================================================
+// SANDBOX EXECUTOR CLASS
+// ============================================================================
+
+/**
+ * SandboxExecutor - Execute commands in a full Linux sandbox
+ *
+ * Provides Tier 4 execution for commands that require full system access
+ * and process isolation.
+ */
+export class SandboxExecutor {
+  private readonly sandbox?: SandboxBackend
+  readonly defaultTimeout: number
+  private readonly sessions: Map<string, SandboxSession> = new Map()
+
+  constructor(config: SandboxExecutorConfig = {}) {
+    this.sandbox = config.sandbox
+    this.defaultTimeout = config.defaultTimeout ?? 30000
+  }
+
+  /**
+   * Check if sandbox is configured
+   */
+  get hasSandbox(): boolean {
+    return this.sandbox !== undefined
+  }
+
+  /**
+   * Check if sandbox is configured (alias)
+   */
+  get isSandboxConfigured(): boolean {
+    return this.sandbox !== undefined
+  }
+
+  /**
+   * Check if spawn is available
+   */
+  get canSpawn(): boolean {
+    return this.sandbox?.spawn !== undefined
+  }
+
+  /**
+   * Check if sessions can be created
+   */
+  get canCreateSession(): boolean {
+    return this.sandbox !== undefined
+  }
+
+  /**
+   * Check if this executor can handle a command
+   *
+   * SandboxExecutor is a fallback - it can handle any command
+   */
+  canExecute(_command: string): boolean {
+    // Sandbox can execute anything if it's configured
+    return this.sandbox !== undefined
+  }
+
+  /**
+   * Check if a command specifically requires sandbox execution
+   */
+  requiresSandbox(command: string): boolean {
+    const cmd = this.extractCommandName(command)
+    return SANDBOX_COMMANDS.has(cmd)
+  }
+
+  /**
+   * Check if a command is sandbox-specific (different commands not in tier 1/2/3)
+   */
+  isSandboxSpecific(command: string): boolean {
+    const cmd = this.extractCommandName(command)
+    return SANDBOX_COMMANDS.has(cmd)
+  }
+
+  /**
+   * Get the command category
+   */
+  getCommandCategory(command: string): string {
+    const cmd = this.extractCommandName(command)
+
+    for (const [category, commands] of Object.entries(SANDBOX_CATEGORIES)) {
+      if ((commands as readonly string[]).includes(cmd)) {
+        return category
+      }
+    }
+
+    return 'general'
+  }
+
+  /**
+   * Get capabilities of this executor
+   */
+  getCapabilities(): SandboxCapability[] {
+    const capabilities: SandboxCapability[] = []
+
+    if (this.sandbox) {
+      capabilities.push('execute')
+      if (this.sandbox.spawn) {
+        capabilities.push('spawn')
+      }
+      capabilities.push('session')
+      capabilities.push('filesystem')
+      capabilities.push('network')
+    }
+
+    return capabilities
+  }
+
+  /**
+   * Execute a command in the sandbox
+   */
+  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+    if (!this.sandbox) {
+      return this.createErrorResult(command, 'No sandbox available')
+    }
+
+    try {
+      const result = await this.sandbox.execute(command, {
+        ...options,
+        timeout: options?.timeout ?? this.defaultTimeout,
+      })
+
+      // Add tier information to the result
+      const category = this.getCommandCategory(command)
+      return {
+        ...result,
+        classification: {
+          ...result.classification,
+          reason: `${result.classification.reason} (Tier 4: Sandbox)`,
+          category,
+        } as BashResult['classification'],
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Tier 4 sandbox execution failed: ${message}`)
+    }
+  }
+
+  /**
+   * Spawn a command for streaming execution
+   */
+  async spawn(command: string, args?: string[], options?: SpawnOptions): Promise<SpawnHandle> {
+    if (!this.sandbox?.spawn) {
+      throw new Error('No sandbox available for spawn')
+    }
+
+    return this.sandbox.spawn(command, args, options ?? {})
+  }
+
+  /**
+   * Create a new session
+   */
+  async createSession(): Promise<SandboxSession> {
+    if (!this.sandbox) {
+      throw new Error('No sandbox available for session')
+    }
+
+    const id = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    let workingDirectory = '/home/user'
+    let environment: Record<string, string> = {}
+    let active = true
+
+    const session: SandboxSession = {
+      id,
+      execute: async (cmd: string) => {
+        if (!active) {
+          throw new Error('Session is closed')
+        }
+        const result = await this.sandbox!.execute(cmd, {
+          cwd: workingDirectory,
+          env: environment,
+        })
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        }
+      },
+      getWorkingDirectory: () => workingDirectory,
+      setWorkingDirectory: async (path: string) => {
+        workingDirectory = path
+      },
+      getEnvironment: () => ({ ...environment }),
+      setEnvironment: async (env: Record<string, string>) => {
+        environment = { ...environment, ...env }
+      },
+      close: async () => {
+        active = false
+        this.sessions.delete(id)
+      },
+      isActive: () => active,
+    }
+
+    this.sessions.set(id, session)
+    return session
+  }
+
+  /**
+   * Get active sessions
+   */
+  getActiveSessions(): SandboxSession[] {
+    return Array.from(this.sessions.values()).filter(s => s.isActive())
+  }
+
+  /**
+   * Close all sessions
+   */
+  async closeAllSessions(): Promise<void> {
+    for (const session of this.sessions.values()) {
+      await session.close()
+    }
+    this.sessions.clear()
+  }
+
+  // ============================================================================
+  // HELPER METHODS
+  // ============================================================================
+
+  private createErrorResult(command: string, error: string): BashResult {
+    return {
+      input: command,
+      command,
+      valid: true,
+      generated: false,
+      stdout: '',
+      stderr: error,
+      exitCode: 1,
+      intent: {
+        commands: [this.extractCommandName(command)],
+        reads: [],
+        writes: [],
+        deletes: [],
+        network: false,
+        elevated: false,
+      },
+      classification: {
+        type: 'execute',
+        impact: 'none',
+        reversible: true,
+        reason: 'Tier 4: Sandbox not available',
+      },
+    }
+  }
+
+  private extractCommandName(command: string): string {
+    const trimmed = command.trim()
+    const withoutEnvVars = trimmed.replace(/^(\w+=\S+\s+)+/, '')
+    const match = withoutEnvVars.match(/^[\w\-./]+/)
+    if (!match) return ''
+    return match[0].split('/').pop() || ''
+  }
+}
+
+// ============================================================================
+// FACTORY FUNCTION
+// ============================================================================
+
+/**
+ * Create a SandboxExecutor with the given configuration
+ */
+export function createSandboxExecutor(config: SandboxExecutorConfig = {}): SandboxExecutor {
+  return new SandboxExecutor(config)
+}
