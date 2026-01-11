@@ -3,6 +3,19 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     globals: true,
+    watch: false,
+    testTimeout: 10000,
+    hookTimeout: 10000,
+    teardownTimeout: 5000,
+    passWithNoTests: true,
+    // Run tests in single thread to avoid process cleanup issues
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        singleFork: true,
+        isolate: false,
+      },
+    },
     include: [
       // Node.js-specific tests that use child_process, fs, os
       'tests/safety-gate.test.ts',

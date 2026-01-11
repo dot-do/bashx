@@ -139,3 +139,43 @@ export {
 } from './safety/index.js'
 
 export type { ExtendedIntent } from './safety/index.js'
+
+// ============================================================================
+// PTY Emulation (Virtual Terminal)
+// ============================================================================
+
+export {
+  VirtualPTY,
+  ANSIParser,
+  TerminalBuffer,
+  createDefaultAttributes,
+  createEmptyCell,
+  createDefaultCursor,
+} from './pty/index.js'
+
+export type {
+  // Core configuration
+  VirtualPTYOptions,
+  PTYInfo,
+  // Screen buffer types
+  ScreenBuffer,
+  Cell,
+  CellAttributes,
+  CursorState,
+  Color,
+  ColorCode,
+  RGBColor,
+  // Parser types
+  ParserState,
+  ParsedSequence,
+  // Event types
+  PTYEvent,
+  ScreenChangeEvent,
+  BellEvent,
+  TitleChangeEvent,
+  // Callback types
+  DataCallback,
+  ScreenChangeCallback,
+  SequenceCallback,
+  EventCallback,
+} from './pty/index.js'

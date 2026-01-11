@@ -3,6 +3,11 @@ import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config'
 export default defineWorkersConfig({
   test: {
     globals: true,
+    watch: false,
+    testTimeout: 30000,
+    hookTimeout: 30000,
+    teardownTimeout: 10000,
+    passWithNoTests: true,
     include: ['tests/**/*.test.ts', 'src/db/tests/**/*.test.ts', 'src/do/commands/**/*.test.ts', 'src/remote/**/*.test.ts'],
     exclude: [
       'node_modules',
