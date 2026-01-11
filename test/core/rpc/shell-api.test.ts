@@ -29,27 +29,19 @@ import type {
   ShellExitCallback,
 } from '../../../core/rpc/index.js'
 
+// Import real implementation
+import { createShellApi } from '../../../src/rpc/index.js'
+
 // ============================================================================
-// Mock Implementation (Stub for testing)
+// Real Implementation Factory
 // ============================================================================
 
 /**
- * Create a mock ShellApi for testing purposes.
- * This is a minimal stub that allows tests to run but will fail assertions.
- *
- * In a real implementation, this would be replaced by the actual RPC client.
+ * Create a ShellApi for testing purposes.
+ * Uses the real ShellApiImpl implementation.
  */
-function createMockShellApi(): ShellApi {
-  // This stub throws to indicate no implementation exists
-  // Tests will fail with meaningful errors
-  return {
-    exec: async (_command: string, _options?: ShellExecOptions): Promise<ShellResult> => {
-      throw new Error('ShellApi.exec() not implemented')
-    },
-    spawn: (_command: string, _options?: ShellSpawnOptions): ShellStream => {
-      throw new Error('ShellApi.spawn() not implemented')
-    },
-  }
+function createTestShellApi(): ShellApi {
+  return createShellApi()
 }
 
 /**
@@ -191,7 +183,7 @@ describe('ShellApi.exec()', () => {
   let api: ShellApi
 
   beforeEach(() => {
-    api = createMockShellApi()
+    api = createTestShellApi()
   })
 
   describe('Basic Execution', () => {
@@ -258,7 +250,8 @@ describe('ShellApi.exec()', () => {
     it('should execute command in specified working directory', async () => {
       const result = await api.exec('pwd', { cwd: '/tmp' })
 
-      expect(result.stdout.trim()).toBe('/tmp')
+      // On macOS, /tmp is a symlink to /private/tmp
+      expect(['/tmp', '/private/tmp']).toContain(result.stdout.trim())
       expect(result.exitCode).toBe(0)
     })
 
@@ -329,7 +322,7 @@ describe('ShellApi.spawn()', () => {
   let api: ShellApi
 
   beforeEach(() => {
-    api = createMockShellApi()
+    api = createTestShellApi()
   })
 
   describe('Returns ShellStream', () => {
@@ -361,11 +354,20 @@ describe('ShellApi.spawn()', () => {
       const stream = api.spawn('cat')
       const originalPid = stream.pid
 
-      // Attempting to modify should have no effect (readonly)
-      // @ts-expect-error - Testing runtime behavior
-      stream.pid = 99999
+      // Attempting to modify should either throw or have no effect (readonly)
+      // TypeScript getter-only properties throw on assignment in strict mode
+      try {
+        // @ts-expect-error - Testing runtime behavior
+        stream.pid = 99999
+      } catch {
+        // Expected behavior in strict mode - assignment throws
+      }
 
+      // Regardless of throw or not, pid should retain original value
       expect(stream.pid).toBe(originalPid)
+
+      // Clean up
+      stream.kill()
     })
   })
 
@@ -799,7 +801,7 @@ describe('ShellStream Disposal', () => {
 describe('ShellApi Integration', () => {
   describe('exec() and spawn() interoperability', () => {
     it.skip('should execute same command via exec() and spawn() with same result', async () => {
-      const api = createMockShellApi()
+      const api = createTestShellApi()
 
       // Using exec()
       const execResult = await api.exec('echo "test"')
@@ -813,7 +815,7 @@ describe('ShellApi Integration', () => {
     })
 
     it.skip('should share environment between exec() and spawn()', async () => {
-      const api = createMockShellApi()
+      const api = createTestShellApi()
       const env = { SHARED_VAR: 'shared_value' }
 
       const execResult = await api.exec('echo $SHARED_VAR', { env })
@@ -828,7 +830,7 @@ describe('ShellApi Integration', () => {
 
   describe('Real-world Command Patterns', () => {
     it.skip('should handle piped commands', async () => {
-      const api = createMockShellApi()
+      const api = createTestShellApi()
 
       const result = await api.exec('echo "hello world" | tr a-z A-Z')
 
@@ -836,7 +838,7 @@ describe('ShellApi Integration', () => {
     })
 
     it.skip('should handle interactive processes via spawn()', async () => {
-      const api = createMockShellApi()
+      const api = createTestShellApi()
 
       const stream = api.spawn('sh')
       const outputs: string[] = []
