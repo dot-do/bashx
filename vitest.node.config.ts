@@ -40,6 +40,8 @@ export default defineConfig({
       'cli/**/*.test.ts',
       // Web terminal client tests (uses mock xterm.js and WebSocket)
       'web/**/*.test.ts',
+      // Type import tests (RED phase TDD tests)
+      'tests/types/**/*.test.ts',
       // DO utility tests that don't need Workers runtime
       'tests/do/terminal-renderer.test.ts',
       // MCP stateful shell tests (uses Node.js process.cwd, child_process)
