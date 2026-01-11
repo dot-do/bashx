@@ -9,35 +9,22 @@
  */
 
 import type { ParserState, ParsedSequence, SequenceCallback } from './types.js'
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-/** Escape character */
-const ESC = 0x1b
-/** Control Sequence Introducer (8-bit) */
-const CSI_8BIT = 0x9b
-/** String Terminator (8-bit) */
-const ST_8BIT = 0x9c
-/** Device Control String (8-bit) */
-const DCS_8BIT = 0x90
-/** Operating System Command (8-bit) */
-const OSC_8BIT = 0x9d
-/** Start of String (8-bit) */
-const SOS_8BIT = 0x98
-/** Privacy Message (8-bit) */
-const PM_8BIT = 0x9e
-/** Application Program Command (8-bit) */
-const APC_8BIT = 0x9f
-/** Bell */
-const BEL = 0x07
-/** Cancel */
-const CAN = 0x18
-/** Substitute */
-const SUB = 0x1a
-/** Delete */
-const DEL = 0x7f
+import {
+  ESC,
+  BEL,
+  CAN,
+  SUB,
+  DEL,
+  CSI_8BIT,
+  ST_8BIT,
+  DCS_8BIT,
+  OSC_8BIT,
+  SOS_8BIT,
+  PM_8BIT,
+  APC_8BIT,
+  ByteRanges,
+  SpecialChars,
+} from './constants.js'
 
 // ============================================================================
 // Parser Class

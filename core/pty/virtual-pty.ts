@@ -22,19 +22,20 @@ import type {
   ScreenBuffer,
   Color,
 } from './types.js'
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-// Control characters
-const BEL = 0x07
-const BS = 0x08
-const HT = 0x09
-const LF = 0x0a
-const VT = 0x0b
-const FF = 0x0c
-const CR = 0x0d
+import {
+  BEL,
+  BS,
+  HT,
+  LF,
+  VT,
+  FF,
+  CR,
+  SGR,
+  DECModes,
+  CSICommands,
+  ESCCommands,
+  OSCCommands,
+} from './constants.js'
 
 // ============================================================================
 // VirtualPTY Class

@@ -8,6 +8,104 @@
  */
 
 // ============================================================================
+// Branded Types for Type Safety
+// ============================================================================
+
+/**
+ * Branded type helper - creates nominal types that are structurally
+ * incompatible with plain values despite having the same underlying type.
+ *
+ * @example
+ * ```typescript
+ * type Row = Brand<number, 'Row'>
+ * type Col = Brand<number, 'Col'>
+ *
+ * const row: Row = 5 as Row
+ * const col: Col = 10 as Col
+ *
+ * // Type error: can't assign Row to Col
+ * const wrong: Col = row
+ * ```
+ */
+declare const __brand: unique symbol
+export type Brand<T, B> = T & { [__brand]: B }
+
+/**
+ * Row index in the terminal buffer (0-based)
+ */
+export type Row = Brand<number, 'Row'>
+
+/**
+ * Column index in the terminal buffer (0-based)
+ */
+export type Col = Brand<number, 'Col'>
+
+/**
+ * SGR (Select Graphic Rendition) code
+ */
+export type SGRCode = Brand<number, 'SGRCode'>
+
+/**
+ * DEC private mode number
+ */
+export type DECMode = Brand<number, 'DECMode'>
+
+/**
+ * OSC (Operating System Command) code
+ */
+export type OSCCode = Brand<number, 'OSCCode'>
+
+/**
+ * Byte value (0-255)
+ */
+export type Byte = Brand<number, 'Byte'>
+
+/**
+ * Create a Row value
+ */
+export function row(n: number): Row {
+  return n as Row
+}
+
+/**
+ * Create a Col value
+ */
+export function col(n: number): Col {
+  return n as Col
+}
+
+/**
+ * Create an SGRCode value
+ */
+export function sgrCode(n: number): SGRCode {
+  return n as SGRCode
+}
+
+/**
+ * Create a DECMode value
+ */
+export function decMode(n: number): DECMode {
+  return n as DECMode
+}
+
+/**
+ * Create an OSCCode value
+ */
+export function oscCode(n: number): OSCCode {
+  return n as OSCCode
+}
+
+/**
+ * Create a Byte value
+ */
+export function byte(n: number): Byte {
+  if (n < 0 || n > 255) {
+    throw new RangeError(`Byte value must be 0-255, got ${n}`)
+  }
+  return n as Byte
+}
+
+// ============================================================================
 // Screen Buffer Types
 // ============================================================================
 

@@ -38,10 +38,83 @@ export { ANSIParser } from './parser.js'
 export { TerminalBuffer, createDefaultAttributes, createEmptyCell, createDefaultCursor } from './buffer.js'
 
 // ============================================================================
+// Constants Exports
+// ============================================================================
+
+export {
+  // Control characters
+  NUL, SOH, STX, ETX, EOT, ENQ, ACK, BEL, BS, HT, LF, VT, FF, CR,
+  SO, SI, DLE, DC1, DC2, DC3, DC4, NAK, SYN, ETB, CAN, EM, SUB, ESC,
+  FS, GS, RS, US, DEL,
+  // 8-bit C1 controls
+  DCS_8BIT, ST_8BIT, OSC_8BIT, PM_8BIT, APC_8BIT, SOS_8BIT, CSI_8BIT,
+  // 7-bit sequence introducers
+  CSI, OSC, DCS, ST, SOS, PM, APC,
+  // Command constants
+  CSICommands, ESCCommands, OSCCommands, DECModes, SGR,
+  // Byte ranges
+  ByteRanges, SpecialChars,
+} from './constants.js'
+
+// ============================================================================
+// Handler Registry Exports
+// ============================================================================
+
+export {
+  SequenceHandlerRegistry,
+  createDefaultRegistry,
+} from './handlers.js'
+
+export type {
+  HandlerContext,
+  CSIHandler,
+  ESCHandler,
+  PrivateCSIHandler,
+  OSCHandler,
+  SGRHandler,
+} from './handlers.js'
+
+// ============================================================================
+// Test Helper Exports
+// ============================================================================
+
+export {
+  buildCSI,
+  buildSGR,
+  buildOSC,
+  buildESC,
+  cursor,
+  erase,
+  scroll,
+  edit,
+  style,
+  osc,
+  esc,
+  wrap,
+  writeAt,
+  clearScreen,
+  clearAll,
+  prettifySequence,
+  parseSequenceDebug,
+} from './test-helpers.js'
+
+// ============================================================================
 // Type Exports
 // ============================================================================
 
 export type {
+  // Branded types
+  Brand,
+  Row,
+  Col,
+  SGRCode,
+  DECMode,
+  OSCCode,
+  Byte,
+
+  // Branded type constructors
+  // (re-exported as values above, types here for completeness)
+
   // Core configuration
   VirtualPTYOptions,
   PTYInfo,
@@ -71,3 +144,6 @@ export type {
   SequenceCallback,
   EventCallback,
 } from './types.js'
+
+// Re-export branded type constructors as values
+export { row, col, sgrCode, decMode, oscCode, byte } from './types.js'
