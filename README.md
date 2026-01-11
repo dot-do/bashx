@@ -24,7 +24,7 @@ await bash`cat package.json`
 
 // Dangerous commands are blocked
 await bash`rm -rf /`
-// → { blocked: true, reason: 'Recursive delete targeting root filesystem' }
+// => { blocked: true, reason: 'Recursive delete targeting root filesystem' }
 
 // Unless explicitly confirmed
 await bash`rm -rf node_modules`({ confirm: true })
@@ -34,6 +34,12 @@ await bash`rm -rf node_modules`({ confirm: true })
 
 ```bash
 npm install bashx.do
+```
+
+For the pure library without Cloudflare dependencies:
+
+```bash
+npm install @dotdo/bashx
 ```
 
 ## Quick Start
@@ -47,11 +53,54 @@ const content = await bash`cat README.md`
 
 // With interpolation (automatically escaped)
 const filename = 'my file.txt'
-await bash`cat ${filename}`  // → cat 'my file.txt'
+await bash`cat ${filename}`  // => cat 'my file.txt'
 
 // Natural language (auto-detected)
 await bash`find all typescript files over 100 lines`
 await bash`show disk usage for current directory`
+```
+
+## Architecture
+
+```
+Input (command OR natural language intent)
+         |
+         v
++-----------------------------------+
+|         AST Parser                |
+|    tree-sitter-bash (WASM)        |
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+|         Safety Analysis           |
+|    Structural analysis, not regex |
+|    -> type: 'delete'              |
+|    -> impact: 'high'              |
+|    -> reversible: false           |
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+|         Safety Gate               |
+|    Block or require confirmation  |
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+|         Tier Selection            |
+|    Pick optimal execution tier    |
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+|         Execute                   |
+|    Run in selected tier           |
+|    Track for undo                 |
++-----------------------------------+
+         |
+         v
+Output: BashResult with full metadata
 ```
 
 ## Features
@@ -82,39 +131,12 @@ await bash`chmod -R 777 /`  // blocked, requires confirm: true
 
 Commands run in the optimal tier for performance:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│              Tier 1: Native In-Worker (<1ms)                │
-├─────────────────────────────────────────────────────────────┤
-│  cat, ls, head, tail → fsx.do filesystem                    │
-│  curl, wget → fetch API                                     │
-│  echo, printf → native                                      │
-│  JSON operations → native                                   │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│              Tier 2: RPC Services (<5ms)                    │
-├─────────────────────────────────────────────────────────────┤
-│  jq → jq.do                                                 │
-│  git → gitx.do                                              │
-│  npm → npm.do                                               │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│              Tier 3: Dynamic Modules (<10ms)                │
-├─────────────────────────────────────────────────────────────┤
-│  npm packages loaded from esm.sh                            │
-│  Sandboxed V8 isolate execution                             │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│              Tier 4: Full Sandbox (2-3s cold)               │
-├─────────────────────────────────────────────────────────────┤
-│  Bash scripts with Linux-specific features                  │
-│  Python with native extensions                              │
-│  Binary executables (ffmpeg, imagemagick)                   │
-└─────────────────────────────────────────────────────────────┘
-```
+| Tier | Latency | Commands | Implementation |
+|------|---------|----------|----------------|
+| 1 | <1ms | cat, ls, head, tail, curl, wget, echo, printf | Native Workers APIs |
+| 2 | <5ms | jq, git, npm | RPC to specialized services |
+| 3 | <10ms | Node.js packages | Dynamic modules from esm.sh |
+| 4 | 2-3s cold | Python, bash scripts, binaries | Full sandboxed Linux |
 
 ### Command Options
 
@@ -158,8 +180,8 @@ bashx can detect and fix malformed commands:
 
 ```typescript
 await bash`echo "hello`
-// → Detects unclosed quote
-// → fixed: { command: 'echo "hello"', changes: [...] }
+// => Detects unclosed quote
+// => fixed: { command: 'echo "hello"', changes: [...] }
 ```
 
 ### Undo Support
@@ -236,21 +258,6 @@ service = "bashx-worker"
 const result = await env.BASHX.exec('complex-script.sh')
 ```
 
-## Native Command Mappings
-
-Most Unix commands map to native Workers APIs:
-
-| Command | Native Implementation | Tier |
-|---------|----------------------|------|
-| `cat`, `head`, `tail` | fsx.do filesystem | 1 |
-| `ls`, `find` | fsx.do filesystem | 1 |
-| `curl`, `wget` | fetch API | 1 |
-| `echo`, `printf` | native | 1 |
-| `jq` | jq.do RPC | 2 |
-| `git` | gitx.do RPC | 2 |
-| `node` | V8 isolate | 3 |
-| `python`, `bash` | Sandbox | 4 |
-
 ## API Reference
 
 ### Tagged Template
@@ -297,61 +304,6 @@ interface BashResult {
 }
 ```
 
-## How It Works
-
-```
-Input: "rm -rf node_modules"
-         ↓
-┌─────────────────────────────────────┐
-│         AST Parser                  │
-│    tree-sitter-bash (WASM)          │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         Safety Analysis             │
-│    Structural analysis, not regex   │
-│    → type: 'delete'                 │
-│    → impact: 'high'                 │
-│    → reversible: false              │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         Safety Gate                 │
-│    Block or require confirmation    │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         Tier Selection              │
-│    Pick optimal execution tier      │
-└─────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────┐
-│         Execute                     │
-│    Run in selected tier             │
-│    Track for undo                   │
-└─────────────────────────────────────┘
-         ↓
-Output: BashResult with full metadata
-```
-
-## Comparison
-
-| Feature | Raw shell | bashx.do |
-|---------|-----------|----------|
-| Safety analysis | None | AST-based |
-| Dangerous command blocking | No | Yes |
-| Undo support | No | Yes |
-| Tiered execution | No | Yes |
-| Edge-native | No | Yes |
-| AI-friendly | No | Yes |
-
-## Performance
-
-- **1,415 tests** covering all operations
-- **<1ms** for Tier 1 (native) commands
-- **<5ms** for Tier 2 (RPC) commands
-- **AST parsing** with tree-sitter WASM
-
 ## Core Library
 
 For platform-agnostic usage without Cloudflare dependencies, use `@dotdo/bashx`:
@@ -378,11 +330,48 @@ const { classification, intent } = analyze(ast)
 // classification: { type: 'delete', impact: 'high', reversible: false, ... }
 ```
 
-The core library provides:
-- **AST types and utilities** - Type guards, factory functions, serialization
-- **Safety analysis** - Command classification, intent extraction, danger checks
-- **Shell escaping** - Safe interpolation utilities
-- **Input classification** - Distinguish commands from natural language
+See [core/README.md](./core/README.md) for full documentation of the core library.
+
+## Project Structure
+
+```
+bashx/
+  src/                    # Platform-dependent code (Cloudflare Workers)
+    ast/                  # AST parsing with tree-sitter WASM
+    mcp/                  # MCP tool definition
+    do/                   # Durable Object integration
+  core/                   # Pure library (@dotdo/bashx)
+    ast/                  # AST type guards, factory functions
+    safety/               # Safety analysis, classification
+    escape/               # Shell escaping utilities
+    classify/             # Input classification
+    backend.ts            # Abstract backend interface
+```
+
+## Safety Principles
+
+1. **Never execute without classification** - Every command gets classified
+2. **Dry-run by default** for dangerous operations
+3. **Structural analysis** - AST-based, not regex pattern matching
+4. **Safer alternatives** - Always suggest when blocking
+
+## Comparison
+
+| Feature | Raw shell | bashx.do |
+|---------|-----------|----------|
+| Safety analysis | None | AST-based |
+| Dangerous command blocking | No | Yes |
+| Undo support | No | Yes |
+| Tiered execution | No | Yes |
+| Edge-native | No | Yes |
+| AI-friendly | No | Yes |
+
+## Performance
+
+- **1,400+ tests** covering all operations
+- **<1ms** for Tier 1 (native) commands
+- **<5ms** for Tier 2 (RPC) commands
+- **AST parsing** with tree-sitter WASM
 
 ## License
 
@@ -392,5 +381,6 @@ MIT
 
 - [GitHub](https://github.com/dot-do/bashx)
 - [Documentation](https://bashx.do)
+- [Core Library](./core/README.md)
 - [.do](https://do.org.ai)
 - [Platform.do](https://platform.do)

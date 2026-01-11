@@ -57,8 +57,29 @@ export type {
 // ============================================================================
 // Backend Interface
 // ============================================================================
-// Note: ShellResult is exported from RPC instead (see RPC Types below)
 
+/**
+ * Abstract interface for shell execution backends.
+ *
+ * Platform-specific implementations (Node.js, Durable Objects, etc.)
+ * should implement the {@link ShellBackend} interface.
+ *
+ * Note: {@link ShellResult} is exported from RPC types below.
+ *
+ * @example
+ * ```typescript
+ * import type { ShellBackend, ShellOptions, BackendInfo } from '@dotdo/bashx'
+ *
+ * class MyBackend implements ShellBackend {
+ *   async execute(command: string, options?: ShellOptions) {
+ *     // Platform-specific execution
+ *     return { exitCode: 0, stdout: '...', stderr: '', success: true }
+ *   }
+ *   async isReady() { return true }
+ *   async getInfo(): Promise<BackendInfo> { ... }
+ * }
+ * ```
+ */
 export type {
   ShellBackend,
   ShellOptions,
@@ -69,6 +90,27 @@ export type {
 // Escape Utilities
 // ============================================================================
 
+/**
+ * Shell escaping utilities for safe command interpolation.
+ *
+ * - {@link shellEscape} - Escape multiple arguments and join with spaces
+ * - {@link shellEscapeArg} - Escape a single argument for safe shell use
+ * - {@link createShellTemplate} - Create a tagged template with escaping options
+ * - {@link rawTemplate} - Tagged template WITHOUT escaping (use with caution)
+ * - {@link safeTemplate} - Tagged template WITH escaping (recommended)
+ *
+ * @example
+ * ```typescript
+ * import { shellEscape, safeTemplate } from '@dotdo/bashx'
+ *
+ * // Escape arguments
+ * shellEscape('cat', 'my file.txt')  // => "cat 'my file.txt'"
+ *
+ * // Safe template literals
+ * const file = 'untrusted; rm -rf /'
+ * safeTemplate`cat ${file}`  // => "cat 'untrusted; rm -rf /'"
+ * ```
+ */
 export {
   shellEscape,
   shellEscapeArg,
@@ -81,6 +123,25 @@ export {
 // Classification
 // ============================================================================
 
+/**
+ * Input classification to distinguish commands from natural language.
+ *
+ * {@link classifyInput} analyzes user input and determines whether it's:
+ * - A valid bash command
+ * - Natural language intent
+ * - Invalid/empty input
+ *
+ * @example
+ * ```typescript
+ * import { classifyInput } from '@dotdo/bashx'
+ *
+ * const cmd = await classifyInput('ls -la')
+ * // { type: 'command', confidence: 0.95, ... }
+ *
+ * const intent = await classifyInput('show me all files')
+ * // { type: 'intent', confidence: 0.9, suggestedCommand: 'ls -la', ... }
+ * ```
+ */
 export {
   classifyInput,
 } from './classify/index.js'
@@ -94,6 +155,44 @@ export type {
 // AST Utilities
 // ============================================================================
 
+/**
+ * AST utilities for working with bash command structures.
+ *
+ * **Type Guards:**
+ * - {@link isProgram}, {@link isCommand}, {@link isPipeline}, {@link isList}
+ * - {@link isWord}, {@link isRedirect}, {@link isAssignment}
+ * - {@link isSubshell}, {@link isCompoundCommand}, {@link isFunctionDef}
+ * - {@link isExpansion}, {@link isBashNode}, {@link getNodeType}
+ *
+ * **Factory Functions:**
+ * - {@link createProgram} - Create a Program (root) AST node
+ * - {@link createCommand} - Create a Command node
+ * - {@link createPipeline} - Create a Pipeline node
+ * - {@link createList} - Create a List (&&, ||, ;, &) node
+ * - {@link createWord}, {@link createRedirect}, {@link createAssignment}
+ *
+ * **Serialization:**
+ * - {@link serializeAST} - Convert AST to JSON string
+ * - {@link deserializeAST} - Parse JSON string to AST
+ *
+ * @example
+ * ```typescript
+ * import { createProgram, createCommand, isCommand } from '@dotdo/bashx'
+ *
+ * // Create AST programmatically
+ * const ast = createProgram([
+ *   createCommand('git', ['status']),
+ *   createCommand('git', ['diff']),
+ * ])
+ *
+ * // Type-safe traversal
+ * for (const node of ast.body) {
+ *   if (isCommand(node)) {
+ *     console.log('Command:', node.name?.value)
+ *   }
+ * }
+ * ```
+ */
 export {
   // Type guards
   isProgram,
@@ -129,6 +228,34 @@ export {
 // Safety Analysis
 // ============================================================================
 
+/**
+ * Safety analysis for bash commands using structural AST analysis.
+ *
+ * **Primary Functions:**
+ * - {@link analyze} - Analyze AST for safety classification and intent
+ * - {@link isDangerous} - Check if a command is dangerous
+ * - {@link classifyCommand} - Classify a single command by name and args
+ *
+ * **Intent Extraction:**
+ * - {@link extractIntent} - Extract semantic intent from Command nodes
+ * - {@link extractIntentFromAST} - Extract extended intent from Program AST
+ * - {@link describeIntent} - Generate human-readable description
+ *
+ * @example
+ * ```typescript
+ * import { analyze, isDangerous, classifyCommand } from '@dotdo/bashx'
+ *
+ * // Classify a single command
+ * classifyCommand('rm', ['-rf', '/'])
+ * // { type: 'delete', impact: 'critical', reversible: false, ... }
+ *
+ * // Analyze full AST
+ * const { classification, intent } = analyze(ast)
+ *
+ * // Quick danger check
+ * const { dangerous, reason } = isDangerous(ast)
+ * ```
+ */
 export {
   analyze,
   isDangerous,
@@ -144,6 +271,27 @@ export type { ExtendedIntent } from './safety/index.js'
 // PTY Emulation (Virtual Terminal)
 // ============================================================================
 
+/**
+ * Virtual terminal (PTY) emulation with ANSI sequence parsing.
+ *
+ * - {@link VirtualPTY} - Full virtual terminal emulator
+ * - {@link ANSIParser} - ANSI escape sequence parser
+ * - {@link TerminalBuffer} - Screen buffer management
+ *
+ * @example
+ * ```typescript
+ * import { VirtualPTY } from '@dotdo/bashx'
+ *
+ * const pty = new VirtualPTY({ rows: 24, cols: 80 })
+ *
+ * // Write data (handles ANSI sequences)
+ * pty.write('Hello, World!\r\n')
+ * pty.write('\x1b[31mRed text\x1b[0m')
+ *
+ * // Get screen content
+ * const screen = pty.getScreen()
+ * ```
+ */
 export {
   VirtualPTY,
   ANSIParser,
@@ -184,6 +332,12 @@ export type {
 // RPC Types (Remote Shell Execution)
 // ============================================================================
 
+/**
+ * Types for remote shell execution via RPC.
+ *
+ * These types define the interface for executing shell commands
+ * across process boundaries or network connections.
+ */
 export type {
   ShellResult,
   ShellExecOptions,
