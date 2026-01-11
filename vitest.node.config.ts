@@ -33,10 +33,13 @@ export default defineConfig({
       'test/core/**/*.test.ts',
       // RPC integration tests (uses Node.js child_process)
       'test/rpc/**/*.test.ts',
+      'tests/rpc/**/*.test.ts',
       // Storage patterns tests (pure unit tests)
       'src/storage/**/*.test.ts',
       // CLI client tests (uses mock WebSocket)
       'cli/**/*.test.ts',
+      // Web terminal client tests (uses mock xterm.js and WebSocket)
+      'web/**/*.test.ts',
       // DO utility tests that don't need Workers runtime
       'tests/do/terminal-renderer.test.ts',
       // MCP stateful shell tests (uses Node.js process.cwd, child_process)
