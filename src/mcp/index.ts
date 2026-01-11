@@ -1,9 +1,8 @@
 /**
- * bashx MCP Tool
+ * bashx MCP Tools
  *
- * ONE tool: bash
- *
- * That's it. One tool that does everything.
+ * Core tool: bash - AI-enhanced command execution
+ * Stateful tools: execute_command, get_session_state, fork_session - persistent sessions
  */
 
 import type { BashMcpTool, BashResult, Intent, SafetyClassification, Fix } from '../types.js'
@@ -296,3 +295,25 @@ export async function handleBash(params: { input: string; confirm?: boolean }): 
 
   return result
 }
+
+// ============================================================================
+// Stateful Shell Exports
+// ============================================================================
+
+export {
+  // Tool handlers
+  executeCommand,
+  getSessionState,
+  forkSession,
+  listSessions,
+  closeSession,
+  // Tool definitions
+  mcpTools as statefulShellTools,
+  // Types
+  type ExecuteCommandInput,
+  type ExecuteCommandOutput,
+  type SessionStateOutput,
+  // Utilities
+  clearAllSessions,
+  getSessionCount,
+} from './stateful-shell.js'
