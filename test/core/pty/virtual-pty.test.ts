@@ -258,9 +258,16 @@ describe('VirtualPTY', () => {
   describe('Scrolling', () => {
     it('should scroll up with CSI S', () => {
       const pty = new VirtualPTY({ cols: 20, rows: 5 })
-      pty.write('Line1\nLine2\nLine3\nLine4\nLine5')
-      pty.write('\x1b[2S') // scroll up 2 lines
+      // Write 5 lines, filling the screen
+      pty.write('Line1\r\n')
+      pty.write('Line2\r\n')
+      pty.write('Line3\r\n')
+      pty.write('Line4\r\n')
+      pty.write('Line5')
+      // Move to top and scroll up 2 lines
+      pty.write('\x1b[1;1H\x1b[2S')
       const lines = pty.getLines()
+      // After scrolling up 2, Line1 and Line2 are gone, Line3 is now at top
       expect(lines[0]).toContain('Line3')
     })
 

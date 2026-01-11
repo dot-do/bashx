@@ -115,6 +115,9 @@ export class VirtualPTY {
   // Public API - Writing
   // ==========================================================================
 
+  /** Track if any printable characters were written during parse */
+  private _pendingScreenChange = false
+
   /**
    * Write data to the PTY (string or bytes)
    */
@@ -130,8 +133,16 @@ export class VirtualPTY {
       cb(data)
     }
 
+    // Reset pending change flag
+    this._pendingScreenChange = false
+
     // Parse through state machine
     this.parser.parse(bytes)
+
+    // Emit screen change if any printable chars were written
+    if (this._pendingScreenChange) {
+      this.emitScreenChange('write')
+    }
   }
 
   /**
@@ -344,6 +355,7 @@ export class VirtualPTY {
    */
   private handlePrint(char: string, _code: number): void {
     this.buffer.writeChar(char)
+    this._pendingScreenChange = true
   }
 
   /**
