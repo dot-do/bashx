@@ -25,6 +25,12 @@ import { DurableObject } from 'cloudflare:workers'
 import { Hono } from 'hono'
 import { BashModule, TieredExecutor, type BashExecutor } from './index.js'
 import type { BashResult, ExecOptions, FsCapability } from '../types.js'
+import {
+  TerminalRenderer,
+  StreamingRenderer,
+  createWebSocketCallback,
+  type RenderTier,
+} from './terminal-renderer.js'
 
 // ============================================================================
 // ENVIRONMENT TYPES
@@ -380,7 +386,209 @@ export class ShellDO extends DurableObject<Env> {
       }
     })
 
+    // Rendered output endpoint - returns terminal-rendered output based on Accept header
+    app.post('/render', async (c) => {
+      const { command, args, options } = await c.req.json<{
+        command: string
+        args?: string[]
+        options?: ExecOptions
+      }>()
+
+      try {
+        // Detect render tier from request
+        const renderer = TerminalRenderer.fromRequest(c.req.raw)
+
+        // Execute command
+        const startTime = Date.now()
+        const result = await this.bashModule.exec(command, args, options)
+        const duration = Date.now() - startTime
+
+        // Render output according to tier
+        const rendered = renderer.renderCommandOutput({
+          command: args?.length ? `${command} ${args.join(' ')}` : command,
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          duration,
+        })
+
+        // Return appropriate content type
+        const contentType = renderer.tier === 'markdown'
+          ? 'text/markdown'
+          : renderer.tier === 'ansi'
+            ? 'text/x-ansi'
+            : 'text/plain'
+
+        return new Response(rendered, {
+          headers: {
+            'Content-Type': `${contentType}; charset=utf-8`,
+            'X-Render-Tier': renderer.tier,
+            'X-Exit-Code': String(result.exitCode),
+            'X-Duration-Ms': String(duration),
+          },
+        })
+      } catch (error: unknown) {
+        const err = error as { code?: string; message?: string }
+        return c.json(
+          {
+            error: true,
+            code: err.code || 'RENDER_ERROR',
+            message: err.message || 'Render failed',
+          },
+          400
+        )
+      }
+    })
+
+    // Table rendering endpoint - renders structured data as a table
+    app.post('/table', async (c) => {
+      const { data, options: tableOptions } = await c.req.json<{
+        data: Record<string, unknown>[]
+        options?: {
+          columns?: Array<{ header: string; key: string; width?: number; align?: 'left' | 'center' | 'right' }>
+          showHeaders?: boolean
+          maxRows?: number
+        }
+      }>()
+
+      try {
+        const renderer = TerminalRenderer.fromRequest(c.req.raw)
+        const rendered = renderer.renderTable(data, tableOptions)
+
+        const contentType = renderer.tier === 'markdown'
+          ? 'text/markdown'
+          : renderer.tier === 'ansi'
+            ? 'text/x-ansi'
+            : 'text/plain'
+
+        return new Response(rendered, {
+          headers: {
+            'Content-Type': `${contentType}; charset=utf-8`,
+            'X-Render-Tier': renderer.tier,
+          },
+        })
+      } catch (error: unknown) {
+        const err = error as { message?: string }
+        return c.json(
+          {
+            error: true,
+            message: err.message || 'Table render failed',
+          },
+          400
+        )
+      }
+    })
+
+    // WebSocket endpoint for streaming command output
+    app.get('/stream', async (c) => {
+      // Upgrade to WebSocket
+      const upgradeHeader = c.req.header('Upgrade')
+      if (upgradeHeader !== 'websocket') {
+        return c.text('Expected WebSocket upgrade', 426)
+      }
+
+      // Get render tier from query params
+      const tier = (c.req.query('tier') || 'text') as RenderTier
+
+      // Create WebSocket pair
+      const webSocketPair = new WebSocketPair()
+      const [client, server] = Object.values(webSocketPair)
+
+      // Accept the WebSocket
+      this.ctx.acceptWebSocket(server)
+
+      // Store tier preference for this connection
+      ;(server as unknown as { tier: RenderTier }).tier = tier
+
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+      })
+    })
+
     return app
+  }
+
+  /**
+   * Handle WebSocket messages for streaming execution
+   */
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== 'string') {
+      ws.send(JSON.stringify({ type: 'error', message: 'Binary messages not supported' }))
+      return
+    }
+
+    try {
+      const { action, command, args, options } = JSON.parse(message) as {
+        action: 'exec' | 'run'
+        command?: string
+        args?: string[]
+        options?: ExecOptions
+      }
+
+      // Get tier from WebSocket attachment
+      const tier = ((ws as unknown as { tier?: RenderTier }).tier || 'text') as RenderTier
+
+      // Create streaming renderer
+      const renderer = new StreamingRenderer({ tier }, createWebSocketCallback(ws))
+
+      if (action === 'exec' && command) {
+        const fullCommand = args?.length ? `${command} ${args.join(' ')}` : command
+
+        // Signal start
+        renderer.start(fullCommand)
+
+        // Execute command
+        const startTime = Date.now()
+        const result = await this.bashModule.exec(command, args, options)
+        const duration = Date.now() - startTime
+
+        // Stream output
+        if (result.stdout) {
+          renderer.output(result.stdout, 'stdout')
+        }
+        if (result.stderr) {
+          renderer.output(result.stderr, 'stderr')
+        }
+
+        // Signal completion
+        renderer.end(result.exitCode, duration)
+      } else if (action === 'run' && command) {
+        // Signal start
+        renderer.start(command)
+
+        // Execute script
+        const startTime = Date.now()
+        const result = await this.bashModule.run(command, options)
+        const duration = Date.now() - startTime
+
+        // Stream output
+        if (result.stdout) {
+          renderer.output(result.stdout, 'stdout')
+        }
+        if (result.stderr) {
+          renderer.output(result.stderr, 'stderr')
+        }
+
+        // Signal completion
+        renderer.end(result.exitCode, duration)
+      } else {
+        renderer.error('Invalid action or missing command')
+      }
+    } catch (error: unknown) {
+      const err = error as { message?: string }
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: err.message || 'Execution failed',
+      }))
+    }
+  }
+
+  /**
+   * Handle WebSocket close
+   */
+  async webSocketClose(_ws: WebSocket): Promise<void> {
+    // Cleanup if needed
   }
 
   /**

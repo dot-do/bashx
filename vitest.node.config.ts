@@ -31,8 +31,16 @@ export default defineConfig({
       'src/npmx/**/*.test.ts',
       // Core package architecture tests
       'test/core/**/*.test.ts',
+      // RPC integration tests (uses Node.js child_process)
+      'test/rpc/**/*.test.ts',
       // Storage patterns tests (pure unit tests)
       'src/storage/**/*.test.ts',
+      // CLI client tests (uses mock WebSocket)
+      'cli/**/*.test.ts',
+      // DO utility tests that don't need Workers runtime
+      'tests/do/terminal-renderer.test.ts',
+      // MCP stateful shell tests (uses Node.js process.cwd, child_process)
+      'src/mcp/stateful-shell.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
