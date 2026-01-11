@@ -53,6 +53,121 @@ export interface CircuitBreakerConfig {
 }
 
 /**
+ * Environment variable names for circuit breaker configuration.
+ * These can be used to configure circuit breakers via environment variables.
+ *
+ * Variables are prefixed with CIRCUIT_BREAKER_ and optionally the circuit name.
+ * Example: CIRCUIT_BREAKER_TIER_2_RPC_FAILURE_THRESHOLD=5
+ *
+ * Generic variables (apply to all circuits):
+ * - CIRCUIT_BREAKER_FAILURE_THRESHOLD
+ * - CIRCUIT_BREAKER_COOLDOWN_PERIOD_MS
+ * - CIRCUIT_BREAKER_HALF_OPEN_SUCCESS_THRESHOLD
+ * - CIRCUIT_BREAKER_TIMEOUT_MS
+ * - CIRCUIT_BREAKER_WINDOW_TYPE (count | time)
+ * - CIRCUIT_BREAKER_WINDOW_SIZE
+ * - CIRCUIT_BREAKER_WINDOW_SIZE_MS
+ */
+export const CIRCUIT_BREAKER_ENV_VARS = {
+  FAILURE_THRESHOLD: 'CIRCUIT_BREAKER_FAILURE_THRESHOLD',
+  COOLDOWN_PERIOD_MS: 'CIRCUIT_BREAKER_COOLDOWN_PERIOD_MS',
+  HALF_OPEN_SUCCESS_THRESHOLD: 'CIRCUIT_BREAKER_HALF_OPEN_SUCCESS_THRESHOLD',
+  TIMEOUT_MS: 'CIRCUIT_BREAKER_TIMEOUT_MS',
+  WINDOW_TYPE: 'CIRCUIT_BREAKER_WINDOW_TYPE',
+  WINDOW_SIZE: 'CIRCUIT_BREAKER_WINDOW_SIZE',
+  WINDOW_SIZE_MS: 'CIRCUIT_BREAKER_WINDOW_SIZE_MS',
+} as const
+
+/**
+ * Create a circuit breaker configuration from environment variables.
+ * Environment variables take precedence over default values.
+ *
+ * @param name - Circuit breaker name (used for named env var lookup)
+ * @param env - Environment object (defaults to process.env)
+ * @param defaults - Default configuration values
+ * @returns Circuit breaker configuration
+ *
+ * @example
+ * ```typescript
+ * // Using process.env
+ * const config = createConfigFromEnv('tier-2-rpc')
+ *
+ * // Using custom env object (e.g., in Workers)
+ * const config = createConfigFromEnv('tier-2-rpc', workerEnv)
+ *
+ * // With defaults
+ * const config = createConfigFromEnv('tier-2-rpc', env, {
+ *   failureThreshold: 10,
+ *   cooldownPeriodMs: 60000,
+ * })
+ * ```
+ */
+export function createConfigFromEnv(
+  name: string,
+  env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {},
+  defaults: Partial<Omit<CircuitBreakerConfig, 'name'>> = {}
+): CircuitBreakerConfig {
+  // Convert name to env var format: tier-2-rpc -> TIER_2_RPC
+  const envName = name.toUpperCase().replace(/-/g, '_')
+
+  // Helper to get env var with fallback to generic and default
+  const getEnvNumber = (varName: string, defaultValue?: number): number | undefined => {
+    // Try circuit-specific var first: CIRCUIT_BREAKER_TIER_2_RPC_FAILURE_THRESHOLD
+    const specificVar = `CIRCUIT_BREAKER_${envName}_${varName}`
+    const specificValue = env[specificVar]
+    if (specificValue !== undefined) {
+      const parsed = parseInt(specificValue, 10)
+      if (!isNaN(parsed)) return parsed
+    }
+
+    // Try generic var: CIRCUIT_BREAKER_FAILURE_THRESHOLD
+    const genericVar = `CIRCUIT_BREAKER_${varName}`
+    const genericValue = env[genericVar]
+    if (genericValue !== undefined) {
+      const parsed = parseInt(genericValue, 10)
+      if (!isNaN(parsed)) return parsed
+    }
+
+    return defaultValue
+  }
+
+  const getEnvString = (varName: string): string | undefined => {
+    const specificVar = `CIRCUIT_BREAKER_${envName}_${varName}`
+    const specificValue = env[specificVar]
+    if (specificValue !== undefined) return specificValue
+
+    const genericVar = `CIRCUIT_BREAKER_${varName}`
+    return env[genericVar]
+  }
+
+  // Build configuration
+  const config: CircuitBreakerConfig = {
+    name,
+    failureThreshold: getEnvNumber('FAILURE_THRESHOLD', defaults.failureThreshold),
+    cooldownPeriodMs: getEnvNumber('COOLDOWN_PERIOD_MS', defaults.cooldownPeriodMs),
+    halfOpenSuccessThreshold: getEnvNumber('HALF_OPEN_SUCCESS_THRESHOLD', defaults.halfOpenSuccessThreshold),
+    timeout: getEnvNumber('TIMEOUT_MS', defaults.timeout),
+    windowSize: getEnvNumber('WINDOW_SIZE', defaults.windowSize),
+    windowSizeMs: getEnvNumber('WINDOW_SIZE_MS', defaults.windowSizeMs),
+  }
+
+  // Handle window type
+  const windowType = getEnvString('WINDOW_TYPE')
+  if (windowType === 'count' || windowType === 'time') {
+    config.windowType = windowType
+  } else if (defaults.windowType) {
+    config.windowType = defaults.windowType
+  }
+
+  // Preserve custom isFailure from defaults
+  if (defaults.isFailure) {
+    config.isFailure = defaults.isFailure
+  }
+
+  return config
+}
+
+/**
  * Circuit breaker metrics
  */
 export interface CircuitBreakerMetrics {
@@ -64,6 +179,20 @@ export interface CircuitBreakerMetrics {
   timeInClosed: number
   timeInOpen: number
   timeInHalfOpen: number
+  /** Number of recovery attempts (transitions to HALF_OPEN) */
+  recoveryAttempts: number
+  /** Number of successful recoveries (HALF_OPEN -> CLOSED) */
+  recoverySuccesses: number
+  /** Number of failed recoveries (HALF_OPEN -> OPEN) */
+  recoveryFailures: number
+  /** Recovery success rate (0-1) */
+  recoverySuccessRate: number
+  /** Average time to recover in ms (OPEN -> CLOSED transitions) */
+  averageRecoveryTimeMs: number
+  /** Number of state transitions */
+  stateTransitions: number
+  /** Last state change timestamp */
+  lastStateChangeAt: number | null
 }
 
 /**
@@ -276,6 +405,18 @@ export class CircuitBreaker {
   private timeInOpen = 0
   private timeInHalfOpen = 0
 
+  // Recovery metrics
+  private recoveryAttempts = 0
+  private recoverySuccesses = 0
+  private recoveryFailures = 0
+  private recoveryTimes: number[] = []
+  private stateTransitions = 0
+  private lastStateChangeAt: number | null = null
+  private recoveryStartedAt: number | null = null
+
+  // Cleanup tracking
+  private disposed = false
+
   // Event handlers
   private eventHandlers: Map<CircuitBreakerEventType, Set<EventHandler<CircuitBreakerEvent>>> = new Map()
 
@@ -335,6 +476,12 @@ export class CircuitBreaker {
         this.successfulRequests = importedState.metrics.successfulRequests ?? 0
         this.failedRequests = importedState.metrics.failedRequests ?? 0
         this.rejectedRequests = importedState.metrics.rejectedRequests ?? 0
+        // Import recovery metrics if available
+        this.recoveryAttempts = importedState.metrics.recoveryAttempts ?? 0
+        this.recoverySuccesses = importedState.metrics.recoverySuccesses ?? 0
+        this.recoveryFailures = importedState.metrics.recoveryFailures ?? 0
+        this.stateTransitions = importedState.metrics.stateTransitions ?? 0
+        this.lastStateChangeAt = importedState.metrics.lastStateChangeAt ?? null
       }
     }
 
@@ -433,6 +580,17 @@ export class CircuitBreaker {
     const failureRate =
       this.totalRequests > 0 ? (this.failedRequests + this.rejectedRequests) / this.totalRequests : 0
 
+    // Calculate recovery success rate
+    const totalRecoveryAttempts = this.recoverySuccesses + this.recoveryFailures
+    const recoverySuccessRate = totalRecoveryAttempts > 0
+      ? this.recoverySuccesses / totalRecoveryAttempts
+      : 0
+
+    // Calculate average recovery time
+    const averageRecoveryTimeMs = this.recoveryTimes.length > 0
+      ? this.recoveryTimes.reduce((a, b) => a + b, 0) / this.recoveryTimes.length
+      : 0
+
     return {
       totalRequests: this.totalRequests,
       successfulRequests: this.successfulRequests,
@@ -442,6 +600,13 @@ export class CircuitBreaker {
       timeInClosed: this.timeInClosed,
       timeInOpen: this.timeInOpen,
       timeInHalfOpen: this.timeInHalfOpen,
+      recoveryAttempts: this.recoveryAttempts,
+      recoverySuccesses: this.recoverySuccesses,
+      recoveryFailures: this.recoveryFailures,
+      recoverySuccessRate,
+      averageRecoveryTimeMs,
+      stateTransitions: this.stateTransitions,
+      lastStateChangeAt: this.lastStateChangeAt,
     }
   }
 
@@ -597,16 +762,37 @@ export class CircuitBreaker {
 
   private transitionTo(newState: CircuitState): void {
     const oldState = this.state
+    const now = Date.now()
 
     // Update time tracking before transition
     this.updateTimeTracking()
 
     this.state = newState
 
-    // Handle state entry
+    // Track state transitions
+    this.stateTransitions++
+    this.lastStateChangeAt = now
+
+    // Handle state entry and recovery tracking
     if (newState === CircuitState.OPEN) {
-      this.openedAt = Date.now()
+      this.openedAt = now
+      // If coming from HALF_OPEN, this is a recovery failure
+      if (oldState === CircuitState.HALF_OPEN) {
+        this.recoveryFailures++
+        this.recoveryStartedAt = null // Reset recovery tracking
+      }
     } else if (newState === CircuitState.CLOSED) {
+      // If coming from HALF_OPEN, this is a successful recovery
+      if (oldState === CircuitState.HALF_OPEN && this.recoveryStartedAt !== null) {
+        this.recoverySuccesses++
+        const recoveryTime = now - this.recoveryStartedAt
+        this.recoveryTimes.push(recoveryTime)
+        // Keep only the last 100 recovery times for average calculation
+        if (this.recoveryTimes.length > 100) {
+          this.recoveryTimes.shift()
+        }
+        this.recoveryStartedAt = null
+      }
       this.openedAt = null
       this.failureCount = 0
       this.halfOpenSuccessCount = 0
@@ -615,10 +801,13 @@ export class CircuitBreaker {
       }
     } else if (newState === CircuitState.HALF_OPEN) {
       this.halfOpenSuccessCount = 0
+      // Track recovery attempt
+      this.recoveryAttempts++
+      this.recoveryStartedAt = this.openedAt ?? now // Recovery started when circuit opened
     }
 
     // Reset state start time
-    this.stateStartTime = Date.now()
+    this.stateStartTime = now
 
     // Emit state change event
     this.emitEvent({
@@ -626,7 +815,7 @@ export class CircuitBreaker {
       circuit: this.config.name,
       from: oldState,
       to: newState,
-      timestamp: Date.now(),
+      timestamp: now,
     })
   }
 
@@ -689,6 +878,12 @@ export class CircuitBreaker {
     this.timeInClosed = 0
     this.timeInOpen = 0
     this.timeInHalfOpen = 0
+    this.recoveryAttempts = 0
+    this.recoverySuccesses = 0
+    this.recoveryFailures = 0
+    this.recoveryTimes = []
+    this.stateTransitions = 0
+    this.lastStateChangeAt = null
     this.stateStartTime = Date.now()
   }
 
@@ -754,7 +949,61 @@ export class CircuitBreaker {
         successfulRequests: this.successfulRequests,
         failedRequests: this.failedRequests,
         rejectedRequests: this.rejectedRequests,
+        recoveryAttempts: this.recoveryAttempts,
+        recoverySuccesses: this.recoverySuccesses,
+        recoveryFailures: this.recoveryFailures,
+        stateTransitions: this.stateTransitions,
+        lastStateChangeAt: this.lastStateChangeAt,
       },
+    }
+  }
+
+  // ============================================================================
+  // CLEANUP
+  // ============================================================================
+
+  /**
+   * Check if the circuit breaker has been disposed
+   */
+  isDisposed(): boolean {
+    return this.disposed
+  }
+
+  /**
+   * Dispose of the circuit breaker, cleaning up all resources.
+   * After disposal, the circuit breaker should not be used.
+   *
+   * This method:
+   * - Removes all event listeners
+   * - Clears internal state tracking
+   * - Marks the breaker as disposed
+   *
+   * @example
+   * ```typescript
+   * const breaker = createCircuitBreaker({ name: 'my-circuit' })
+   * // ... use breaker ...
+   *
+   * // When shutting down
+   * breaker.dispose()
+   * ```
+   */
+  dispose(): void {
+    if (this.disposed) {
+      return
+    }
+
+    this.disposed = true
+
+    // Clear all event handlers
+    this.eventHandlers.forEach((handlers) => handlers.clear())
+    this.eventHandlers.clear()
+
+    // Clear recovery time history
+    this.recoveryTimes = []
+
+    // Reset sliding window
+    if (this.slidingWindow) {
+      this.slidingWindow.reset()
     }
   }
 }
