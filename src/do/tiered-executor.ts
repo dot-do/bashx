@@ -114,9 +114,14 @@ import {
   LanguageRouter,
 } from '../../core/classify/language-router.js'
 import {
+  analyzeMultiLanguageSync,
+  type SandboxStrategy,
+} from '../../core/safety/multi-language.js'
+import {
   PolyglotExecutor,
   type LanguageBinding,
 } from './executors/polyglot-executor.js'
+import type { TierExecutor, LanguageExecutor } from './executors/types.js'
 import { PipelineExecutor } from './pipeline/index.js'
 
 // ============================================================================
@@ -129,17 +134,37 @@ import { PipelineExecutor } from './pipeline/index.js'
 export type ExecutionTier = 1 | 2 | 3 | 4
 
 /**
- * Tier classification result
+ * Tier classification result.
+ *
+ * Contains the tier level, reason for selection, and optionally an executor
+ * instance that can be called directly for polymorphic dispatch.
  */
 export interface TierClassification {
   /** The tier that should handle this command */
   tier: ExecutionTier
   /** Reason for the tier selection */
   reason: string
-  /** The handler that will execute the command */
+  /** The handler that will execute the command (kept for debugging/logging) */
   handler: 'native' | 'rpc' | 'loader' | 'sandbox' | 'polyglot'
   /** Specific capability or service that will be used */
   capability?: string
+  /**
+   * The executor instance that will handle this command.
+   *
+   * When present, enables polymorphic dispatch - the caller can invoke
+   * `classification.executor.execute()` directly instead of going through
+   * a switch statement on the handler type.
+   *
+   * This field is optional for backward compatibility. If not present,
+   * the caller should fall back to switch-based dispatch using the handler field.
+   */
+  executor?: TierExecutor | LanguageExecutor
+  /**
+   * Sandbox strategy for non-bash languages routed to sandbox.
+   * Contains resource limits, network/filesystem restrictions based on safety analysis.
+   * Only present when a non-bash language is classified for sandbox execution.
+   */
+  sandboxStrategy?: SandboxStrategy
 }
 
 /**
@@ -435,6 +460,103 @@ const TIER_4_SANDBOX_COMMANDS = new Set([
 ])
 
 // ============================================================================
+// EXECUTOR ADAPTERS FOR POLYMORPHIC DISPATCH
+// ============================================================================
+
+/**
+ * ExecutorAdapter - Base class for tier-specific executor adapters.
+ *
+ * These adapters implement TierExecutor and delegate to the TieredExecutor's
+ * internal methods, enabling polymorphic dispatch from TierClassification.
+ *
+ * @internal
+ */
+abstract class ExecutorAdapter implements TierExecutor {
+  protected readonly tieredExecutor: TieredExecutor
+  protected readonly classification: TierClassification
+
+  constructor(tieredExecutor: TieredExecutor, classification: TierClassification) {
+    this.tieredExecutor = tieredExecutor
+    this.classification = classification
+  }
+
+  abstract canExecute(command: string): boolean
+  abstract execute(command: string, options?: ExecOptions): Promise<BashResult>
+}
+
+/**
+ * NativeExecutorAdapter - Adapter for Tier 1 native command execution.
+ * @internal
+ */
+class NativeExecutorAdapter extends ExecutorAdapter {
+  canExecute(command: string): boolean {
+    const cmd = command.split(/\s+/)[0]
+    return TIER_1_NATIVE_COMMANDS.has(cmd)
+  }
+
+  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+    // Access the private method via any cast - this is internal implementation
+    return (this.tieredExecutor as any).executeTier1(command, this.classification, options)
+  }
+}
+
+/**
+ * RpcExecutorAdapter - Adapter for Tier 2 RPC command execution.
+ * @internal
+ */
+class RpcExecutorAdapter extends ExecutorAdapter {
+  canExecute(command: string): boolean {
+    return this.classification.handler === 'rpc'
+  }
+
+  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+    return (this.tieredExecutor as any).executeTier2(command, this.classification, options)
+  }
+}
+
+/**
+ * LoaderExecutorAdapter - Adapter for Tier 3 loader command execution.
+ * @internal
+ */
+class LoaderExecutorAdapter extends ExecutorAdapter {
+  canExecute(command: string): boolean {
+    return this.classification.handler === 'loader'
+  }
+
+  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+    return (this.tieredExecutor as any).executeTier3(command, this.classification, options)
+  }
+}
+
+/**
+ * SandboxExecutorAdapter - Adapter for Tier 4 sandbox command execution.
+ * @internal
+ */
+class SandboxExecutorAdapter extends ExecutorAdapter {
+  canExecute(command: string): boolean {
+    return true // Sandbox can execute any command
+  }
+
+  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+    return (this.tieredExecutor as any).executeTier4(command, this.classification, options)
+  }
+}
+
+/**
+ * PolyglotExecutorAdapter - Adapter for polyglot (language runtime) execution.
+ * @internal
+ */
+class PolyglotExecutorAdapter extends ExecutorAdapter {
+  canExecute(command: string): boolean {
+    return this.classification.handler === 'polyglot'
+  }
+
+  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+    return (this.tieredExecutor as any).executePolyglot(command, this.classification, options)
+  }
+}
+
+// ============================================================================
 // TIERED EXECUTOR CLASS
 // ============================================================================
 
@@ -548,10 +670,63 @@ export class TieredExecutor implements BashExecutor {
   }
 
   /**
+   * Create an executor adapter for a classification.
+   *
+   * This method attaches the appropriate executor instance to the classification,
+   * enabling polymorphic dispatch. The executor can be called directly via
+   * `classification.executor.execute()` instead of using a switch statement.
+   *
+   * @param classification - The base classification without executor
+   * @returns The classification with executor attached
+   * @internal
+   */
+  private withExecutor(classification: Omit<TierClassification, 'executor'>): TierClassification {
+    let executor: TierExecutor | LanguageExecutor | undefined
+
+    switch (classification.handler) {
+      case 'native':
+        executor = new NativeExecutorAdapter(this, classification as TierClassification)
+        break
+      case 'rpc':
+        executor = new RpcExecutorAdapter(this, classification as TierClassification)
+        break
+      case 'loader':
+        executor = new LoaderExecutorAdapter(this, classification as TierClassification)
+        break
+      case 'sandbox':
+        executor = new SandboxExecutorAdapter(this, classification as TierClassification)
+        break
+      case 'polyglot':
+        executor = new PolyglotExecutorAdapter(this, classification as TierClassification)
+        break
+    }
+
+    return {
+      ...classification,
+      executor,
+    }
+  }
+
+  /**
    * Classify a command to determine which tier should execute it.
    *
+   * For non-bash languages that route to sandbox (Tier 4), this method
+   * performs safety analysis to determine appropriate resource limits
+   * via the sandboxStrategy field.
+   *
    * @param command - The command to classify
-   * @returns TierClassification with tier level and handler info
+   * @returns TierClassification with tier level, handler info, and optional sandboxStrategy
+   *
+   * @example
+   * ```typescript
+   * // Bash command - no sandboxStrategy
+   * const bashClass = executor.classifyCommand('ls -la')
+   * // bashClass.sandboxStrategy === undefined
+   *
+   * // Python command without worker - includes sandboxStrategy
+   * const pyClass = executor.classifyCommand('python -c "eval(input())"')
+   * // pyClass.sandboxStrategy.network === 'none' (dangerous pattern detected)
+   * ```
    */
   classifyCommand(command: string): TierClassification {
     const cmd = this.extractCommandName(command)
@@ -671,12 +846,11 @@ export class TieredExecutor implements BashExecutor {
         }
       } else {
         // No language worker configured for this language - skip RPC and go to sandbox
-        return {
-          tier: 4,
-          reason: `No language worker for ${routingResult.language}, using sandbox`,
-          handler: 'sandbox',
-          capability: 'container',
-        }
+        // Perform safety analysis to determine sandbox resource limits
+        return this.classifyForSandboxWithSafetyAnalysis(
+          command,
+          routingResult.language
+        )
       }
     }
 
@@ -722,6 +896,30 @@ export class TieredExecutor implements BashExecutor {
         : 'No higher tier available for this command',
       handler: 'sandbox',
       capability: 'container',
+    }
+  }
+
+  /**
+   * Create a Tier 4 (sandbox) classification with multi-language safety analysis.
+   *
+   * This helper performs safety analysis for non-bash languages to determine
+   * appropriate sandbox resource limits based on detected dangerous patterns.
+   *
+   * @param command - The command being classified
+   * @param language - The detected programming language
+   * @returns TierClassification with sandboxStrategy included
+   */
+  private classifyForSandboxWithSafetyAnalysis(
+    command: string,
+    language: SupportedLanguage
+  ): TierClassification {
+    const safetyAnalysis = analyzeMultiLanguageSync(command)
+    return {
+      tier: 4,
+      reason: `No language worker for ${language}, using sandbox`,
+      handler: 'sandbox',
+      capability: 'container',
+      sandboxStrategy: safetyAnalysis.sandboxStrategy,
     }
   }
 

@@ -291,3 +291,79 @@ export async function analyzeMultiLanguage(code: string): Promise<MultiLanguageA
     reason,
   }
 }
+
+/**
+ * Synchronous version of analyzeMultiLanguage for use in classification pipeline.
+ *
+ * This function performs the same analysis as analyzeMultiLanguage but synchronously.
+ * All underlying language analyzers are synchronous, so this is safe to use
+ * in performance-critical classification code paths.
+ *
+ * @param code - The code string to analyze
+ * @returns MultiLanguageAnalysis with classification and sandbox strategy
+ *
+ * @example
+ * ```typescript
+ * // Use in classification pipeline
+ * const analysis = analyzeMultiLanguageSync('python -c "eval(input())"')
+ * if (analysis.language !== 'bash') {
+ *   classification.sandboxStrategy = analysis.sandboxStrategy
+ * }
+ * ```
+ */
+export function analyzeMultiLanguageSync(code: string): MultiLanguageAnalysis {
+  // 1. Detect language
+  const detection = detectLanguage(code)
+
+  // 2. Route to appropriate analyzer
+  let classification: SafetyClassification
+  let patterns: DetectedPattern[] = []
+
+  switch (detection.language) {
+    case 'python': {
+      const analysis = analyzePythonSafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns.map((p) => ({ type: p.type, impact: p.impact }))
+      break
+    }
+    case 'ruby': {
+      const analysis = analyzeRubySafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns.map((p) => ({ type: p.type, impact: p.impact }))
+      break
+    }
+    case 'node': {
+      const analysis = analyzeNodeSafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns.map((p) => ({ type: p.type, impact: p.impact }))
+      break
+    }
+    case 'bash':
+    default: {
+      const analysis = analyzeBashSafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns
+      break
+    }
+  }
+
+  // 3. Determine sandbox strategy based on classification
+  const sandboxStrategy = determineSandboxStrategy(classification, patterns)
+
+  // 4. Determine if safe
+  // Unsafe if critical impact or high impact with dangerous patterns
+  const isSafe =
+    classification.impact === 'none' ||
+    (classification.impact === 'low' && patterns.length === 0)
+
+  const reason = isSafe ? undefined : classification.reason
+
+  return {
+    language: detection.language,
+    classification,
+    patterns,
+    sandboxStrategy,
+    isSafe,
+    reason,
+  }
+}
