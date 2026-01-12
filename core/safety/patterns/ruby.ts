@@ -37,6 +37,40 @@ export interface RubySafetyAnalysis {
 }
 
 /**
+ * Pattern definitions for Ruby safety analysis.
+ */
+interface PatternDef {
+  type: string
+  pattern: RegExp
+  impact: 'low' | 'medium' | 'high' | 'critical'
+  classificationType: 'execute' | 'system'
+}
+
+/**
+ * Ruby safety patterns organized by impact level.
+ */
+const RUBY_PATTERNS: PatternDef[] = [
+  // eval family - critical impact (code execution)
+  { type: 'eval', pattern: /\beval\s*\(/, impact: 'critical', classificationType: 'execute' },
+  { type: 'instance_eval', pattern: /\.instance_eval\s*\(/, impact: 'critical', classificationType: 'execute' },
+  { type: 'class_eval', pattern: /\.class_eval\s*\(/, impact: 'critical', classificationType: 'execute' },
+  { type: 'module_eval', pattern: /\.module_eval\s*\(/, impact: 'critical', classificationType: 'execute' },
+  { type: 'binding_eval', pattern: /\bbinding\.eval\s*\(/, impact: 'critical', classificationType: 'execute' },
+
+  // system execution - high impact (shell commands)
+  { type: 'system', pattern: /\bsystem\s*\(/, impact: 'high', classificationType: 'system' },
+  { type: 'backticks', pattern: /`[^`]+`/, impact: 'high', classificationType: 'system' },
+  { type: 'percent_x', pattern: /%x\{[^}]*\}/, impact: 'high', classificationType: 'system' },
+  { type: 'exec', pattern: /\bexec\s*\(/, impact: 'high', classificationType: 'system' },
+  { type: 'spawn', pattern: /\bspawn\s*\(/, impact: 'high', classificationType: 'system' },
+]
+
+/**
+ * Pattern to extract require statements.
+ */
+const REQUIRE_PATTERN = /\brequire\s+["']([^"']+)["']/g
+
+/**
  * Analyzes Ruby code for safety patterns.
  *
  * Detects dangerous operations such as:
@@ -49,7 +83,6 @@ export interface RubySafetyAnalysis {
  *
  * @param code - The Ruby code to analyze
  * @returns Safety analysis result with classification and detected patterns
- * @throws {Error} Not implemented yet (RED phase stub)
  *
  * @example
  * ```typescript
@@ -58,5 +91,68 @@ export interface RubySafetyAnalysis {
  * ```
  */
 export function analyzeRubySafety(code: string): RubySafetyAnalysis {
-  throw new Error('Not implemented')
+  const patterns: DetectedPattern[] = []
+  const requires: string[] = []
+
+  // Extract require statements
+  let requireMatch: RegExpExecArray | null
+  while ((requireMatch = REQUIRE_PATTERN.exec(code)) !== null) {
+    requires.push(requireMatch[1])
+  }
+
+  // Detect dangerous patterns
+  for (const patternDef of RUBY_PATTERNS) {
+    const match = patternDef.pattern.exec(code)
+    if (match) {
+      patterns.push({
+        type: patternDef.type,
+        impact: patternDef.impact,
+        match: match[0],
+      })
+    }
+  }
+
+  // Determine overall classification based on detected patterns
+  const classification = buildClassification(patterns)
+
+  return {
+    classification,
+    patterns,
+    requires,
+  }
+}
+
+/**
+ * Builds a SafetyClassification from detected patterns.
+ */
+function buildClassification(patterns: DetectedPattern[]): SafetyClassification {
+  // Check for critical patterns (eval family, binding.eval)
+  const hasCritical = patterns.some(p => p.impact === 'critical')
+  if (hasCritical) {
+    return {
+      type: 'execute',
+      impact: 'critical',
+      reversible: false,
+      reason: 'Code contains eval family functions that can execute arbitrary code',
+    }
+  }
+
+  // Check for high impact patterns (system execution)
+  const hasHigh = patterns.some(p => p.impact === 'high')
+  if (hasHigh) {
+    return {
+      type: 'system',
+      impact: 'high',
+      reversible: false,
+      reason: 'Code contains system execution functions that can run shell commands',
+    }
+  }
+
+  // No dangerous patterns - safe code
+  return {
+    type: 'read',
+    impact: 'low',
+    reversible: true,
+    reason: 'No dangerous patterns detected',
+  }
 }
