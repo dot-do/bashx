@@ -75,7 +75,30 @@ export type {
 // - HTTP via fetch API
 // - Data processing (jq, base64, etc.)
 // - POSIX utilities
+//
+// Tier1Executor is the canonical facade for Tier 1 execution.
+// NativeExecutor is the underlying implementation.
 // ============================================================================
+
+// Tier1Executor - The canonical Tier 1 executor facade
+export {
+  Tier1Executor,
+  createTier1Executor,
+  type Tier1ExecutorConfig,
+  type Tier1Capability,
+  // Tier 1 command sets
+  TIER1_COMMANDS,
+  TIER1_FS_COMMANDS,
+  TIER1_HTTP_COMMANDS,
+  TIER1_DATA_COMMANDS,
+  TIER1_CRYPTO_COMMANDS,
+  TIER1_TEXT_COMMANDS,
+  TIER1_POSIX_COMMANDS,
+  TIER1_SYSTEM_COMMANDS,
+  TIER1_EXTENDED_COMMANDS,
+} from './tier1-executor.js'
+
+// NativeExecutor - Underlying implementation (backward compatibility)
 export {
   NativeExecutor,
   createNativeExecutor,
