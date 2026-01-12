@@ -71,6 +71,10 @@ export default defineConfig({
       'tests/do/classify/**/*.test.ts',
       // Configuration tests (pure unit tests)
       'tests/config/**/*.test.ts',
+      // DO utility function tests (command-parser, path utils, etc.)
+      'tests/do/utils/**/*.test.ts',
+      // General utility tests (path normalizer, etc.)
+      'tests/utils/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
