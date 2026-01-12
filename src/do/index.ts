@@ -885,3 +885,16 @@ export type {
 
 // Re-export ShellDO for wrangler worker entry
 export { ShellDO, type Env as ShellEnv } from './worker.js'
+
+// Re-export AI generator
+export {
+  AIGenerator,
+  createAIGenerator,
+  generateWithAI,
+} from './ai-generator.js'
+
+export type {
+  AIGeneratorResult,
+  AIGeneratorOptions,
+  AIGeneratorConfig,
+} from './ai-generator.js'

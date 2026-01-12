@@ -25,7 +25,7 @@ export default defineWorkersConfig({
     ],
     poolOptions: {
       workers: {
-        wrangler: { configPath: './wrangler.toml' },
+        wrangler: { configPath: './wrangler.test.toml' },
       },
     },
   },

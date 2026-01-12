@@ -64,6 +64,7 @@
     }
   },
   "dependencies": {
+    "dotdo": "file:../dotdo",
     "fflate": "^0.8.2",
     "fsx.do": "0.1.0",
     "hono": "^4.11.3",

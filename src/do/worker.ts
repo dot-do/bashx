@@ -5,6 +5,7 @@
  * - AST-based command safety analysis
  * - Tiered execution (native, RPC, loader, sandbox)
  * - FsCapability integration via FSX service binding
+ * - Extends dotdo's DO for AI capabilities and WorkflowContext
  *
  * @example
  * ```typescript
@@ -31,6 +32,38 @@ import {
   createWebSocketCallback,
   type RenderTier,
 } from './terminal-renderer.js'
+import { AIGenerator, type AIGeneratorResult, type AIGeneratorOptions } from './ai-generator.js'
+
+// ============================================================================
+// DOTDO INTEGRATION TYPES
+// ============================================================================
+
+/**
+ * Import dotdo's DO class and withBash mixin dynamically.
+ * This allows the module to work even if dotdo isn't available,
+ * falling back to plain DurableObject.
+ *
+ * When dotdo is available, ShellDO will extend from withBash(DO, {...})
+ * which provides:
+ * - $.bash capability via bashx's TieredExecutor
+ * - WorkflowContext ($) with event handlers and scheduling
+ * - AI agent integration
+ */
+let DotdoDO: typeof DurableObject | null = null
+let dotdoWithBash: ((base: typeof DurableObject, config: unknown) => typeof DurableObject) | null = null
+
+try {
+  // Attempt to load dotdo - will succeed if installed
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const dotdo = require('dotdo') as {
+    DO: typeof DurableObject
+    withBash: (base: typeof DurableObject, config: unknown) => typeof DurableObject
+  }
+  DotdoDO = dotdo.DO
+  dotdoWithBash = dotdo.withBash
+} catch {
+  // dotdo not available, will use plain DurableObject
+}
 
 // ============================================================================
 // ENVIRONMENT TYPES
@@ -43,11 +76,23 @@ export interface Env {
   /** Self-binding for ShellDO */
   BASHX: DurableObjectNamespace
 
-  /** Service binding to fsx-do for filesystem operations */
-  FSX: Fetcher
+  /** Service binding to fsx-do for filesystem operations (optional for tests) */
+  FSX?: Fetcher
 
   /** Optional: Container service for Tier 4 sandbox execution */
   CONTAINER?: Fetcher
+
+  /** Optional: AI binding for natural language command generation */
+  AI?: Ai
+
+  /** Optional: KV namespace for caching */
+  KV?: KVNamespace
+
+  /** Optional: R2 bucket for file storage */
+  R2?: R2Bucket
+
+  /** Allow additional dotdo-compatible bindings */
+  [key: string]: unknown
 }
 
 // ============================================================================
@@ -245,6 +290,49 @@ class FsxServiceAdapter {
 }
 
 // ============================================================================
+// SHELL DURABLE OBJECT BASE CLASS
+// ============================================================================
+
+/**
+ * Create the base class for ShellDO.
+ *
+ * When dotdo is available, this uses withBash(DO, {...}) which provides:
+ * - $.bash capability via bashx's TieredExecutor
+ * - WorkflowContext ($) with event handlers and scheduling
+ * - AI agent integration
+ *
+ * When dotdo is not available, falls back to plain DurableObject.
+ */
+function createShellDOBase(): typeof DurableObject<Env> {
+  // If dotdo is available, use withBash mixin
+  if (DotdoDO && dotdoWithBash) {
+    return dotdoWithBash(DotdoDO as typeof DurableObject, {
+      executor: (instance: { env: Env }): BashExecutor => {
+        // Create FSX adapter for native file operations
+        const fsAdapter = instance.env.FSX ? new FsxServiceAdapter(instance.env.FSX) : null
+        const fs = fsAdapter as unknown as FsCapability | undefined
+
+        // Create and return TieredExecutor as the bash executor
+        return createExecutor(instance.env, fs)
+      },
+      fs: (instance: { env: Env }) => {
+        // Provide FsCapability from FSX service if available
+        if (instance.env.FSX) {
+          return new FsxServiceAdapter(instance.env.FSX)
+        }
+        return undefined
+      },
+      useNativeOps: true,
+    }) as typeof DurableObject<Env>
+  }
+
+  // Fallback to plain DurableObject
+  return DurableObject as typeof DurableObject<Env>
+}
+
+const ShellDOBase = createShellDOBase()
+
+// ============================================================================
 // SHELL DURABLE OBJECT
 // ============================================================================
 
@@ -256,10 +344,17 @@ class FsxServiceAdapter {
  * - Tiered execution (native ops, RPC services, sandbox)
  * - FsCapability integration via FSX service binding
  *
+ * When dotdo is available, also provides:
+ * - Access to dotdo's WorkflowContext ($) and AI capabilities
+ * - The $.bash capability powered by bashx's TieredExecutor
+ *
  * @example
  * ```typescript
- * // Execute a command
- * const result = await fetch(doStub, {
+ * // Execute a command via $.bash (when dotdo is available)
+ * const result = await shell.$.bash.exec('ls', ['-la'])
+ *
+ * // Or via RPC (always available)
+ * const response = await fetch(doStub, {
  *   method: 'POST',
  *   body: JSON.stringify({
  *     method: 'exec',
@@ -268,25 +363,31 @@ class FsxServiceAdapter {
  * })
  * ```
  */
-export class ShellDO extends DurableObject<Env> {
+export class ShellDO extends ShellDOBase {
   private app: Hono
   private bashModule: BashModule
-  private fsAdapter: FsxServiceAdapter
+  private fsAdapter: FsxServiceAdapter | null
+  private aiGenerator: AIGenerator
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
 
-    // Create FSX adapter for native file operations
-    this.fsAdapter = new FsxServiceAdapter(env.FSX)
+    // Create FSX adapter for native file operations (optional - may not be available in tests)
+    this.fsAdapter = env.FSX ? new FsxServiceAdapter(env.FSX) : null
 
     // Create tiered executor with available bindings
-    const executor = createExecutor(env, this.fsAdapter as unknown as FsCapability)
+    const fs = this.fsAdapter as unknown as FsCapability | undefined
+    const executor = createExecutor(env, fs)
 
-    // Create BashModule with FsCapability for native ops
+    // Create BashModule with FsCapability for native ops (only if FSX is available)
+    // This is kept for backward compatibility with existing RPC methods
     this.bashModule = new BashModule(executor, {
-      fs: this.fsAdapter as unknown as FsCapability,
-      useNativeOps: true,
+      fs: fs,
+      useNativeOps: !!this.fsAdapter,
     })
+
+    // Create AI generator for natural language command generation
+    this.aiGenerator = new AIGenerator()
 
     this.app = this.createApp()
   }
@@ -380,6 +481,51 @@ export class ShellDO extends DurableObject<Env> {
           {
             error: true,
             message: err.message || 'Analysis failed',
+          },
+          400
+        )
+      }
+    })
+
+    // AI-enhanced natural language command endpoint
+    app.post('/do', async (c) => {
+      const { input, options } = await c.req.json<{
+        input: string
+        options?: ExecOptions & AIGeneratorOptions
+      }>()
+
+      try {
+        const result = await this.do(input, options)
+        return c.json(result)
+      } catch (error: unknown) {
+        const err = error as { code?: string; message?: string }
+        return c.json(
+          {
+            error: true,
+            code: err.code || 'DO_ERROR',
+            message: err.message || 'AI-enhanced execution failed',
+          },
+          400
+        )
+      }
+    })
+
+    // Generate command from natural language (without executing)
+    app.post('/generate', async (c) => {
+      const { intent, options } = await c.req.json<{
+        intent: string
+        options?: AIGeneratorOptions
+      }>()
+
+      try {
+        const result = await this.aiGenerator.generate(intent, options)
+        return c.json(result)
+      } catch (error: unknown) {
+        const err = error as { message?: string }
+        return c.json(
+          {
+            error: true,
+            message: err.message || 'Generation failed',
           },
           400
         )
@@ -592,12 +738,172 @@ export class ShellDO extends DurableObject<Env> {
   }
 
   /**
+   * AI-enhanced natural language command execution.
+   *
+   * This method accepts either a direct bash command or a natural language
+   * description of what the user wants to do. When given natural language,
+   * it uses AI (via dotdo's agent SDK) to generate the appropriate bash
+   * command, then runs it through bashx's safety analysis before execution.
+   *
+   * @param input - Command or natural language description
+   * @param options - Execution options
+   * @returns Execution result with generated command and safety analysis
+   *
+   * @example
+   * ```typescript
+   * // Direct command
+   * const result = await shellDO.do('ls -la')
+   *
+   * // Natural language
+   * const result = await shellDO.do('list all typescript files')
+   * // Generated: find . -name '*.ts'
+   *
+   * // With options
+   * const result = await shellDO.do('delete all temp files', { confirm: true })
+   * ```
+   */
+  async do(input: string, options?: ExecOptions & AIGeneratorOptions): Promise<BashResult> {
+    // First, try to determine if this is a direct command or natural language
+    const isLikelyCommand = this.isLikelyCommand(input)
+
+    if (isLikelyCommand) {
+      // Execute directly as a command
+      return this.bashModule.run(input, options)
+    }
+
+    // Use AI generator to convert natural language to command
+    const generatorResult = await this.aiGenerator.generate(input, options)
+
+    if (!generatorResult.success) {
+      // Generation failed - return error result
+      return {
+        input,
+        command: generatorResult.command || '',
+        valid: false,
+        generated: true,
+        stdout: '',
+        stderr: generatorResult.error || 'Failed to generate command from intent',
+        exitCode: 1,
+        intent: {
+          commands: [],
+          reads: [],
+          writes: [],
+          deletes: [],
+          network: false,
+          elevated: false,
+        },
+        classification: generatorResult.classification || {
+          type: 'read',
+          impact: 'none',
+          reversible: true,
+          reason: 'Generation failed',
+        },
+        blocked: generatorResult.blocked,
+        blockReason: generatorResult.error,
+        suggestions: generatorResult.alternatives,
+      }
+    }
+
+    // Check if the generated command requires confirmation
+    if (generatorResult.requiresConfirmation && !options?.confirm) {
+      return {
+        input,
+        command: generatorResult.command,
+        valid: true,
+        generated: true,
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        intent: generatorResult.semanticIntent || {
+          commands: [],
+          reads: [],
+          writes: [],
+          deletes: [],
+          network: false,
+          elevated: false,
+        },
+        classification: generatorResult.classification || {
+          type: 'mixed',
+          impact: 'high',
+          reversible: false,
+          reason: generatorResult.warning || 'Command requires confirmation',
+        },
+        blocked: true,
+        requiresConfirm: true,
+        blockReason: generatorResult.warning || 'Generated command requires confirmation to execute',
+        suggestions: generatorResult.alternatives,
+      }
+    }
+
+    // Execute the generated command
+    const execResult = await this.bashModule.run(generatorResult.command, options)
+
+    // Augment result with generation metadata
+    return {
+      ...execResult,
+      input,
+      generated: true,
+      suggestions: generatorResult.alternatives,
+    }
+  }
+
+  /**
+   * Heuristic to determine if input looks like a bash command vs natural language.
+   */
+  private isLikelyCommand(input: string): boolean {
+    // Common command prefixes
+    const commandPrefixes = [
+      /^(ls|cd|cat|rm|cp|mv|mkdir|touch|chmod|chown|find|grep|sed|awk|sort|uniq|wc|head|tail|echo|pwd|env|export|alias|which|whereis|man|help|curl|wget|git|npm|yarn|pnpm|docker|kubectl|make|cmake|cargo|go|python|python3|node|ruby|perl|bash|sh|zsh)\b/,
+      /^\.\//, // Relative paths
+      /^\//, // Absolute paths
+      /^\$\(/, // Command substitution
+      /^[A-Z_]+=/, // Variable assignment
+    ]
+
+    // Check for command prefixes
+    for (const prefix of commandPrefixes) {
+      if (prefix.test(input.trim())) {
+        return true
+      }
+    }
+
+    // Check for pipe, redirect, or semicolon operators
+    if (/[|;&]/.test(input)) {
+      return true
+    }
+
+    // Check for flags (short or long)
+    if (/\s-[a-zA-Z]|\s--[a-zA-Z]/.test(input)) {
+      return true
+    }
+
+    // Natural language indicators
+    const naturalLanguagePatterns = [
+      /^(please|can you|could you|i want|i need|show me|help me|list|find|search|create|delete|remove|copy|move|rename|check|get|fetch|display|print|run|execute|what|how|why|where|when|do)/i,
+    ]
+
+    for (const pattern of naturalLanguagePatterns) {
+      if (pattern.test(input.trim())) {
+        return false
+      }
+    }
+
+    // Default to treating as command if short and no spaces beyond arguments
+    const words = input.trim().split(/\s+/)
+    if (words.length <= 5 && words[0] && /^[a-z_-]+$/.test(words[0])) {
+      return true
+    }
+
+    return false
+  }
+
+  /**
    * Handle RPC method calls
    */
   private async handleMethod(
     method: string,
     params: Record<string, unknown>
-  ): Promise<BashResult | { classification: unknown; intent: unknown } | { dangerous: boolean; reason?: string }> {
+  ): Promise<BashResult | AIGeneratorResult | { classification: unknown; intent: unknown } | { dangerous: boolean; reason?: string }> {
     switch (method) {
       case 'exec':
         return this.bashModule.exec(
@@ -617,6 +923,18 @@ export class ShellDO extends DurableObject<Env> {
 
       case 'isDangerous':
         return this.bashModule.isDangerous(params.input as string)
+
+      case 'do':
+        return this.do(
+          params.input as string,
+          params.options as (ExecOptions & AIGeneratorOptions) | undefined
+        )
+
+      case 'generate':
+        return this.aiGenerator.generate(
+          params.intent as string,
+          params.options as AIGeneratorOptions | undefined
+        )
 
       default:
         throw new Error(`Unknown method: ${method}`)
@@ -638,8 +956,8 @@ export class ShellDO extends DurableObject<Env> {
 /**
  * Create the appropriate executor based on available environment bindings
  */
-function createExecutor(env: Env, fs: FsCapability): BashExecutor {
-  // Create tiered executor with FSX integration
+function createExecutor(env: Env, fs?: FsCapability): BashExecutor {
+  // Create tiered executor with FSX integration (if available)
   return new TieredExecutor({
     fs,
     // RPC bindings can be added here for Tier 2 services
