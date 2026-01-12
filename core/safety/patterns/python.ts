@@ -12,18 +12,16 @@
  */
 
 import type { SafetyClassification } from '../../types.js'
+import {
+  type DetectedPattern,
+  type PatternDefinition,
+  detectPatterns,
+  getHighestImpact,
+  buildReasonString,
+} from './shared.js'
 
-/**
- * A detected safety pattern in Python code.
- */
-export interface DetectedPattern {
-  /** Pattern type identifier (e.g., 'eval', 'system', 'pickle') */
-  type: string
-  /** Impact level of the pattern */
-  impact: 'low' | 'medium' | 'high' | 'critical'
-  /** The matched code snippet */
-  match?: string
-}
+// Re-export DetectedPattern for backwards compatibility
+export type { DetectedPattern }
 
 /**
  * Result of Python safety analysis.
@@ -37,18 +35,6 @@ export interface PythonSafetyAnalysis {
   imports: string[]
   /** Whether the code contains inline execution (-c flag) */
   hasInlineCode: boolean
-}
-
-/**
- * Pattern definition for Python safety analysis.
- */
-interface PatternDefinition {
-  /** Pattern type identifier */
-  type: string
-  /** Regex pattern to match */
-  pattern: RegExp
-  /** Impact level */
-  impact: 'low' | 'medium' | 'high' | 'critical'
 }
 
 /**
@@ -74,16 +60,6 @@ const PYTHON_PATTERNS: PatternDefinition[] = [
 
   // File operations - medium
   { type: 'file_write', pattern: /\bopen\s*\([^)]*,\s*['"][wa]/, impact: 'medium' },
-]
-
-/**
- * Impact level ordering from lowest to highest severity.
- */
-const IMPACT_ORDER: Array<'low' | 'medium' | 'high' | 'critical'> = [
-  'low',
-  'medium',
-  'high',
-  'critical',
 ]
 
 /**
@@ -122,24 +98,6 @@ function determineType(
 }
 
 /**
- * Builds a human-readable reason string from detected patterns.
- */
-function buildReason(patterns: DetectedPattern[]): string {
-  if (patterns.length === 0) {
-    return 'No dangerous patterns detected'
-  }
-
-  const patternNames = patterns.map((p) => p.type)
-  const uniqueNames = [...new Set(patternNames)]
-
-  if (uniqueNames.length === 1) {
-    return `Detected ${uniqueNames[0]} pattern`
-  }
-
-  return `Detected patterns: ${uniqueNames.join(', ')}`
-}
-
-/**
  * Analyzes Python code for safety patterns.
  *
  * Detects dangerous operations such as:
@@ -159,7 +117,6 @@ function buildReason(patterns: DetectedPattern[]): string {
  * ```
  */
 export function analyzePythonSafety(code: string): PythonSafetyAnalysis {
-  const patterns: DetectedPattern[] = []
   const imports: string[] = []
 
   // Extract imports (both 'import x' and 'from x import y' forms)
@@ -168,27 +125,11 @@ export function analyzePythonSafety(code: string): PythonSafetyAnalysis {
     imports.push(match[1])
   }
 
-  // Check patterns
-  for (const p of PYTHON_PATTERNS) {
-    const matchResult = code.match(p.pattern)
-    if (matchResult) {
-      patterns.push({
-        type: p.type,
-        impact: p.impact,
-        match: matchResult[0],
-      })
-    }
-  }
+  // Detect patterns using shared utility
+  const patterns = detectPatterns(code, PYTHON_PATTERNS)
 
-  // Determine max impact level
-  const maxImpact: 'low' | 'medium' | 'high' | 'critical' =
-    patterns.length > 0
-      ? patterns.reduce((max, p) => {
-          return IMPACT_ORDER.indexOf(p.impact) > IMPACT_ORDER.indexOf(max)
-            ? p.impact
-            : max
-        }, 'low' as 'low' | 'medium' | 'high' | 'critical')
-      : 'low'
+  // Determine max impact level using shared utility
+  const maxImpact = getHighestImpact(patterns)
 
   // Determine classification type
   const type = determineType(patterns)
@@ -198,7 +139,7 @@ export function analyzePythonSafety(code: string): PythonSafetyAnalysis {
       type,
       impact: maxImpact,
       reversible: false,
-      reason: buildReason(patterns),
+      reason: buildReasonString(patterns),
     },
     patterns,
     imports,

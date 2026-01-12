@@ -12,18 +12,16 @@
  */
 
 import type { SafetyClassification } from '../../types.js'
+import {
+  type DetectedPattern,
+  type PatternDefinition,
+  type ImpactLevel,
+  detectPatterns,
+  getHighestImpact,
+} from './shared.js'
 
-/**
- * A detected safety pattern in Node.js code.
- */
-export interface DetectedPattern {
-  /** Pattern type identifier (e.g., 'eval', 'prototype_pollution', 'child_process') */
-  type: string
-  /** Impact level of the pattern */
-  impact: 'low' | 'medium' | 'high' | 'critical'
-  /** The matched code snippet */
-  match?: string
-}
+// Re-export DetectedPattern for backwards compatibility
+export type { DetectedPattern }
 
 /**
  * Result of Node.js safety analysis.
@@ -40,19 +38,9 @@ export interface NodeSafetyAnalysis {
 }
 
 /**
- * Pattern definitions for Node.js safety analysis.
- * Each pattern has a type, regex, and impact level.
- */
-interface PatternDef {
-  type: string
-  pattern: RegExp
-  impact: 'low' | 'medium' | 'high' | 'critical'
-}
-
-/**
  * Node.js danger patterns ordered by severity.
  */
-const NODE_PATTERNS: PatternDef[] = [
+const NODE_PATTERNS: PatternDefinition[] = [
   // Code eval - critical
   { type: 'eval', pattern: /\beval\s*\(/, impact: 'critical' },
   { type: 'function_constructor', pattern: /new\s+Function\s*\(/, impact: 'critical' },
@@ -120,34 +108,24 @@ const STANDALONE_CHILD_PROCESS_CALL = /(?:^|[^.\w])(exec|spawn|fork|execFile)\s*
  * ```
  */
 export function analyzeNodeSafety(code: string): NodeSafetyAnalysis {
-  const patterns: DetectedPattern[] = []
   const requires: string[] = []
   let hasPrototypePollution = false
 
   // Extract all require statements with string literals
   let match: RegExpExecArray | null
-  while ((match = REQUIRE_PATTERN.exec(code)) !== null) {
+  const requirePattern = new RegExp(REQUIRE_PATTERN.source, 'g')
+  while ((match = requirePattern.exec(code)) !== null) {
     const moduleName = match[1]
     if (!requires.includes(moduleName)) {
       requires.push(moduleName)
     }
   }
 
-  // Check all danger patterns
-  for (const def of NODE_PATTERNS) {
-    const patternMatch = def.pattern.exec(code)
-    if (patternMatch) {
-      patterns.push({
-        type: def.type,
-        impact: def.impact,
-        match: patternMatch[0],
-      })
+  // Detect patterns using shared utility
+  const patterns = detectPatterns(code, NODE_PATTERNS)
 
-      if (def.type === 'prototype_pollution') {
-        hasPrototypePollution = true
-      }
-    }
-  }
+  // Check for prototype pollution in detected patterns
+  hasPrototypePollution = patterns.some((p) => p.type === 'prototype_pollution')
 
   // Check for destructured child_process calls
   // Pattern: const { exec } = require('child_process'); exec(...)
@@ -169,23 +147,16 @@ export function analyzeNodeSafety(code: string): NodeSafetyAnalysis {
   }
 
   // Determine highest impact level from patterns and dangerous modules
-  let highestImpact: 'none' | 'low' | 'medium' | 'high' | 'critical' = 'low'
+  let highestImpact: ImpactLevel = getHighestImpact(patterns)
   let operationType: SafetyClassification['type'] = 'read'
   let reversible = true
 
   // Check if any dangerous modules are required
   const hasDangerousModule = requires.some((m) => DANGEROUS_MODULES.has(m))
 
-  // Determine impact from detected patterns
-  for (const p of patterns) {
-    if (p.impact === 'critical') {
-      highestImpact = 'critical'
-      reversible = false
-    } else if (p.impact === 'high' && highestImpact !== 'critical') {
-      highestImpact = 'high'
-    } else if (p.impact === 'medium' && highestImpact !== 'critical' && highestImpact !== 'high') {
-      highestImpact = 'medium'
-    }
+  // Adjust reversibility based on impact
+  if (highestImpact === 'critical') {
+    reversible = false
   }
 
   // If dangerous module is required but no high impact pattern detected yet, set to high

@@ -11,18 +11,14 @@
  */
 
 import type { SafetyClassification } from '../../types.js'
+import {
+  type DetectedPattern,
+  type PatternDefinition,
+  detectPatterns,
+} from './shared.js'
 
-/**
- * A detected safety pattern in Ruby code.
- */
-export interface DetectedPattern {
-  /** Pattern type identifier (e.g., 'eval', 'system', 'binding_eval') */
-  type: string
-  /** Impact level of the pattern */
-  impact: 'low' | 'medium' | 'high' | 'critical'
-  /** The matched code snippet */
-  match?: string
-}
+// Re-export DetectedPattern for backwards compatibility
+export type { DetectedPattern }
 
 /**
  * Result of Ruby safety analysis.
@@ -37,19 +33,17 @@ export interface RubySafetyAnalysis {
 }
 
 /**
- * Pattern definitions for Ruby safety analysis.
+ * Extended pattern definition for Ruby safety analysis.
+ * Includes classification type for building the final classification.
  */
-interface PatternDef {
-  type: string
-  pattern: RegExp
-  impact: 'low' | 'medium' | 'high' | 'critical'
+interface RubyPatternDefinition extends PatternDefinition {
   classificationType: 'execute' | 'system'
 }
 
 /**
  * Ruby safety patterns organized by impact level.
  */
-const RUBY_PATTERNS: PatternDef[] = [
+const RUBY_PATTERNS: RubyPatternDefinition[] = [
   // eval family - critical impact (code execution)
   { type: 'eval', pattern: /\beval\s*\(/, impact: 'critical', classificationType: 'execute' },
   { type: 'instance_eval', pattern: /\.instance_eval\s*\(/, impact: 'critical', classificationType: 'execute' },
@@ -91,26 +85,17 @@ const REQUIRE_PATTERN = /\brequire\s+["']([^"']+)["']/g
  * ```
  */
 export function analyzeRubySafety(code: string): RubySafetyAnalysis {
-  const patterns: DetectedPattern[] = []
   const requires: string[] = []
 
   // Extract require statements
   let requireMatch: RegExpExecArray | null
-  while ((requireMatch = REQUIRE_PATTERN.exec(code)) !== null) {
+  const requirePattern = new RegExp(REQUIRE_PATTERN.source, 'g')
+  while ((requireMatch = requirePattern.exec(code)) !== null) {
     requires.push(requireMatch[1])
   }
 
-  // Detect dangerous patterns
-  for (const patternDef of RUBY_PATTERNS) {
-    const match = patternDef.pattern.exec(code)
-    if (match) {
-      patterns.push({
-        type: patternDef.type,
-        impact: patternDef.impact,
-        match: match[0],
-      })
-    }
-  }
+  // Detect dangerous patterns using shared utility
+  const patterns = detectPatterns(code, RUBY_PATTERNS)
 
   // Determine overall classification based on detected patterns
   const classification = buildClassification(patterns)
