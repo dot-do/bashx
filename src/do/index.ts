@@ -686,8 +686,22 @@ export interface WithBashCapability {
 
 /**
  * Constructor type helper for mixin composition.
+ *
+ * Uses `unknown[]` instead of `any[]` for better type safety.
+ * This ensures that constructor arguments are properly typed when
+ * using the mixin pattern with classes that have constructor parameters.
  */
-export type Constructor<T = object> = new (...args: any[]) => T
+export type Constructor<T = object> = new (...args: unknown[]) => T
+
+/**
+ * Internal type for mixin class extension.
+ * TypeScript requires `any[]` for mixin constructor patterns due to
+ * TS2545: "A mixin class must have a constructor with a single rest parameter of type 'any[]'".
+ * This is used internally while keeping the public Constructor type stricter.
+ *
+ * @internal
+ */
+type MixinConstructor<T = object> = new (...args: any[]) => T
 
 /**
  * Configuration for the withBash mixin.
@@ -819,8 +833,12 @@ export function withBash<TBase extends Constructor>(
   const normalizedConfig: WithBashConfig<TBase> =
     typeof config === 'function' ? { executor: config } : config
 
+  // Cast to MixinConstructor to satisfy TypeScript's mixin requirements (TS2545)
+  // This is safe because we're only using it for the extends clause
+  const MixinBase = Base as unknown as MixinConstructor
+
   // Use abstract class to properly type the mixin
-  abstract class BashMixin extends Base implements WithBashCapability {
+  abstract class BashMixin extends MixinBase implements WithBashCapability {
     private _bashModule?: BashModule
 
     get bash(): BashModule {

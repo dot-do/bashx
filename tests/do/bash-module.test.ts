@@ -542,6 +542,52 @@ describe('withBash type exports', () => {
     expect(instance.value).toBe('test')
   })
 
+  it('should work with Constructor type for classes with constructor arguments', () => {
+    // This test verifies that Constructor<T> works correctly with unknown[] args
+    // The type should accept classes that have constructor parameters
+
+    class ClassWithArgs {
+      name: string
+      count: number
+      constructor(name: string, count: number) {
+        this.name = name
+        this.count = count
+      }
+    }
+
+    // Constructor type should work as a constraint for mixin functions
+    function applyMixin<TBase extends Constructor>(Base: TBase) {
+      return class extends Base {
+        mixed = true
+      }
+    }
+
+    const MixedClass = applyMixin(ClassWithArgs)
+    const instance = new MixedClass('test', 42)
+
+    expect(instance.name).toBe('test')
+    expect(instance.count).toBe(42)
+    expect(instance.mixed).toBe(true)
+  })
+
+  it('should preserve constructor argument types through mixin composition', () => {
+    // Verifies that Constructor type correctly handles argument passing
+    class ConfigurableClass {
+      config: { enabled: boolean }
+      constructor(config: { enabled: boolean }) {
+        this.config = config
+      }
+    }
+
+    const executor = createMockExecutor()
+    const MixedClass = withBash(ConfigurableClass, () => executor)
+
+    const instance = new MixedClass({ enabled: true })
+
+    expect(instance.config.enabled).toBe(true)
+    expect(instance.bash).toBeInstanceOf(BashModule)
+  })
+
   it('should correctly type the result of withBash', () => {
     class BaseClass {
       baseMethod() {
