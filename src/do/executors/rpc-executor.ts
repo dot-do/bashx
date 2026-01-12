@@ -101,6 +101,154 @@ export interface RpcResponsePayload {
 }
 
 // ============================================================================
+// RPC RESPONSE VALIDATION
+// ============================================================================
+
+/**
+ * Error thrown when RPC response validation fails.
+ *
+ * This error is thrown when the response from an RPC service
+ * does not match the expected RpcResponsePayload structure.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   const response = parseRpcResponse(data)
+ * } catch (error) {
+ *   if (error instanceof RpcResponseError) {
+ *     console.error('Invalid response:', error.received)
+ *   }
+ * }
+ * ```
+ */
+export class RpcResponseError extends Error {
+  /** The invalid data that was received */
+  public readonly received: unknown
+
+  constructor(message: string, received: unknown) {
+    super(message)
+    this.name = 'RpcResponseError'
+    this.received = received
+    // Maintain proper prototype chain for instanceof checks
+    Object.setPrototypeOf(this, RpcResponseError.prototype)
+  }
+}
+
+/**
+ * Type guard to check if a value is a valid RpcResponsePayload.
+ *
+ * Validates that the value is an object with:
+ * - stdout: string
+ * - stderr: string
+ * - exitCode: number
+ *
+ * Extra properties are allowed (structural typing).
+ *
+ * @param value - The value to check
+ * @returns true if the value is a valid RpcResponsePayload
+ *
+ * @example
+ * ```typescript
+ * const data = await response.json()
+ * if (isRpcResponse(data)) {
+ *   // data is RpcResponsePayload
+ *   console.log(data.stdout)
+ * }
+ * ```
+ */
+export function isRpcResponse(value: unknown): value is RpcResponsePayload {
+  if (value === null || value === undefined) {
+    return false
+  }
+
+  if (typeof value !== 'object') {
+    return false
+  }
+
+  const obj = value as Record<string, unknown>
+
+  if (typeof obj.stdout !== 'string') {
+    return false
+  }
+
+  if (typeof obj.stderr !== 'string') {
+    return false
+  }
+
+  if (typeof obj.exitCode !== 'number') {
+    return false
+  }
+
+  return true
+}
+
+/**
+ * Parse and validate an RPC response.
+ *
+ * This function validates that the response matches the expected structure
+ * and throws a descriptive error if validation fails.
+ *
+ * @param value - The value to parse (typically from response.json())
+ * @returns The validated RpcResponsePayload
+ * @throws {RpcResponseError} If the response is invalid
+ *
+ * @example
+ * ```typescript
+ * const data = await response.json()
+ * const payload = parseRpcResponse(data)
+ * // payload is guaranteed to be RpcResponsePayload
+ * ```
+ */
+export function parseRpcResponse(value: unknown): RpcResponsePayload {
+  if (isRpcResponse(value)) {
+    return value
+  }
+
+  // Build a descriptive error message
+  let details = 'Invalid RPC response: '
+
+  if (value === null) {
+    details += 'received null'
+  } else if (value === undefined) {
+    details += 'received undefined'
+  } else if (typeof value !== 'object') {
+    details += `expected object, received ${typeof value}`
+  } else {
+    const obj = value as Record<string, unknown>
+    const missing: string[] = []
+    const wrongType: string[] = []
+
+    if (!('stdout' in obj)) {
+      missing.push('stdout')
+    } else if (typeof obj.stdout !== 'string') {
+      wrongType.push(`stdout (expected string, got ${typeof obj.stdout})`)
+    }
+
+    if (!('stderr' in obj)) {
+      missing.push('stderr')
+    } else if (typeof obj.stderr !== 'string') {
+      wrongType.push(`stderr (expected string, got ${typeof obj.stderr})`)
+    }
+
+    if (!('exitCode' in obj)) {
+      missing.push('exitCode')
+    } else if (typeof obj.exitCode !== 'number') {
+      wrongType.push(`exitCode (expected number, got ${typeof obj.exitCode})`)
+    }
+
+    if (missing.length > 0) {
+      details += `missing fields: ${missing.join(', ')}`
+    }
+    if (wrongType.length > 0) {
+      if (missing.length > 0) details += '; '
+      details += `wrong types: ${wrongType.join(', ')}`
+    }
+  }
+
+  throw new RpcResponseError(details, value)
+}
+
+// ============================================================================
 // DEFAULT SERVICES
 // ============================================================================
 
@@ -301,7 +449,8 @@ export class RpcExecutor implements TierExecutor {
         }
       }
 
-      return await response.json() as RpcResponsePayload
+      const data: unknown = await response.json()
+      return parseRpcResponse(data)
     } else {
       // Service binding with fetch method
       const response = await endpoint.fetch('/', {
@@ -319,7 +468,8 @@ export class RpcExecutor implements TierExecutor {
         }
       }
 
-      return await response.json() as RpcResponsePayload
+      const data: unknown = await response.json()
+      return parseRpcResponse(data)
     }
   }
 

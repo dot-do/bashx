@@ -1152,3 +1152,260 @@ describe('RpcExecutor ESM Module Integration', () => {
     })
   })
 })
+
+// ============================================================================
+// RPC Response Validation Tests
+// ============================================================================
+
+describe('RPC Response Validation', () => {
+  describe('isRpcResponse type guard', () => {
+    // Import the type guard - will fail until implemented
+    let isRpcResponse: (value: unknown) => value is RpcResponsePayload
+
+    beforeEach(async () => {
+      const module = await import('../../../src/do/executors/rpc-executor.js')
+      isRpcResponse = module.isRpcResponse
+    })
+
+    it('should return true for valid RpcResponsePayload', () => {
+      const validResponse = {
+        stdout: 'output',
+        stderr: '',
+        exitCode: 0,
+      }
+      expect(isRpcResponse(validResponse)).toBe(true)
+    })
+
+    it('should return true for response with non-zero exit code', () => {
+      const errorResponse = {
+        stdout: '',
+        stderr: 'error message',
+        exitCode: 1,
+      }
+      expect(isRpcResponse(errorResponse)).toBe(true)
+    })
+
+    it('should return false for null', () => {
+      expect(isRpcResponse(null)).toBe(false)
+    })
+
+    it('should return false for undefined', () => {
+      expect(isRpcResponse(undefined)).toBe(false)
+    })
+
+    it('should return false for non-object', () => {
+      expect(isRpcResponse('string')).toBe(false)
+      expect(isRpcResponse(42)).toBe(false)
+      expect(isRpcResponse(true)).toBe(false)
+    })
+
+    it('should return false for missing stdout', () => {
+      const missingStdout = {
+        stderr: '',
+        exitCode: 0,
+      }
+      expect(isRpcResponse(missingStdout)).toBe(false)
+    })
+
+    it('should return false for missing stderr', () => {
+      const missingStderr = {
+        stdout: 'output',
+        exitCode: 0,
+      }
+      expect(isRpcResponse(missingStderr)).toBe(false)
+    })
+
+    it('should return false for missing exitCode', () => {
+      const missingExitCode = {
+        stdout: 'output',
+        stderr: '',
+      }
+      expect(isRpcResponse(missingExitCode)).toBe(false)
+    })
+
+    it('should return false for wrong stdout type', () => {
+      const wrongStdoutType = {
+        stdout: 123,
+        stderr: '',
+        exitCode: 0,
+      }
+      expect(isRpcResponse(wrongStdoutType)).toBe(false)
+    })
+
+    it('should return false for wrong stderr type', () => {
+      const wrongStderrType = {
+        stdout: 'output',
+        stderr: null,
+        exitCode: 0,
+      }
+      expect(isRpcResponse(wrongStderrType)).toBe(false)
+    })
+
+    it('should return false for wrong exitCode type', () => {
+      const wrongExitCodeType = {
+        stdout: 'output',
+        stderr: '',
+        exitCode: '0',
+      }
+      expect(isRpcResponse(wrongExitCodeType)).toBe(false)
+    })
+
+    it('should return true for response with extra properties', () => {
+      const extraProps = {
+        stdout: 'output',
+        stderr: '',
+        exitCode: 0,
+        duration: 100,
+        extra: 'field',
+      }
+      expect(isRpcResponse(extraProps)).toBe(true)
+    })
+  })
+
+  describe('parseRpcResponse function', () => {
+    let parseRpcResponse: (value: unknown) => RpcResponsePayload
+
+    beforeEach(async () => {
+      const module = await import('../../../src/do/executors/rpc-executor.js')
+      parseRpcResponse = module.parseRpcResponse
+    })
+
+    it('should return valid response as-is', () => {
+      const validResponse = {
+        stdout: 'output',
+        stderr: '',
+        exitCode: 0,
+      }
+      const result = parseRpcResponse(validResponse)
+      expect(result).toEqual(validResponse)
+    })
+
+    it('should throw RpcResponseError for invalid response', () => {
+      const invalidResponse = {
+        stdout: 'output',
+        // missing stderr and exitCode
+      }
+      expect(() => parseRpcResponse(invalidResponse)).toThrow()
+    })
+
+    it('should throw with descriptive error message for null', () => {
+      expect(() => parseRpcResponse(null)).toThrow(/invalid.*response/i)
+    })
+
+    it('should throw with descriptive error message for missing fields', () => {
+      const missingFields = { stdout: 'output' }
+      expect(() => parseRpcResponse(missingFields)).toThrow()
+    })
+
+    it('should throw with descriptive error message for wrong types', () => {
+      const wrongTypes = {
+        stdout: 123,
+        stderr: '',
+        exitCode: 0,
+      }
+      expect(() => parseRpcResponse(wrongTypes)).toThrow()
+    })
+  })
+
+  describe('RpcResponseError class', () => {
+    let RpcResponseError: new (message: string, received: unknown) => Error & { received: unknown }
+
+    beforeEach(async () => {
+      const module = await import('../../../src/do/executors/rpc-executor.js')
+      RpcResponseError = module.RpcResponseError
+    })
+
+    it('should be an instance of Error', () => {
+      const error = new RpcResponseError('test message', null)
+      expect(error).toBeInstanceOf(Error)
+    })
+
+    it('should have correct error name', () => {
+      const error = new RpcResponseError('test message', null)
+      expect(error.name).toBe('RpcResponseError')
+    })
+
+    it('should store received value', () => {
+      const received = { invalid: 'data' }
+      const error = new RpcResponseError('test message', received)
+      expect(error.received).toBe(received)
+    })
+
+    it('should have descriptive message', () => {
+      const error = new RpcResponseError('Invalid RPC response', null)
+      expect(error.message).toBe('Invalid RPC response')
+    })
+  })
+
+  describe('RpcExecutor response validation integration', () => {
+    let executor: RpcExecutor
+    let mockFetch: Mock
+
+    beforeEach(() => {
+      mockFetch = vi.fn()
+      globalThis.fetch = mockFetch
+      executor = new RpcExecutor()
+    })
+
+    it('should throw RpcResponseError for malformed JSON response', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            // Missing required fields
+            data: 'something',
+          }),
+          { status: 200 }
+        )
+      )
+
+      await expect(executor.execute('jq .name')).rejects.toThrow(/invalid.*rpc.*response/i)
+    })
+
+    it('should throw RpcResponseError for wrong field types', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 123, // Should be string
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await expect(executor.execute('jq .name')).rejects.toThrow(/invalid.*rpc.*response/i)
+    })
+
+    it('should handle valid response correctly', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'valid output',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('jq .name')
+      expect(result.stdout).toBe('valid output')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('should include received value in error for debugging', async () => {
+      const invalidData = { bad: 'data' }
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(invalidData), { status: 200 })
+      )
+
+      try {
+        await executor.execute('jq .name')
+        expect.fail('Should have thrown')
+      } catch (error) {
+        // The error should wrap an RpcResponseError that contains the received value
+        expect(error).toBeInstanceOf(Error)
+      }
+    })
+  })
+})

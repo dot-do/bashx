@@ -15,7 +15,7 @@
  */
 
 import type { BashExecutor } from './index.js'
-import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle, FsCapability } from '../types.js'
+import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle, TypedFsCapability } from '../types.js'
 import {
   executeBc,
   executeExpr,
@@ -121,7 +121,8 @@ import {
   PolyglotExecutor,
   type LanguageBinding,
 } from './executors/polyglot-executor.js'
-import type { TierExecutor, LanguageExecutor } from './executors/types.js'
+import type { TierExecutor, LanguageExecutor, TieredExecutorInternal } from './executors/types.js'
+import { parseRpcResponse } from './executors/rpc-executor.js'
 import { PipelineExecutor } from './pipeline/index.js'
 
 // ============================================================================
@@ -209,7 +210,7 @@ export interface TieredExecutorConfig {
    * Tier 1: Native filesystem capability for in-Worker operations.
    * When provided, simple file operations (cat, ls, etc.) are executed natively.
    */
-  fs?: FsCapability
+  fs?: TypedFsCapability
 
   /**
    * Tier 2: RPC service bindings for external services.
@@ -469,14 +470,17 @@ const TIER_4_SANDBOX_COMMANDS = new Set([
  * These adapters implement TierExecutor and delegate to the TieredExecutor's
  * internal methods, enabling polymorphic dispatch from TierClassification.
  *
+ * The adapters use the TieredExecutorInternal interface to access tier
+ * execution methods in a type-safe manner, avoiding the need for `as any` casts.
+ *
  * @internal
  */
 abstract class ExecutorAdapter implements TierExecutor {
-  protected readonly tieredExecutor: TieredExecutor
+  protected readonly executor: TieredExecutorInternal
   protected readonly classification: TierClassification
 
-  constructor(tieredExecutor: TieredExecutor, classification: TierClassification) {
-    this.tieredExecutor = tieredExecutor
+  constructor(executor: TieredExecutorInternal, classification: TierClassification) {
+    this.executor = executor
     this.classification = classification
   }
 
@@ -495,8 +499,7 @@ class NativeExecutorAdapter extends ExecutorAdapter {
   }
 
   async execute(command: string, options?: ExecOptions): Promise<BashResult> {
-    // Access the private method via any cast - this is internal implementation
-    return (this.tieredExecutor as any).executeTier1(command, this.classification, options)
+    return this.executor.executeTier1(command, this.classification, options)
   }
 }
 
@@ -510,7 +513,7 @@ class RpcExecutorAdapter extends ExecutorAdapter {
   }
 
   async execute(command: string, options?: ExecOptions): Promise<BashResult> {
-    return (this.tieredExecutor as any).executeTier2(command, this.classification, options)
+    return this.executor.executeTier2(command, this.classification, options)
   }
 }
 
@@ -524,7 +527,7 @@ class LoaderExecutorAdapter extends ExecutorAdapter {
   }
 
   async execute(command: string, options?: ExecOptions): Promise<BashResult> {
-    return (this.tieredExecutor as any).executeTier3(command, this.classification, options)
+    return this.executor.executeTier3(command, this.classification, options)
   }
 }
 
@@ -538,7 +541,7 @@ class SandboxExecutorAdapter extends ExecutorAdapter {
   }
 
   async execute(command: string, options?: ExecOptions): Promise<BashResult> {
-    return (this.tieredExecutor as any).executeTier4(command, this.classification, options)
+    return this.executor.executeTier4(command, this.classification, options)
   }
 }
 
@@ -552,7 +555,7 @@ class PolyglotExecutorAdapter extends ExecutorAdapter {
   }
 
   async execute(command: string, options?: ExecOptions): Promise<BashResult> {
-    return (this.tieredExecutor as any).executePolyglot(command, this.classification, options)
+    return this.executor.executePolyglot(command, this.classification, options)
   }
 }
 
@@ -655,7 +658,7 @@ export interface TierMetrics {
 }
 
 export class TieredExecutor implements BashExecutor {
-  private readonly fs?: FsCapability
+  private readonly fs?: TypedFsCapability
   private readonly rpcBindings: Record<string, RpcServiceBinding>
   private readonly workerLoaders: Record<string, WorkerLoaderBinding>
   private readonly sandbox?: SandboxBinding
@@ -874,27 +877,50 @@ export class TieredExecutor implements BashExecutor {
   private withExecutor(classification: Omit<TierClassification, 'executor'>): TierClassification {
     let executor: TierExecutor | LanguageExecutor | undefined
 
+    // Cast this to TieredExecutorInternal for type-safe access to tier methods.
+    // This is safe because TieredExecutor implements all required methods.
+    const internal = this.asInternal()
+
     switch (classification.handler) {
       case 'native':
-        executor = new NativeExecutorAdapter(this, classification as TierClassification)
+        executor = new NativeExecutorAdapter(internal, classification as TierClassification)
         break
       case 'rpc':
-        executor = new RpcExecutorAdapter(this, classification as TierClassification)
+        executor = new RpcExecutorAdapter(internal, classification as TierClassification)
         break
       case 'loader':
-        executor = new LoaderExecutorAdapter(this, classification as TierClassification)
+        executor = new LoaderExecutorAdapter(internal, classification as TierClassification)
         break
       case 'sandbox':
-        executor = new SandboxExecutorAdapter(this, classification as TierClassification)
+        executor = new SandboxExecutorAdapter(internal, classification as TierClassification)
         break
       case 'polyglot':
-        executor = new PolyglotExecutorAdapter(this, classification as TierClassification)
+        executor = new PolyglotExecutorAdapter(internal, classification as TierClassification)
         break
     }
 
     return {
       ...classification,
       executor,
+    }
+  }
+
+  /**
+   * Get a type-safe internal interface for adapter access.
+   *
+   * This method provides a typed reference to the tier execution methods,
+   * enabling adapters to call them without using `as any` casts.
+   *
+   * @returns TieredExecutorInternal interface for type-safe method access
+   * @internal
+   */
+  private asInternal(): TieredExecutorInternal {
+    return {
+      executeTier1: this.executeTier1.bind(this),
+      executeTier2: this.executeTier2.bind(this),
+      executeTier3: this.executeTier3.bind(this),
+      executeTier4: this.executeTier4.bind(this),
+      executePolyglot: this.executePolyglot.bind(this),
     }
   }
 
@@ -1235,7 +1261,7 @@ export class TieredExecutor implements BashExecutor {
       const actualCommand = redirectMatch[1].trim()
       const inputFile = redirectMatch[2]
       try {
-        const inputContent = await this.fs.read(inputFile, { encoding: 'utf-8' }) as string
+        const inputContent = await this.fs.read(inputFile, { encoding: 'utf-8' })
         return this.execute(actualCommand, { ...options, stdin: inputContent })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -1528,7 +1554,7 @@ export class TieredExecutor implements BashExecutor {
             const results: string[] = []
             for (let fi = 0; fi < headFiles.length; fi++) {
               const file = headFiles[fi]
-              const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
+              const content = await this.fs.read(file, { encoding: 'utf-8' })
               const fileLines = content.split('\n')
               let selectedLines: string[]
               if (headExcludeLast) {
@@ -1594,7 +1620,7 @@ export class TieredExecutor implements BashExecutor {
             const results: string[] = []
             for (let fi = 0; fi < tailFiles.length; fi++) {
               const file = tailFiles[fi]
-              const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
+              const content = await this.fs.read(file, { encoding: 'utf-8' })
               const allLines = content.split('\n')
               const effectiveLines = allLines[allLines.length - 1] === '' ? allLines.slice(0, -1) : allLines
               let selectedLines: string[]
@@ -1854,7 +1880,7 @@ export class TieredExecutor implements BashExecutor {
           const grepResults: string[] = []
           let grepMatchFound = false
           const grepProcessFile = async (filePath: string) => {
-            const grepContent = await this.fs!.read(filePath, { encoding: 'utf-8' }) as string
+            const grepContent = await this.fs!.read(filePath, { encoding: 'utf-8' })
             const grepFileLines = grepContent.split('\n')
             for (let lineNum = 0; lineNum < grepFileLines.length; lineNum++) {
               const line = grepFileLines[lineNum]
@@ -2270,7 +2296,7 @@ export class TieredExecutor implements BashExecutor {
           let input: string
           if (file) {
             if (this.fs) {
-              input = (await this.fs.read(file, { encoding: 'utf-8' })) as string
+              input = (await this.fs.read(file, { encoding: 'utf-8' }))
             } else {
               throw new Error(`ENOENT: no such file: ${file}`)
             }
@@ -2291,7 +2317,7 @@ export class TieredExecutor implements BashExecutor {
           let input: string
           if (file) {
             if (this.fs) {
-              input = (await this.fs.read(file, { encoding: 'utf-8' })) as string
+              input = (await this.fs.read(file, { encoding: 'utf-8' }))
             } else {
               throw new Error(`ENOENT: no such file: ${file}`)
             }
@@ -2312,7 +2338,7 @@ export class TieredExecutor implements BashExecutor {
           let input: string
           if (file) {
             if (this.fs) {
-              input = (await this.fs.read(file, { encoding: 'utf-8' })) as string
+              input = (await this.fs.read(file, { encoding: 'utf-8' }))
             } else {
               throw new Error(`ENOENT: no such file: ${file}`)
             }
@@ -2341,7 +2367,7 @@ export class TieredExecutor implements BashExecutor {
           let input: string
           if (inputRedirect) {
             if (this.fs) {
-              input = (await this.fs.read(inputRedirect, { encoding: 'utf-8' })) as string
+              input = (await this.fs.read(inputRedirect, { encoding: 'utf-8' }))
             } else {
               throw new Error(`ENOENT: no such file: ${inputRedirect}`)
             }
@@ -2619,7 +2645,7 @@ export class TieredExecutor implements BashExecutor {
           const files = args.filter(a => !a.startsWith('-') && !a.startsWith('s/') && !a.startsWith("'") && !a.startsWith('"'))
           let content = input
           if (files.length > 0 && this.fs) {
-            content = await this.fs.read(files[files.length - 1], { encoding: 'utf-8' }) as string
+            content = await this.fs.read(files[files.length - 1], { encoding: 'utf-8' })
           }
           const result = executeSed(args, content, this.fs)
           return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
@@ -2632,7 +2658,7 @@ export class TieredExecutor implements BashExecutor {
           const nonFlagArgs = args.filter(a => !a.startsWith('-'))
           if (nonFlagArgs.length > 1 && this.fs) {
             // Last arg is file
-            content = await this.fs.read(nonFlagArgs[nonFlagArgs.length - 1], { encoding: 'utf-8' }) as string
+            content = await this.fs.read(nonFlagArgs[nonFlagArgs.length - 1], { encoding: 'utf-8' })
           }
           const result = executeAwk(args, content)
           return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
@@ -2642,8 +2668,8 @@ export class TieredExecutor implements BashExecutor {
           // diff requires two file contents
           const diffFiles = args.filter(a => !a.startsWith('-'))
           if (diffFiles.length >= 2 && this.fs) {
-            const file1Content = await this.fs.read(diffFiles[0], { encoding: 'utf-8' }) as string
-            const file2Content = await this.fs.read(diffFiles[1], { encoding: 'utf-8' }) as string
+            const file1Content = await this.fs.read(diffFiles[0], { encoding: 'utf-8' })
+            const file2Content = await this.fs.read(diffFiles[1], { encoding: 'utf-8' })
             const unified = args.includes('-u') || args.includes('--unified')
             const context = args.includes('-c') || args.includes('--context')
             const result = executeDiff(file1Content, file2Content, diffFiles[0], diffFiles[1], { unified, context })
@@ -2684,7 +2710,7 @@ export class TieredExecutor implements BashExecutor {
           let originalContent = ''
           if (targetFile && this.fs) {
             try {
-              originalContent = await this.fs.read(targetFile, { encoding: 'utf-8' }) as string
+              originalContent = await this.fs.read(targetFile, { encoding: 'utf-8' })
             } catch {
               // File might not exist, continue with empty
             }
@@ -3203,7 +3229,7 @@ export class TieredExecutor implements BashExecutor {
             // Read from files
             const contents: string[] = []
             for (const file of files) {
-              const content = await this.fs.read(file, { encoding: 'utf-8' }) as string
+              const content = await this.fs.read(file, { encoding: 'utf-8' })
               contents.push(content)
             }
             input = contents.join('')
@@ -3323,7 +3349,8 @@ export class TieredExecutor implements BashExecutor {
           return this.createResult(command, '', `RPC error: ${errorText}`, 1, 2)
         }
 
-        const result = await response.json() as { stdout: string; stderr: string; exitCode: number }
+        const data: unknown = await response.json()
+        const result = parseRpcResponse(data)
         return this.createResult(command, result.stdout, result.stderr, result.exitCode, 2)
       }
 
@@ -3344,7 +3371,8 @@ export class TieredExecutor implements BashExecutor {
         return this.createResult(command, '', `RPC error: ${errorText}`, 1, 2)
       }
 
-      const result = await response.json() as { stdout: string; stderr: string; exitCode: number }
+      const httpData: unknown = await response.json()
+      const result = parseRpcResponse(httpData)
       return this.createResult(command, result.stdout, result.stderr, result.exitCode, 2)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
