@@ -29,6 +29,8 @@ export default defineConfig({
       'src/remote/**/*.test.ts',
       // NPM registry client tests
       'src/npmx/**/*.test.ts',
+      // Core package tests (pure library, no Cloudflare dependencies)
+      'core/**/*.test.ts',
       // Core package architecture tests
       'test/core/**/*.test.ts',
       // Infrastructure tests (FSX binding, etc.)
