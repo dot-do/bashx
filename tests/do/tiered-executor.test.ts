@@ -1445,3 +1445,270 @@ print("Hello, World!")
     })
   })
 })
+
+// ============================================================================
+// CACHING AND METRICS TESTS
+// ============================================================================
+
+describe('TieredExecutor - Caching and Metrics', () => {
+  describe('Classification Caching', () => {
+    it('caches classification results for the same command name', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // First call should be a cache miss
+      const classification1 = executor.classifyCommand('echo hello')
+      const metrics1 = executor.getMetrics()
+      expect(metrics1.cacheMisses).toBe(1)
+      expect(metrics1.cacheHits).toBe(0)
+
+      // Second call with same command name should be a cache hit
+      const classification2 = executor.classifyCommand('echo world')
+      const metrics2 = executor.getMetrics()
+      expect(metrics2.cacheHits).toBe(1)
+      expect(metrics2.cacheMisses).toBe(1)
+
+      // Classifications should be the same (same command type)
+      expect(classification1.tier).toBe(classification2.tier)
+      expect(classification1.handler).toBe(classification2.handler)
+      expect(classification1.capability).toBe(classification2.capability)
+    })
+
+    it('caches by command name only for most commands', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // Different arguments but same command should hit cache
+      executor.classifyCommand('ls -la')
+      executor.classifyCommand('ls -R')
+      executor.classifyCommand('ls /tmp')
+
+      const metrics = executor.getMetrics()
+      expect(metrics.cacheMisses).toBe(1)
+      expect(metrics.cacheHits).toBe(2)
+    })
+
+    it('uses full command as cache key for npm commands', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // npm view should be native
+      executor.classifyCommand('npm view lodash')
+      // npm install should be RPC (different classification)
+      executor.classifyCommand('npm install lodash')
+
+      const metrics = executor.getMetrics()
+      // Both should be cache misses since npm uses full command as key
+      expect(metrics.cacheMisses).toBe(2)
+    })
+
+    it('clearCaches resets the classification cache', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // Populate cache
+      executor.classifyCommand('echo hello')
+      executor.classifyCommand('echo hello')
+      expect(executor.getMetrics().cacheHits).toBe(1)
+
+      // Clear and verify
+      executor.clearCaches()
+      const stats = executor.getCacheStats()
+      expect(stats.classificationCacheSize).toBe(0)
+
+      // Should be a cache miss now
+      executor.classifyCommand('echo hello')
+      expect(executor.getMetrics().cacheMisses).toBe(2)
+    })
+  })
+
+  describe('Metrics Collection', () => {
+    it('tracks metrics only when enabled', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+
+      // Metrics disabled by default
+      executor.classifyCommand('echo hello')
+      const metrics1 = executor.getMetrics()
+      expect(metrics1.totalClassifications).toBe(0)
+
+      // Enable metrics
+      executor.enableMetrics()
+      executor.classifyCommand('echo world')
+      const metrics2 = executor.getMetrics()
+      expect(metrics2.totalClassifications).toBe(1)
+    })
+
+    it('tracks tier counts correctly', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // Tier 1 commands
+      executor.classifyCommand('echo hello')
+      executor.classifyCommand('cat /test.txt')
+      executor.classifyCommand('date')
+
+      // Tier 2 RPC command
+      executor.classifyCommand('git status')
+
+      // Tier 4 sandbox command
+      executor.classifyCommand('docker ps')
+
+      const metrics = executor.getMetrics()
+      expect(metrics.tierCounts[1]).toBe(3)
+      expect(metrics.tierCounts[2]).toBe(1)
+      expect(metrics.tierCounts[4]).toBe(1)
+    })
+
+    it('tracks handler counts correctly', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      executor.classifyCommand('echo hello')
+      executor.classifyCommand('cat /test.txt')
+      executor.classifyCommand('git status')
+      executor.classifyCommand('docker ps')
+
+      const metrics = executor.getMetrics()
+      expect(metrics.handlerCounts['native']).toBe(2)
+      expect(metrics.handlerCounts['rpc']).toBe(1)
+      expect(metrics.handlerCounts['sandbox']).toBe(1)
+    })
+
+    it('calculates cache hit ratio correctly', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // 4 classifications: 2 unique commands, 2 cache hits
+      executor.classifyCommand('echo hello')
+      executor.classifyCommand('echo world')  // cache hit
+      executor.classifyCommand('date')
+      executor.classifyCommand('date +%Y')    // cache hit
+
+      const metrics = executor.getMetrics()
+      expect(metrics.cacheHits).toBe(2)
+      expect(metrics.cacheMisses).toBe(2)
+      expect(metrics.cacheHitRatio).toBe(0.5)
+    })
+
+    it('resetMetrics clears all counters', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      executor.classifyCommand('echo hello')
+      executor.classifyCommand('echo world')
+      executor.classifyCommand('git status')
+
+      executor.resetMetrics()
+      const metrics = executor.getMetrics()
+
+      expect(metrics.totalClassifications).toBe(0)
+      expect(metrics.cacheHits).toBe(0)
+      expect(metrics.cacheMisses).toBe(0)
+      expect(metrics.tierCounts[1]).toBe(0)
+      expect(metrics.tierCounts[2]).toBe(0)
+      expect(metrics.tierCounts[3]).toBe(0)
+      expect(metrics.tierCounts[4]).toBe(0)
+      expect(Object.keys(metrics.handlerCounts).length).toBe(0)
+    })
+
+    it('disableMetrics stops tracking', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+
+      executor.enableMetrics()
+      executor.classifyCommand('echo hello')
+      expect(executor.getMetrics().totalClassifications).toBe(1)
+
+      executor.disableMetrics()
+      executor.classifyCommand('date')
+      expect(executor.getMetrics().totalClassifications).toBe(1) // Still 1
+    })
+  })
+
+  describe('Language Detection Caching', () => {
+    it('caches language detection results', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      // Call detectLanguage twice with same input
+      const result1 = executor.detectLanguage('python -c "print(1)"')
+      const result2 = executor.detectLanguage('python -c "print(1)"')
+
+      // Both should return the same result
+      expect(result1.language).toBe(result2.language)
+      expect(result1.confidence).toBe(result2.confidence)
+
+      // Cache should have one entry
+      const stats = executor.getCacheStats()
+      expect(stats.languageDetectionCacheSize).toBe(1)
+    })
+
+    it('getCacheStats returns cache sizes', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+
+      // Populate caches
+      executor.classifyCommand('echo hello')
+      executor.classifyCommand('date')
+      executor.detectLanguage('python script.py')
+
+      const stats = executor.getCacheStats()
+      expect(stats.classificationCacheSize).toBe(2)
+      expect(stats.languageDetectionCacheSize).toBe(1)
+    })
+  })
+
+  describe('Cache Performance', () => {
+    it('handles many classifications without memory issues', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+      executor.enableMetrics()
+
+      // Generate many unique commands
+      const commands = ['echo', 'date', 'pwd', 'cat', 'ls', 'head', 'tail', 'wc', 'sort', 'uniq']
+      for (let i = 0; i < 100; i++) {
+        const cmd = commands[i % commands.length]
+        executor.classifyCommand(`${cmd} arg${i}`)
+      }
+
+      const metrics = executor.getMetrics()
+      // Most should be cache hits since commands repeat
+      expect(metrics.cacheHits).toBeGreaterThan(80)
+      expect(metrics.totalClassifications).toBe(100)
+    })
+  })
+})

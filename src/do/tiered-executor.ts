@@ -589,6 +589,71 @@ class PolyglotExecutorAdapter extends ExecutorAdapter {
  * await executor.execute('docker ps')
  * ```
  */
+/**
+ * LRU cache for tier classification results.
+ * Caches command-name-based classifications to avoid repeated lookups.
+ *
+ * @internal
+ */
+class ClassificationCache {
+  private readonly cache = new Map<string, TierClassification>()
+  private readonly maxSize: number
+
+  constructor(maxSize = 1000) {
+    this.maxSize = maxSize
+  }
+
+  get(key: string): TierClassification | undefined {
+    const value = this.cache.get(key)
+    if (value !== undefined) {
+      // Move to end for LRU behavior
+      this.cache.delete(key)
+      this.cache.set(key, value)
+    }
+    return value
+  }
+
+  set(key: string, value: TierClassification): void {
+    // Evict oldest entry if at capacity
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey)
+      }
+    }
+    this.cache.set(key, value)
+  }
+
+  clear(): void {
+    this.cache.clear()
+  }
+
+  get size(): number {
+    return this.cache.size
+  }
+}
+
+/**
+ * Metrics for tier usage tracking.
+ *
+ * Tracks execution counts and timing per tier to help with
+ * performance analysis and optimization decisions.
+ */
+export interface TierMetrics {
+  /** Total classifications performed */
+  totalClassifications: number
+  /** Classifications served from cache */
+  cacheHits: number
+  /** Classifications computed fresh */
+  cacheMisses: number
+  /** Execution counts per tier */
+  tierCounts: Record<ExecutionTier, number>
+  /** Execution counts per handler type */
+  handlerCounts: Record<string, number>
+  /** Cache hit ratio (0-1) */
+  cacheHitRatio: number
+}
+
 export class TieredExecutor implements BashExecutor {
   private readonly fs?: FsCapability
   private readonly rpcBindings: Record<string, RpcServiceBinding>
@@ -601,6 +666,22 @@ export class TieredExecutor implements BashExecutor {
   private readonly polyglotExecutor?: PolyglotExecutor
   private readonly pipelineExecutor: PipelineExecutor
   private readonly languageRouter: LanguageRouter
+
+  // Caching infrastructure
+  private readonly classificationCache: ClassificationCache
+  private readonly languageDetectionCache = new Map<string, LanguageDetectionResult>()
+  private readonly languageDetectionCacheMaxSize = 500
+
+  // Metrics tracking
+  private metricsEnabled = false
+  private totalClassifications = 0
+  private cacheHits = 0
+  private cacheMisses = 0
+  private readonly tierCounts: Record<ExecutionTier, number> = { 1: 0, 2: 0, 3: 0, 4: 0 }
+  private readonly handlerCounts: Record<string, number> = {}
+
+  // Pre-computed lookup sets for fast-path optimization
+  private readonly rpcCommandSet: Set<string>
 
   constructor(config: TieredExecutorConfig) {
     this.fs = config.fs
@@ -636,16 +717,126 @@ export class TieredExecutor implements BashExecutor {
         }
       }
     }
+
+    // Initialize classification cache
+    this.classificationCache = new ClassificationCache(1000)
+
+    // Pre-compute RPC command set for O(1) lookups in hot path
+    this.rpcCommandSet = new Set<string>()
+    for (const binding of Object.values(this.rpcBindings)) {
+      for (const cmd of binding.commands) {
+        this.rpcCommandSet.add(cmd)
+      }
+    }
+  }
+
+  // ============================================================================
+  // METRICS AND CACHE MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Enable metrics collection for tier usage analysis.
+   * When enabled, tracks classification counts, cache hits, and tier usage.
+   */
+  enableMetrics(): void {
+    this.metricsEnabled = true
+  }
+
+  /**
+   * Disable metrics collection.
+   */
+  disableMetrics(): void {
+    this.metricsEnabled = false
+  }
+
+  /**
+   * Get current tier usage metrics.
+   *
+   * @returns TierMetrics with counts and cache statistics
+   *
+   * @example
+   * ```typescript
+   * executor.enableMetrics()
+   * await executor.execute('echo hello')
+   * await executor.execute('echo world')
+   * const metrics = executor.getMetrics()
+   * console.log(metrics.cacheHitRatio) // 0.5 (second call hit cache)
+   * ```
+   */
+  getMetrics(): TierMetrics {
+    const total = this.cacheHits + this.cacheMisses
+    return {
+      totalClassifications: this.totalClassifications,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+      tierCounts: { ...this.tierCounts },
+      handlerCounts: { ...this.handlerCounts },
+      cacheHitRatio: total > 0 ? this.cacheHits / total : 0,
+    }
+  }
+
+  /**
+   * Reset all metrics to zero.
+   */
+  resetMetrics(): void {
+    this.totalClassifications = 0
+    this.cacheHits = 0
+    this.cacheMisses = 0
+    this.tierCounts[1] = 0
+    this.tierCounts[2] = 0
+    this.tierCounts[3] = 0
+    this.tierCounts[4] = 0
+    for (const key of Object.keys(this.handlerCounts)) {
+      delete this.handlerCounts[key]
+    }
+  }
+
+  /**
+   * Clear all caches (classification and language detection).
+   * Useful for testing or when configuration changes.
+   */
+  clearCaches(): void {
+    this.classificationCache.clear()
+    this.languageDetectionCache.clear()
+  }
+
+  /**
+   * Get cache statistics for debugging.
+   */
+  getCacheStats(): { classificationCacheSize: number; languageDetectionCacheSize: number } {
+    return {
+      classificationCacheSize: this.classificationCache.size,
+      languageDetectionCacheSize: this.languageDetectionCache.size,
+    }
   }
 
   /**
    * Detect the language of a command or code input.
+   * Results are cached for performance.
    *
    * @param input - The command or code to analyze
    * @returns Language detection result with language, confidence, and method
    */
   detectLanguage(input: string): LanguageDetectionResult {
-    return detectLanguage(input)
+    // Check cache first
+    const cached = this.languageDetectionCache.get(input)
+    if (cached !== undefined) {
+      return cached
+    }
+
+    // Compute and cache result
+    const result = detectLanguage(input)
+
+    // LRU eviction for language detection cache
+    if (this.languageDetectionCache.size >= this.languageDetectionCacheMaxSize) {
+      const firstKey = this.languageDetectionCache.keys().next().value
+      if (firstKey !== undefined) {
+        this.languageDetectionCache.delete(firstKey)
+      }
+    }
+    this.languageDetectionCache.set(input, result)
+
+    return result
   }
 
   /**
@@ -714,6 +905,9 @@ export class TieredExecutor implements BashExecutor {
    * performs safety analysis to determine appropriate resource limits
    * via the sandboxStrategy field.
    *
+   * Results are cached based on the command name for fast repeated lookups.
+   * Commands that depend on arguments (like `npm`) bypass the cache.
+   *
    * @param command - The command to classify
    * @returns TierClassification with tier level, handler info, and optional sandboxStrategy
    *
@@ -729,86 +923,74 @@ export class TieredExecutor implements BashExecutor {
    * ```
    */
   classifyCommand(command: string): TierClassification {
+    // Track metrics
+    if (this.metricsEnabled) {
+      this.totalClassifications++
+    }
+
     const cmd = this.extractCommandName(command)
 
-    // Tier 1: Native in-Worker commands
-    if (TIER_1_NATIVE_COMMANDS.has(cmd)) {
-      // If it's a filesystem command, check if fs capability is available
-      if (TIER_1_FS_COMMANDS.has(cmd)) {
-        if (this.fs) {
-          return this.withExecutor({
-            tier: 1,
-            reason: `Native filesystem operation via FsCapability`,
-            handler: 'native',
-            capability: 'fs',
-          })
-        }
-        // Fall through to sandbox if no fs capability
-      } else if (TIER_1_HTTP_COMMANDS.has(cmd)) {
-        // HTTP commands via native fetch API
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native HTTP operation via fetch API (${cmd})`,
-          handler: 'native',
-          capability: 'http',
-        })
-      } else if (TIER_1_DATA_COMMANDS.has(cmd)) {
-        // Data processing commands (jq, yq, base64, envsubst)
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native data processing command (${cmd})`,
-          handler: 'native',
-          capability: cmd, // Use command name as capability
-        })
-      } else if (TIER_1_CRYPTO_COMMANDS.has(cmd)) {
-        // Crypto commands via Web Crypto API
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native crypto command via Web Crypto API (${cmd})`,
-          handler: 'native',
-          capability: 'crypto',
-        })
-      } else if (TIER_1_TEXT_PROCESSING_COMMANDS.has(cmd)) {
-        // Text processing commands (sed, awk, diff, patch, tee, xargs)
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native text processing command (${cmd})`,
-          handler: 'native',
-          capability: 'text',
-        })
-      } else if (TIER_1_POSIX_UTILS_COMMANDS.has(cmd)) {
-        // POSIX utility commands (cut, sort, tr, uniq, wc, basename, dirname, echo, printf, date, dd, od)
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native POSIX utility command (${cmd})`,
-          handler: 'native',
-          capability: 'posix',
-        })
-      } else if (TIER_1_SYSTEM_UTILS_COMMANDS.has(cmd)) {
-        // System utility commands (yes, whoami, hostname, printenv)
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native system utility command (${cmd})`,
-          handler: 'native',
-          capability: 'system',
-        })
-      } else if (TIER_1_EXTENDED_UTILS_COMMANDS.has(cmd)) {
-        // Extended utility commands (env, id, uname, tac)
-        return this.withExecutor({
-          tier: 1,
-          reason: `Native extended utility command (${cmd})`,
-          handler: 'native',
-          capability: 'extended',
-        })
-      } else {
-        // Pure computation commands
-        return this.withExecutor({
-          tier: 1,
-          reason: `Pure computation command (${cmd})`,
-          handler: 'native',
-          capability: 'compute',
-        })
+    // Fast path: Check cache for command-name-based classifications
+    // Note: Some commands (like npm) depend on args, so they use full command as key
+    const cacheKey = this.getCacheKey(cmd, command)
+    const cached = this.classificationCache.get(cacheKey)
+    if (cached !== undefined) {
+      if (this.metricsEnabled) {
+        this.cacheHits++
+        this.tierCounts[cached.tier]++
+        this.handlerCounts[cached.handler] = (this.handlerCounts[cached.handler] || 0) + 1
       }
+      return cached
+    }
+
+    if (this.metricsEnabled) {
+      this.cacheMisses++
+    }
+
+    // Compute classification
+    const classification = this.classifyCommandInternal(cmd, command)
+
+    // Track metrics
+    if (this.metricsEnabled) {
+      this.tierCounts[classification.tier]++
+      this.handlerCounts[classification.handler] = (this.handlerCounts[classification.handler] || 0) + 1
+    }
+
+    // Cache the result (unless it involves safety analysis which is command-specific)
+    if (!classification.sandboxStrategy) {
+      this.classificationCache.set(cacheKey, classification)
+    }
+
+    return classification
+  }
+
+  /**
+   * Generate cache key for a command.
+   * Most commands only need the command name, but some (like npm) depend on subcommands.
+   *
+   * @internal
+   */
+  private getCacheKey(cmd: string, fullCommand: string): string {
+    // Commands that need full command for cache key (subcommand-dependent)
+    if (cmd === 'npm' || cmd === 'python' || cmd === 'python3') {
+      return fullCommand.trim()
+    }
+    // Most commands can be cached by name alone
+    return cmd
+  }
+
+  /**
+   * Internal classification logic (without caching).
+   *
+   * @internal
+   */
+  private classifyCommandInternal(cmd: string, command: string): TierClassification {
+    // ========================================================================
+    // FAST PATH: Tier 1 Native Commands (most common)
+    // ========================================================================
+    // Use Set.has() for O(1) lookup - this is the hot path
+    if (TIER_1_NATIVE_COMMANDS.has(cmd)) {
+      return this.classifyTier1Command(cmd, command)
     }
 
     // Check if npm command can be executed natively via npmx registry client
@@ -827,8 +1009,10 @@ export class TieredExecutor implements BashExecutor {
       // Fall through to Tier 2 RPC for complex npm operations
     }
 
-    // Tier 1.5: Polyglot - Use LanguageRouter for unified language detection and routing
-    // LanguageRouter consolidates language detection and package manager mappings
+    // ========================================================================
+    // Tier 1.5: Polyglot (language workers)
+    // ========================================================================
+    // Use LanguageRouter for unified language detection and routing
     const availableWorkers = this.getAvailableLanguages()
     const routingResult = this.languageRouter.route(command, availableWorkers)
 
@@ -864,20 +1048,27 @@ export class TieredExecutor implements BashExecutor {
       })
     }
 
+    // ========================================================================
     // Tier 2: RPC service commands
-    for (const [serviceName, binding] of Object.entries(this.rpcBindings)) {
-      if (binding.commands.includes(cmd)) {
-        return this.withExecutor({
-          tier: 2,
-          reason: `RPC service available (${serviceName})`,
-          handler: 'rpc',
-          capability: serviceName,
-        })
+    // ========================================================================
+    // Use pre-computed Set for O(1) lookup instead of iterating bindings
+    if (this.rpcCommandSet.has(cmd)) {
+      // Find the specific service (still need to iterate for service name)
+      for (const [serviceName, binding] of Object.entries(this.rpcBindings)) {
+        if (binding.commands.includes(cmd)) {
+          return this.withExecutor({
+            tier: 2,
+            reason: `RPC service available (${serviceName})`,
+            handler: 'rpc',
+            capability: serviceName,
+          })
+        }
       }
     }
 
-    // Tier 3: Check for commands that can use dynamically loaded modules
-    // This is for Node.js tools that can run in Workers with worker_loaders
+    // ========================================================================
+    // Tier 3: Worker loaders
+    // ========================================================================
     const workerLoaderMatch = this.matchWorkerLoader(command)
     if (workerLoaderMatch) {
       return this.withExecutor({
@@ -888,7 +1079,9 @@ export class TieredExecutor implements BashExecutor {
       })
     }
 
-    // Tier 4: Sandbox for everything else
+    // ========================================================================
+    // Tier 4: Sandbox (fallback)
+    // ========================================================================
     return this.withExecutor({
       tier: 4,
       reason: TIER_4_SANDBOX_COMMANDS.has(cmd)
@@ -896,6 +1089,111 @@ export class TieredExecutor implements BashExecutor {
         : 'No higher tier available for this command',
       handler: 'sandbox',
       capability: 'container',
+    })
+  }
+
+  /**
+   * Classify a Tier 1 native command based on its capability type.
+   * This is extracted for readability and to keep the hot path lean.
+   *
+   * @internal
+   */
+  private classifyTier1Command(cmd: string, _command: string): TierClassification {
+    // Filesystem commands - need to check if fs capability is available
+    if (TIER_1_FS_COMMANDS.has(cmd)) {
+      if (this.fs) {
+        return this.withExecutor({
+          tier: 1,
+          reason: `Native filesystem operation via FsCapability`,
+          handler: 'native',
+          capability: 'fs',
+        })
+      }
+      // Fall through to sandbox if no fs capability
+      return this.withExecutor({
+        tier: 4,
+        reason: 'Filesystem command requires FsCapability (not available)',
+        handler: 'sandbox',
+        capability: 'container',
+      })
+    }
+
+    // HTTP commands via native fetch API
+    if (TIER_1_HTTP_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native HTTP operation via fetch API (${cmd})`,
+        handler: 'native',
+        capability: 'http',
+      })
+    }
+
+    // Data processing commands (jq, yq, base64, envsubst)
+    if (TIER_1_DATA_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native data processing command (${cmd})`,
+        handler: 'native',
+        capability: cmd, // Use command name as capability
+      })
+    }
+
+    // Crypto commands via Web Crypto API
+    if (TIER_1_CRYPTO_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native crypto command via Web Crypto API (${cmd})`,
+        handler: 'native',
+        capability: 'crypto',
+      })
+    }
+
+    // Text processing commands (sed, awk, diff, patch, tee, xargs)
+    if (TIER_1_TEXT_PROCESSING_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native text processing command (${cmd})`,
+        handler: 'native',
+        capability: 'text',
+      })
+    }
+
+    // POSIX utility commands
+    if (TIER_1_POSIX_UTILS_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native POSIX utility command (${cmd})`,
+        handler: 'native',
+        capability: 'posix',
+      })
+    }
+
+    // System utility commands
+    if (TIER_1_SYSTEM_UTILS_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native system utility command (${cmd})`,
+        handler: 'native',
+        capability: 'system',
+      })
+    }
+
+    // Extended utility commands
+    if (TIER_1_EXTENDED_UTILS_COMMANDS.has(cmd)) {
+      return this.withExecutor({
+        tier: 1,
+        reason: `Native extended utility command (${cmd})`,
+        handler: 'native',
+        capability: 'extended',
+      })
+    }
+
+    // Pure computation commands (default for Tier 1)
+    return this.withExecutor({
+      tier: 1,
+      reason: `Pure computation command (${cmd})`,
+      handler: 'native',
+      capability: 'compute',
     })
   }
 
