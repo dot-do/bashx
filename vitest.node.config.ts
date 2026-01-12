@@ -54,6 +54,14 @@ export default defineConfig({
       'src/mcp/stateful-shell.test.ts',
       // Tier-specific executor tests (RED phase TDD tests for module extraction)
       'test/do/executors/**/*.test.ts',
+      // Pipeline executor tests (pure unit tests)
+      'tests/do/pipeline/**/*.test.ts',
+      // Command registry tests (pure unit tests)
+      'tests/do/registry/**/*.test.ts',
+      // Result builder tests (pure unit tests)
+      'tests/do/result/**/*.test.ts',
+      // Polyglot executor tests (LanguageExecutor interface compliance)
+      'tests/do/executors/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
