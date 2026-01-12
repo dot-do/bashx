@@ -136,6 +136,30 @@ export {
 } from './loader-executor.js'
 
 // ============================================================================
+// TIER 3: JAVASCRIPT/TYPESCRIPT EXECUTION
+// ============================================================================
+// Handles inline JavaScript/TypeScript execution:
+// - node -e "code" - Execute inline JavaScript
+// - bun -e "code" - Execute inline JavaScript (bun syntax)
+// - tsx -e "code" - Execute TypeScript
+// - esm run @scope/module - Execute esm.do module
+//
+// Security guarantees:
+// - V8 isolate sandbox (ai-evaluate)
+// - No filesystem access
+// - No network by default
+// - CPU/memory limits
+// ============================================================================
+export {
+  JsExecutor,
+  createJsExecutor,
+  type JsExecutorConfig,
+  type JsEvaluator,
+  type JsEvaluationResult,
+  JS_COMMANDS,
+} from './js-executor.js'
+
+// ============================================================================
 // TIER 4: FULL LINUX SANDBOX
 // ============================================================================
 // Handles commands requiring full Linux environment:
