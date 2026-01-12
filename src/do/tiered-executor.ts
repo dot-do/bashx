@@ -121,6 +121,11 @@ import {
   PolyglotExecutor,
   type LanguageBinding,
 } from './executors/polyglot-executor.js'
+import { SandboxExecutor } from './executors/sandbox-executor.js'
+import {
+  LoaderExecutor,
+  LOADABLE_MODULES,
+} from './executors/loader-executor.js'
 import type { TierExecutor, LanguageExecutor, TieredExecutorInternal } from './executors/types.js'
 import {
   isTierExecutor,
@@ -694,6 +699,7 @@ export class TieredExecutor implements BashExecutor {
   private readonly languageWorkers: Partial<Record<SupportedLanguage, LanguageBinding>>
   private readonly polyglotExecutor?: PolyglotExecutor
   private readonly sandboxExecutor?: SandboxExecutor
+  private readonly loaderExecutor?: LoaderExecutor
   private readonly pipelineExecutor: PipelineExecutor
   private readonly languageRouter: LanguageRouter
 
@@ -727,6 +733,23 @@ export class TieredExecutor implements BashExecutor {
     if (Object.keys(this.languageWorkers).length > 0) {
       this.polyglotExecutor = new PolyglotExecutor({
         bindings: this.languageWorkers,
+        defaultTimeout: this.defaultTimeout,
+      })
+    }
+
+    // Initialize SandboxExecutor if sandbox binding is configured
+    if (this.sandbox) {
+      this.sandboxExecutor = new SandboxExecutor({
+        sandbox: this.sandbox,
+        defaultTimeout: this.defaultTimeout,
+      })
+    }
+
+    // Initialize LoaderExecutor if worker loaders are configured
+    // LoaderExecutor handles Tier 3 dynamic npm module loading
+    if (Object.keys(this.workerLoaders).length > 0) {
+      this.loaderExecutor = new LoaderExecutor({
+        workerLoaders: this.workerLoaders,
         defaultTimeout: this.defaultTimeout,
       })
     }
@@ -3417,12 +3440,27 @@ export class TieredExecutor implements BashExecutor {
 
   /**
    * Tier 3: Execute via worker_loaders (dynamic npm modules)
+   *
+   * Delegates to LoaderExecutor for proper module-specific handling
+   * of esbuild, typescript, prettier, eslint, yaml, lodash, etc.
    */
   private async executeTier3(
     command: string,
     classification: TierClassification,
     options?: ExecOptions
   ): Promise<BashResult> {
+    // Delegate to LoaderExecutor if available
+    if (this.loaderExecutor) {
+      try {
+        return await this.loaderExecutor.execute(command, options)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Tier 3 loader execution failed: ${message}`)
+      }
+    }
+
+    // Fallback to inline implementation for backward compatibility
+    // when loaderExecutor is not initialized
     const moduleName = classification.capability
     if (!moduleName) {
       throw new Error('No module specified for Tier 3 execution')
@@ -3437,10 +3475,8 @@ export class TieredExecutor implements BashExecutor {
       // Load the module dynamically
       const module = await loader.load(moduleName)
 
-      // Execute command based on module type
-      // This is a simplified implementation - real implementation would
-      // need to know how to invoke each module's CLI
-      const result = await this.executeLoadedModule(module, command, options)
+      // Execute command based on module type using inline fallback
+      const result = await this.executeLoadedModuleFallback(module, command)
       return this.createResult(command, result.stdout, result.stderr, result.exitCode, 3)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -3449,15 +3485,14 @@ export class TieredExecutor implements BashExecutor {
   }
 
   /**
-   * Execute a dynamically loaded module
+   * Fallback for executing dynamically loaded modules when LoaderExecutor not available.
+   * This is a simplified implementation - LoaderExecutor has full module-specific handling.
+   * @internal
    */
-  private async executeLoadedModule(
+  private async executeLoadedModuleFallback(
     module: unknown,
-    command: string,
-    _options?: ExecOptions
+    command: string
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    // This is a placeholder for module-specific execution logic
-    // Real implementation would handle each module type appropriately
     const cmd = this.extractCommandName(command)
     const args = this.extractArgs(command)
 
@@ -3597,20 +3632,23 @@ export class TieredExecutor implements BashExecutor {
   }
 
   /**
-   * Check if a command can use a worker loader
+   * Check if a command can use a worker loader.
+   *
+   * Uses LOADABLE_MODULES from LoaderExecutor for consistency.
    */
   private matchWorkerLoader(command: string): string | null {
     const cmd = this.extractCommandName(command)
 
-    // Check if we have a loader for this command
+    // Check if we have a loader for this command in configured worker loaders
     for (const [name, loader] of Object.entries(this.workerLoaders)) {
       if (loader.modules.includes(cmd)) {
         return name
       }
     }
 
-    // Check if it's a known loadable module
-    if (TIER_3_LOADABLE_MODULES.has(cmd)) {
+    // Check if it's a known loadable module (use imported LOADABLE_MODULES)
+    // Also check TIER_3_LOADABLE_MODULES for backward compatibility
+    if (LOADABLE_MODULES.has(cmd) || TIER_3_LOADABLE_MODULES.has(cmd)) {
       return cmd
     }
 

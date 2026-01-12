@@ -185,7 +185,11 @@ describe('Executor Adapter Type Safety', () => {
       if (classification.executor) {
         const result = await classification.executor.execute('docker ps')
         expect(result.exitCode).toBe(0)
-        expect(sandbox.execute).toHaveBeenCalledWith('docker ps', undefined)
+        // SandboxExecutor adds default timeout to options
+        expect(sandbox.execute).toHaveBeenCalledWith(
+          'docker ps',
+          expect.objectContaining({ timeout: 30000 })
+        )
       }
     })
 

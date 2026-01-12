@@ -757,7 +757,7 @@ describe('TieredExecutor - Tier 4 Execution (Sandbox)', () => {
 
     const result = await executor.execute('docker ps')
 
-    expect(mockSandbox.execute).toHaveBeenCalledWith('docker ps', undefined)
+    expect(mockSandbox.execute).toHaveBeenCalledWith('docker ps', expect.objectContaining({ timeout: 30000 }))
     expect(result.stdout).toContain('sandbox: docker ps')
   })
 
@@ -790,7 +790,7 @@ describe('TieredExecutor - Tier 4 Execution (Sandbox)', () => {
     const options = { cwd: '/app', timeout: 5000 }
     await executor.execute('bash script.sh', options)
 
-    expect(mockSandbox.execute).toHaveBeenCalledWith('bash script.sh', options)
+    expect(mockSandbox.execute).toHaveBeenCalledWith('bash script.sh', expect.objectContaining({ cwd: '/app', timeout: 5000 }))
   })
 })
 
