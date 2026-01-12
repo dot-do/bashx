@@ -1175,3 +1175,340 @@ describe('Integration Scenarios', () => {
     })
   })
 })
+
+// =============================================================================
+// PUBLISH FUNCTIONALITY TESTS
+// =============================================================================
+
+describe('Publish Functionality', () => {
+  describe('preparePackage', () => {
+    it('should prepare package manifest with required fields', () => {
+      const client = new NpmRegistryClient()
+
+      const packageJson = {
+        name: 'my-test-package',
+        version: '1.0.0',
+        description: 'A test package',
+        main: 'index.js',
+      }
+
+      const tarball = new Uint8Array([1, 2, 3, 4, 5])
+      const manifest = client.preparePackage(packageJson, tarball)
+
+      expect(manifest._id).toBe('my-test-package@1.0.0')
+      expect(manifest.name).toBe('my-test-package')
+      expect(manifest['dist-tags']).toEqual({ latest: '1.0.0' })
+      expect(manifest.versions).toBeDefined()
+      expect(manifest.versions['1.0.0']).toBeDefined()
+    })
+
+    it('should include version distribution info', async () => {
+      const client = new NpmRegistryClient()
+
+      const packageJson = {
+        name: 'my-test-package',
+        version: '1.0.0',
+      }
+
+      const tarball = new Uint8Array([1, 2, 3, 4, 5])
+      const manifest = client.preparePackage(packageJson, tarball)
+
+      const versionInfo = manifest.versions['1.0.0']
+      expect(versionInfo.dist).toBeDefined()
+      expect(versionInfo.dist.tarball).toBeDefined()
+      expect(versionInfo.dist.shasum).toMatch(/^[0-9a-f]{40}$/)
+      expect(versionInfo.dist.integrity).toMatch(/^sha512-/)
+    })
+
+    it('should include _attachments with base64 tarball', () => {
+      const client = new NpmRegistryClient()
+
+      const packageJson = {
+        name: 'my-test-package',
+        version: '1.0.0',
+      }
+
+      const tarball = new Uint8Array([1, 2, 3, 4, 5])
+      const manifest = client.preparePackage(packageJson, tarball)
+
+      expect(manifest._attachments).toBeDefined()
+      const attachmentKey = `my-test-package-1.0.0.tgz`
+      expect(manifest._attachments[attachmentKey]).toBeDefined()
+      expect(manifest._attachments[attachmentKey].content_type).toBe('application/octet-stream')
+      expect(manifest._attachments[attachmentKey].data).toBeDefined()
+      expect(manifest._attachments[attachmentKey].length).toBe(5)
+    })
+
+    it('should preserve optional package.json fields', () => {
+      const client = new NpmRegistryClient()
+
+      const packageJson = {
+        name: 'my-test-package',
+        version: '1.0.0',
+        description: 'Test package',
+        keywords: ['test', 'example'],
+        author: { name: 'Test Author', email: 'test@example.com' },
+        license: 'MIT',
+        repository: { type: 'git', url: 'https://github.com/test/repo' },
+        dependencies: { lodash: '^4.0.0' },
+        devDependencies: { vitest: '^1.0.0' },
+        peerDependencies: { react: '>=16' },
+      }
+
+      const tarball = new Uint8Array([1, 2, 3])
+      const manifest = client.preparePackage(packageJson, tarball)
+
+      const versionInfo = manifest.versions['1.0.0']
+      expect(versionInfo.description).toBe('Test package')
+      expect(versionInfo.keywords).toEqual(['test', 'example'])
+      expect(versionInfo.author).toEqual({ name: 'Test Author', email: 'test@example.com' })
+      expect(versionInfo.license).toBe('MIT')
+      expect(versionInfo.dependencies).toEqual({ lodash: '^4.0.0' })
+      expect(versionInfo.devDependencies).toEqual({ vitest: '^1.0.0' })
+      expect(versionInfo.peerDependencies).toEqual({ react: '>=16' })
+    })
+
+    it('should use custom dist-tag when specified', () => {
+      const client = new NpmRegistryClient()
+
+      const packageJson = {
+        name: 'my-test-package',
+        version: '2.0.0-beta.1',
+      }
+
+      const tarball = new Uint8Array([1, 2, 3])
+      const manifest = client.preparePackage(packageJson, tarball, { tag: 'beta' })
+
+      expect(manifest['dist-tags']).toEqual({ beta: '2.0.0-beta.1' })
+    })
+  })
+
+  describe('validatePackageForPublish', () => {
+    it('should validate package has required fields', () => {
+      const client = new NpmRegistryClient()
+
+      const validPackage = { name: 'test-pkg', version: '1.0.0' }
+      const result = client.validatePackageForPublish(validPackage)
+
+      expect(result.valid).toBe(true)
+      expect(result.errors).toHaveLength(0)
+    })
+
+    it('should require name field', () => {
+      const client = new NpmRegistryClient()
+
+      const invalidPackage = { version: '1.0.0' }
+      const result = client.validatePackageForPublish(invalidPackage)
+
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Missing required field: name')
+    })
+
+    it('should require version field', () => {
+      const client = new NpmRegistryClient()
+
+      const invalidPackage = { name: 'test-pkg' }
+      const result = client.validatePackageForPublish(invalidPackage)
+
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Missing required field: version')
+    })
+
+    it('should validate version is valid semver', () => {
+      const client = new NpmRegistryClient()
+
+      const invalidPackage = { name: 'test-pkg', version: 'not-a-version' }
+      const result = client.validatePackageForPublish(invalidPackage)
+
+      expect(result.valid).toBe(false)
+      expect(result.errors.some(e => e.includes('Invalid version'))).toBe(true)
+    })
+
+    it('should validate package name format', () => {
+      const client = new NpmRegistryClient()
+
+      const invalidPackage = { name: '../malicious', version: '1.0.0' }
+      const result = client.validatePackageForPublish(invalidPackage)
+
+      expect(result.valid).toBe(false)
+      expect(result.errors.some(e => e.includes('Invalid package name'))).toBe(true)
+    })
+
+    it('should allow scoped packages', () => {
+      const client = new NpmRegistryClient()
+
+      const validPackage = { name: '@myorg/my-package', version: '1.0.0' }
+      const result = client.validatePackageForPublish(validPackage)
+
+      expect(result.valid).toBe(true)
+    })
+  })
+
+  describe('checkVersionExists', () => {
+    it('should return true if version exists', async () => {
+      const client = new NpmRegistryClient()
+
+      // lodash 4.17.21 definitely exists
+      const exists = await client.checkVersionExists('lodash', '4.17.21')
+
+      expect(exists).toBe(true)
+    })
+
+    it('should return false if version does not exist', async () => {
+      const client = new NpmRegistryClient()
+
+      const exists = await client.checkVersionExists('lodash', '999.999.999')
+
+      expect(exists).toBe(false)
+    })
+
+    it('should return false for non-existent package', async () => {
+      const client = new NpmRegistryClient()
+
+      const exists = await client.checkVersionExists('this-package-definitely-does-not-exist-xyz', '1.0.0')
+
+      expect(exists).toBe(false)
+    })
+  })
+
+  describe('publishPackage', () => {
+    it('should require authentication', async () => {
+      const client = new NpmRegistryClient() // No auth
+
+      const packageJson = { name: 'test-pkg', version: '1.0.0' }
+      const tarball = new Uint8Array([1, 2, 3])
+
+      await expect(
+        client.publishPackage(packageJson, tarball)
+      ).rejects.toThrow(/authentication required/i)
+    })
+
+    it('should validate package before publishing', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      const invalidPackage = { name: '../bad', version: '1.0.0' }
+      const tarball = new Uint8Array([1, 2, 3])
+
+      await expect(
+        client.publishPackage(invalidPackage, tarball)
+      ).rejects.toThrow(/invalid package/i)
+    })
+
+    it('should include OTP header when provided', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      // We can't actually publish, but we can verify the method accepts OTP
+      const headers = client.getPublishHeaders({ otp: '123456' })
+
+      expect(headers['npm-otp']).toBe('123456')
+    })
+
+    it('should use correct content-type for publish', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      const headers = client.getPublishHeaders({})
+
+      expect(headers['Content-Type']).toBe('application/json')
+    })
+
+    it('should handle publish access options', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      const packageJson = {
+        name: '@myorg/my-package',
+        version: '1.0.0',
+        publishConfig: { access: 'public' },
+      }
+
+      const tarball = new Uint8Array([1, 2, 3])
+      const manifest = client.preparePackage(packageJson, tarball)
+
+      expect(manifest.access).toBe('public')
+    })
+
+    it('should support dry-run mode', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      const packageJson = { name: 'test-pkg', version: '1.0.0' }
+      const tarball = new Uint8Array([1, 2, 3])
+
+      // Dry run should not make network request
+      const result = await client.publishPackage(packageJson, tarball, { dryRun: true })
+
+      expect(result.dryRun).toBe(true)
+      expect(result.manifest).toBeDefined()
+      expect(result.manifest._id).toBe('test-pkg@1.0.0')
+    })
+  })
+
+  describe('publish error handling', () => {
+    it('should handle version already exists error', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      // Version conflict error (403 or 409)
+      // This would be returned when trying to publish an existing version
+      const error = client.parsePublishError({
+        status: 403,
+        body: { error: 'forbidden', reason: 'cannot modify pre-existing version' },
+      })
+
+      expect(error.code).toBe('E403')
+      expect(error.message).toMatch(/pre-existing|version.*exists|forbidden/i)
+    })
+
+    it('should handle OTP required error', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      const error = client.parsePublishError({
+        status: 401,
+        headers: { 'npm-notice': 'one-time password required' },
+        body: { error: 'unauthorized', reason: 'OTP required' },
+      })
+
+      expect(error.code).toBe('EOTP')
+      expect(error.otpRequired).toBe(true)
+    })
+
+    it('should handle unauthorized error', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'invalid-token' },
+      })
+
+      const error = client.parsePublishError({
+        status: 401,
+        body: { error: 'unauthorized' },
+      })
+
+      expect(error.code).toBe('E401')
+      expect(error.message).toMatch(/unauthorized|authentication/i)
+    })
+
+    it('should handle forbidden for scoped packages', async () => {
+      const client = new NpmRegistryClient({
+        auth: { token: 'test-token' },
+      })
+
+      const error = client.parsePublishError({
+        status: 402,
+        body: { error: 'payment required', reason: 'private package requires paid account' },
+      })
+
+      expect(error.code).toBe('E402')
+      expect(error.message).toMatch(/private|payment|paid/i)
+    })
+  })
+})

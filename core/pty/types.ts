@@ -333,6 +333,77 @@ export interface KeyEvent {
 }
 
 // ============================================================================
+// Mouse Event Types
+// ============================================================================
+
+/**
+ * Mouse button identifiers
+ *
+ * - 'left', 'middle', 'right' for standard buttons
+ * - 'wheelUp', 'wheelDown' for scroll wheel
+ * - 'none' for move events without a button pressed
+ */
+export type MouseButton =
+  | 'left'
+  | 'middle'
+  | 'right'
+  | 'wheelUp'
+  | 'wheelDown'
+  | 'none'
+
+/**
+ * Mouse event types
+ *
+ * - 'press': Button pressed down
+ * - 'release': Button released
+ * - 'move': Mouse moved (with or without button held)
+ * - 'wheel': Scroll wheel event
+ */
+export type MouseEventType = 'press' | 'release' | 'move' | 'wheel'
+
+/**
+ * Mouse tracking modes following xterm protocol
+ *
+ * - 'normal': X10 compatible mode (CSI M Cb Cx Cy)
+ * - 'sgr': SGR extended mode (CSI < Pb ; Px ; Py M/m) - supports large coordinates
+ */
+export type MouseMode = 'normal' | 'sgr'
+
+/**
+ * Mouse event for sendMouse() method
+ *
+ * Follows xterm mouse protocol for TUI application compatibility.
+ *
+ * @example
+ * ```typescript
+ * // Left click at position (10, 5)
+ * pty.sendMouse({ type: 'press', button: 'left', x: 10, y: 5 })
+ *
+ * // Scroll wheel up with Shift held
+ * pty.sendMouse({ type: 'wheel', button: 'wheelUp', x: 20, y: 10, shift: true })
+ *
+ * // Mouse move with left button held (drag)
+ * pty.sendMouse({ type: 'move', button: 'left', x: 15, y: 8 })
+ * ```
+ */
+export interface MouseEvent {
+  /** Type of mouse event */
+  type: MouseEventType
+  /** Mouse button involved */
+  button: MouseButton
+  /** X coordinate (0-based column) */
+  x: number
+  /** Y coordinate (0-based row) */
+  y: number
+  /** Shift modifier held */
+  shift?: boolean
+  /** Alt/Meta modifier held */
+  meta?: boolean
+  /** Ctrl modifier held */
+  ctrl?: boolean
+}
+
+// ============================================================================
 // Callback Types
 // ============================================================================
 

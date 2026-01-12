@@ -38,6 +38,23 @@ export { ANSIParser } from './parser.js'
 export { TerminalBuffer, createDefaultAttributes, createEmptyCell, createDefaultCursor } from './buffer.js'
 
 // ============================================================================
+// React Ink Adapter Exports
+// ============================================================================
+
+export {
+  InkAdapter,
+  InkWriteStream,
+  InkReadStream,
+  createInkStreams,
+} from './ink-adapter.js'
+
+export type {
+  InkAdapterOptions,
+  InkRenderOptions,
+  InkStreams,
+} from './ink-adapter.js'
+
+// ============================================================================
 // Constants Exports
 // ============================================================================
 
@@ -138,11 +155,20 @@ export type {
   BellEvent,
   TitleChangeEvent,
 
+  // Input types
+  SpecialKey,
+  KeyEvent,
+  MouseButton,
+  MouseEventType,
+  MouseMode,
+  MouseEvent,
+
   // Callback types
   DataCallback,
   ScreenChangeCallback,
   SequenceCallback,
   EventCallback,
+  InputCallback,
 } from './types.js'
 
 // Re-export branded type constructors as values

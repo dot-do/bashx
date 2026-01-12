@@ -23,6 +23,8 @@ import type {
   ScreenBuffer,
   Color,
   KeyEvent,
+  MouseEvent,
+  MouseMode,
 } from './types.js'
 import {
   BEL,
@@ -32,6 +34,7 @@ import {
   VT,
   FF,
   CR,
+  DECModes,
 } from './constants.js'
 
 // ============================================================================
@@ -95,6 +98,15 @@ export class VirtualPTY {
 
   /** ReadableStream controller for input (stored for potential cancel/close operations) */
   private _readableStreamController: ReadableStreamDefaultController<Uint8Array> | null = null
+
+  /** Mouse tracking enabled state */
+  private _mouseEnabled = false
+
+  /** Mouse tracking mode */
+  private _mouseMode: MouseMode = 'sgr'
+
+  /** Whether to track any mouse movement (mode 1003) vs just button events */
+  private _mouseAnyEvent = false
 
   constructor(options: VirtualPTYOptions = {}) {
     this.options = {
@@ -357,6 +369,201 @@ export class VirtualPTY {
    */
   setRawMode(enabled: boolean): void {
     this._rawMode = enabled
+  }
+
+  // ==========================================================================
+  // Public API - Mouse Input
+  // ==========================================================================
+
+  /**
+   * Get whether mouse tracking is enabled
+   */
+  get isMouseEnabled(): boolean {
+    return this._mouseEnabled
+  }
+
+  /**
+   * Get current mouse tracking mode
+   */
+  get mouseMode(): MouseMode {
+    return this._mouseMode
+  }
+
+  /**
+   * Get whether any-event mouse tracking is enabled (mode 1003).
+   * When true, mouse move events are tracked even without a button pressed.
+   */
+  get isMouseAnyEvent(): boolean {
+    return this._mouseAnyEvent
+  }
+
+  /**
+   * Enable mouse tracking.
+   *
+   * Enables the VirtualPTY to receive and process mouse events via sendMouse().
+   * The mouse mode determines the escape sequence format used.
+   *
+   * @param mode - Mouse tracking mode (default: 'sgr')
+   *   - 'sgr': SGR extended mode - supports large coordinates, recommended
+   *   - 'normal': X10 compatible mode - limited to 223x223 coordinates
+   *
+   * @example
+   * ```typescript
+   * // Enable with SGR mode (default, recommended)
+   * pty.enableMouse()
+   *
+   * // Enable with normal (X10) mode for compatibility
+   * pty.enableMouse('normal')
+   * ```
+   */
+  enableMouse(mode: MouseMode = 'sgr'): void {
+    this._mouseEnabled = true
+    this._mouseMode = mode
+  }
+
+  /**
+   * Disable mouse tracking.
+   *
+   * After calling this, sendMouse() calls will be ignored.
+   */
+  disableMouse(): void {
+    this._mouseEnabled = false
+    this._mouseAnyEvent = false
+  }
+
+  /**
+   * Send a mouse event to the terminal.
+   *
+   * Generates the appropriate escape sequence based on the current mouse mode
+   * and emits it to input callbacks. This simulates mouse input from a user.
+   *
+   * Events are only processed if mouse tracking is enabled via enableMouse()
+   * or via terminal escape sequences (CSI ?1000h, etc.).
+   *
+   * @param event - The mouse event to send
+   *
+   * @example
+   * ```typescript
+   * // Send a left click at position (10, 5)
+   * pty.sendMouse({ type: 'press', button: 'left', x: 10, y: 5 })
+   *
+   * // Send mouse release
+   * pty.sendMouse({ type: 'release', button: 'left', x: 10, y: 5 })
+   *
+   * // Send scroll wheel up with shift modifier
+   * pty.sendMouse({ type: 'wheel', button: 'wheelUp', x: 20, y: 10, shift: true })
+   *
+   * // Send drag event (mouse move with button held)
+   * pty.sendMouse({ type: 'move', button: 'left', x: 15, y: 8 })
+   * ```
+   */
+  sendMouse(event: MouseEvent): void {
+    if (!this._mouseEnabled) {
+      return
+    }
+
+    const sequence = this.translateMouseEvent(event)
+    if (sequence) {
+      this.emitInput(sequence)
+    }
+  }
+
+  /**
+   * Translate a MouseEvent to the appropriate terminal escape sequence.
+   * Returns null if the event should not produce any output.
+   */
+  private translateMouseEvent(event: MouseEvent): string | null {
+    // Clamp coordinates to valid range (0 or greater)
+    const x = Math.max(0, event.x)
+    const y = Math.max(0, event.y)
+
+    // Calculate button code based on button and modifiers
+    const buttonCode = this.getMouseButtonCode(event)
+
+    if (this._mouseMode === 'sgr') {
+      return this.encodeSGRMouse(buttonCode, x, y, event.type === 'release')
+    } else {
+      return this.encodeNormalMouse(buttonCode, x, y, event.type === 'release')
+    }
+  }
+
+  /**
+   * Get the button code for a mouse event.
+   * Incorporates button, motion flag, and modifier bits.
+   */
+  private getMouseButtonCode(event: MouseEvent): number {
+    let code = 0
+
+    // Base button code
+    switch (event.button) {
+      case 'left':
+        code = 0
+        break
+      case 'middle':
+        code = 1
+        break
+      case 'right':
+        code = 2
+        break
+      case 'none':
+        code = 3 // No button (for move events)
+        break
+      case 'wheelUp':
+        code = 64
+        break
+      case 'wheelDown':
+        code = 65
+        break
+    }
+
+    // Add motion flag for move events
+    if (event.type === 'move') {
+      code += 32
+    }
+
+    // Add modifier bits
+    if (event.shift) {
+      code += 4
+    }
+    if (event.meta) {
+      code += 8
+    }
+    if (event.ctrl) {
+      code += 16
+    }
+
+    return code
+  }
+
+  /**
+   * Encode mouse event in SGR extended mode.
+   * Format: CSI < Pb ; Px ; Py M (press) or m (release)
+   * Coordinates are 1-based.
+   */
+  private encodeSGRMouse(buttonCode: number, x: number, y: number, isRelease: boolean): string {
+    // SGR mode uses 1-based coordinates
+    const px = x + 1
+    const py = y + 1
+    const finalChar = isRelease ? 'm' : 'M'
+    return `\x1b[<${buttonCode};${px};${py}${finalChar}`
+  }
+
+  /**
+   * Encode mouse event in normal (X10 compatible) mode.
+   * Format: CSI M Cb Cx Cy
+   * All values are offset by 32, coordinates are 1-based.
+   * Maximum coordinate is 223 (255 - 32).
+   */
+  private encodeNormalMouse(buttonCode: number, x: number, y: number, isRelease: boolean): string {
+    // In normal mode, release uses button code 3
+    const code = isRelease ? 3 : buttonCode
+
+    // Coordinates are 1-based and offset by 32, capped at 255
+    const cx = Math.min(x + 1 + 32, 255)
+    const cy = Math.min(y + 1 + 32, 255)
+    const cb = code + 32
+
+    return `\x1b[M${String.fromCharCode(cb)}${String.fromCharCode(cx)}${String.fromCharCode(cy)}`
   }
 
   /**
@@ -652,25 +859,77 @@ export class VirtualPTY {
 
     switch (seq.finalChar) {
       case 'h': // DECSET - DEC Private Mode Set
-        switch (p0) {
-          case 25: // DECTCEM - Show cursor
-            this.buffer.setCursorVisible(true)
-            this.emitScreenChange('cursor')
-            break
-          case 1049: // Alternate screen buffer
-            // Could implement alternate buffer here
-            break
-        }
+        this.handleDECSET(p0)
         break
       case 'l': // DECRST - DEC Private Mode Reset
-        switch (p0) {
-          case 25: // DECTCEM - Hide cursor
-            this.buffer.setCursorVisible(false)
-            this.emitScreenChange('cursor')
-            break
-          case 1049: // Main screen buffer
-            break
-        }
+        this.handleDECRST(p0)
+        break
+    }
+  }
+
+  /**
+   * Handle DECSET (DEC Private Mode Set) commands
+   */
+  private handleDECSET(mode: number): void {
+    switch (mode) {
+      case DECModes.DECTCEM: // 25 - Show cursor
+        this.buffer.setCursorVisible(true)
+        this.emitScreenChange('cursor')
+        break
+
+      case DECModes.ALTBUF_SAVE: // 1049 - Alternate screen buffer
+        // Could implement alternate buffer here
+        break
+
+      // Mouse tracking modes
+      case DECModes.MOUSE_X10: // 9 - X10 mouse tracking
+        this._mouseEnabled = true
+        this._mouseMode = 'normal'
+        break
+
+      case DECModes.MOUSE_VT200: // 1000 - Normal tracking mode
+        this._mouseEnabled = true
+        break
+
+      case DECModes.MOUSE_BTN_EVENT: // 1002 - Button event tracking
+        this._mouseEnabled = true
+        break
+
+      case DECModes.MOUSE_ANY_EVENT: // 1003 - Any event tracking
+        this._mouseEnabled = true
+        this._mouseAnyEvent = true
+        break
+
+      case DECModes.MOUSE_SGR: // 1006 - SGR extended mode
+        this._mouseMode = 'sgr'
+        break
+    }
+  }
+
+  /**
+   * Handle DECRST (DEC Private Mode Reset) commands
+   */
+  private handleDECRST(mode: number): void {
+    switch (mode) {
+      case DECModes.DECTCEM: // 25 - Hide cursor
+        this.buffer.setCursorVisible(false)
+        this.emitScreenChange('cursor')
+        break
+
+      case DECModes.ALTBUF_SAVE: // 1049 - Main screen buffer
+        break
+
+      // Mouse tracking modes - disable
+      case DECModes.MOUSE_X10: // 9
+      case DECModes.MOUSE_VT200: // 1000
+      case DECModes.MOUSE_BTN_EVENT: // 1002
+      case DECModes.MOUSE_ANY_EVENT: // 1003
+        this._mouseEnabled = false
+        this._mouseAnyEvent = false
+        break
+
+      case DECModes.MOUSE_SGR: // 1006 - Disable SGR mode (back to normal)
+        this._mouseMode = 'normal'
         break
     }
   }
