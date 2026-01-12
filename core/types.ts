@@ -236,6 +236,29 @@ export interface Intent {
    * True for sudo, doas, or commands that modify system files.
    */
   elevated: boolean
+
+  // -------------------------------------------------------------------------
+  // Multi-Language Extensions (optional fields for backward compatibility)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Programming languages detected in the command.
+   * Present when the command invokes interpreters other than bash.
+   * @optional
+   */
+  languages?: SupportedLanguage[]
+
+  /**
+   * Whether the command contains inline code (e.g., python -c "...").
+   * @optional
+   */
+  inlineCode?: boolean
+
+  /**
+   * Script files targeted by the command (e.g., ['script.py', 'main.go']).
+   * @optional
+   */
+  targetScripts?: string[]
 }
 
 // ============================================================================
@@ -351,4 +374,61 @@ export interface Fix {
    * Human-readable explanation of why this fix is needed.
    */
   reason: string
+}
+
+// ============================================================================
+// Multi-Language Types
+// ============================================================================
+
+/**
+ * Supported programming languages for multi-language execution.
+ * - bash: Default shell language (POSIX-compatible)
+ * - python: Python interpreter (python, python3)
+ * - ruby: Ruby interpreter
+ * - node: Node.js JavaScript runtime
+ * - go: Go language (via go run)
+ * - rust: Rust language (via cargo run)
+ */
+export type SupportedLanguage = 'bash' | 'python' | 'ruby' | 'node' | 'go' | 'rust'
+
+/**
+ * Context information about detected language.
+ * Provides details about how the language was detected and execution context.
+ */
+export interface LanguageContext {
+  /**
+   * The detected programming language.
+   */
+  language: SupportedLanguage
+
+  /**
+   * Confidence score between 0 and 1.
+   * Higher values indicate more certainty.
+   */
+  confidence: number
+
+  /**
+   * Detection method used to identify the language.
+   * - shebang: Detected from #! line (highest confidence)
+   * - interpreter: Detected from interpreter command (e.g., python script.py)
+   * - extension: Detected from file extension (e.g., .py, .rb)
+   * - syntax: Detected from syntax patterns (lowest confidence)
+   * - default: Defaulted to bash when no patterns match
+   */
+  method: 'shebang' | 'interpreter' | 'extension' | 'syntax' | 'default'
+
+  /**
+   * Runtime version if detectable (e.g., 'python3', 'node18').
+   */
+  runtime?: string
+
+  /**
+   * True if the code is inline (using -c, -e, --eval flags).
+   */
+  inline?: boolean
+
+  /**
+   * Target file if detected from command.
+   */
+  file?: string
 }

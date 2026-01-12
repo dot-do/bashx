@@ -52,6 +52,9 @@ export type {
   OperationType,
   ImpactLevel,
   Fix,
+  // Multi-Language Types
+  SupportedLanguage,
+  LanguageContext,
 } from './types.js'
 
 // ============================================================================

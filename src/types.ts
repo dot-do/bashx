@@ -447,6 +447,26 @@ export interface BashResult {
    * Alternative commands or suggestions if the command failed or was blocked.
    */
   suggestions?: string[]
+
+  // -------------------------------------------------------------------------
+  // Multi-Language Extensions (optional fields for backward compatibility)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The detected or specified programming language for this command.
+   * Present when executing non-bash code via interpreters.
+   * @optional
+   */
+  language?: 'bash' | 'python' | 'ruby' | 'node' | 'go' | 'rust'
+
+  /**
+   * Execution tier for multi-language commands.
+   * - 1: Direct shell execution (bash)
+   * - 2: Interpreted execution (python, ruby, node)
+   * - 3: Compiled execution (go, rust)
+   * @optional
+   */
+  tier?: 1 | 2 | 3
 }
 
 // ============================================================================
