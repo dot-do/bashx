@@ -19,6 +19,45 @@ import type { SupportedLanguage } from '../types.js'
 export type { SupportedLanguage } from '../types.js'
 
 /**
+ * Confidence score constants for language detection.
+ *
+ * These values represent the certainty level of different detection methods:
+ * - Higher values indicate more reliable detection methods
+ * - Values range from 0.0 (no confidence) to 1.0 (absolute certainty)
+ *
+ * Detection reliability order (highest to lowest):
+ * 1. SHEBANG (0.95) - Explicit language declaration in script header
+ * 2. INTERPRETER (0.90) - Command starts with known interpreter (python, ruby, node)
+ * 3. EXTENSION (0.85) - File has recognizable language extension (.py, .rb, .js)
+ * 4. SYNTAX_HIGH (0.75) - Strong syntax patterns (def with parens/colon, import/class)
+ * 5. SYNTAX_MEDIUM (0.70) - Medium syntax patterns (puts, end keywords)
+ * 6. SYNTAX_LOW (0.65) - Weaker syntax patterns (const, let, async)
+ * 7. SYNTAX_LOWER (0.60) - Common function patterns (print, eval)
+ * 8. SYNTAX_LOWEST (0.55) - Ambiguous patterns (assignment with function call)
+ * 9. DEFAULT (0.50) - No patterns matched, defaulting to bash
+ */
+export const CONFIDENCE = {
+  /** Shebang detection - explicit language declaration (#!/usr/bin/env python3) */
+  SHEBANG: 0.95,
+  /** Interpreter command detection (python script.py, ruby -e, node app.js) */
+  INTERPRETER: 0.90,
+  /** File extension detection (.py, .rb, .js, .go, .rs) */
+  EXTENSION: 0.85,
+  /** High confidence syntax patterns (def with parens/colon, import, class) */
+  SYNTAX_HIGH: 0.75,
+  /** Medium confidence syntax patterns (puts, end keywords) */
+  SYNTAX_MEDIUM: 0.70,
+  /** Low confidence syntax patterns (const, let, async) */
+  SYNTAX_LOW: 0.65,
+  /** Lower confidence syntax patterns (print, eval, exec) */
+  SYNTAX_LOWER: 0.60,
+  /** Lowest confidence syntax patterns (ambiguous assignment patterns) */
+  SYNTAX_LOWEST: 0.55,
+  /** Default when no patterns match - assumes bash */
+  DEFAULT: 0.50,
+} as const
+
+/**
  * Detection method used to identify the language.
  */
 export type DetectionMethod = 'shebang' | 'interpreter' | 'extension' | 'syntax' | 'default'
@@ -125,14 +164,14 @@ const EXTENSIONS: Record<string, SupportedLanguage> = {
  */
 const SYNTAX_PATTERNS: { lang: SupportedLanguage; pattern: RegExp; confidence: number }[] = [
   // Ruby patterns - check before Python since Ruby uses 'def' without parentheses/colons
-  { lang: 'ruby', pattern: /\b(puts|end)\b/m, confidence: 0.70 },
+  { lang: 'ruby', pattern: /\b(puts|end)\b/m, confidence: CONFIDENCE.SYNTAX_MEDIUM },
   // Python patterns - 'def' with parens and colon, or import/from/class
-  { lang: 'python', pattern: /^(import|from|class)\s+|^def\s+\w+\s*\(/m, confidence: 0.75 },
+  { lang: 'python', pattern: /^(import|from|class)\s+|^def\s+\w+\s*\(/m, confidence: CONFIDENCE.SYNTAX_HIGH },
   // Python functions - print, eval, exec, open (common Python builtins)
-  { lang: 'python', pattern: /\b(print|eval|exec|compile)\s*\(/, confidence: 0.60 },
+  { lang: 'python', pattern: /\b(print|eval|exec|compile)\s*\(/, confidence: CONFIDENCE.SYNTAX_LOWER },
   // Python-style assignment with function call (bash doesn't allow spaces around =)
-  { lang: 'python', pattern: /^\w+\s+=\s+\w+\s*\(/m, confidence: 0.55 },
-  { lang: 'node', pattern: /\b(const|let|async|await|=>)\s+/m, confidence: 0.65 },
+  { lang: 'python', pattern: /^\w+\s+=\s+\w+\s*\(/m, confidence: CONFIDENCE.SYNTAX_LOWEST },
+  { lang: 'node', pattern: /\b(const|let|async|await|=>)\s+/m, confidence: CONFIDENCE.SYNTAX_LOW },
 ]
 
 /**
@@ -150,7 +189,7 @@ function detectShebang(input: string): LanguageDetectionResult | null {
     if (match) {
       return {
         language,
-        confidence: 0.95,
+        confidence: CONFIDENCE.SHEBANG,
         method: 'shebang',
         details: {
           runtime: match[0],
@@ -205,7 +244,7 @@ function detectInterpreter(input: string): LanguageDetectionResult | null {
 
       return {
         language,
-        confidence: 0.90,
+        confidence: CONFIDENCE.INTERPRETER,
         method: 'interpreter',
         details,
       }
@@ -227,7 +266,7 @@ function detectExtension(input: string): LanguageDetectionResult | null {
     if (trimmed.endsWith(ext)) {
       return {
         language,
-        confidence: 0.85,
+        confidence: CONFIDENCE.EXTENSION,
         method: 'extension',
         details: {
           file: trimmed,
@@ -307,7 +346,7 @@ export function detectLanguage(input: string): LanguageDetectionResult {
   // 5. Default to bash
   return {
     language: 'bash',
-    confidence: 0.50,
+    confidence: CONFIDENCE.DEFAULT,
     method: 'default',
     details: {},
   }

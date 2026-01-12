@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   detectLanguage,
+  CONFIDENCE,
   type SupportedLanguage,
   type DetectionMethod,
   type LanguageDetectionResult,
@@ -1160,5 +1161,67 @@ describe('Type Definitions', () => {
     }
     expect(partialDetails.runtime).toBe('node18')
     expect(partialDetails.inline).toBeUndefined()
+  })
+})
+
+// =============================================================================
+// CONFIDENCE CONSTANTS TESTS
+// =============================================================================
+describe('CONFIDENCE constants', () => {
+  it('should export CONFIDENCE object', () => {
+    expect(CONFIDENCE).toBeDefined()
+    expect(typeof CONFIDENCE).toBe('object')
+  })
+
+  it('should have SHEBANG confidence of 0.95', () => {
+    expect(CONFIDENCE.SHEBANG).toBe(0.95)
+  })
+
+  it('should have INTERPRETER confidence of 0.90', () => {
+    expect(CONFIDENCE.INTERPRETER).toBe(0.90)
+  })
+
+  it('should have EXTENSION confidence of 0.85', () => {
+    expect(CONFIDENCE.EXTENSION).toBe(0.85)
+  })
+
+  it('should have syntax confidence levels for pattern matching', () => {
+    // Various confidence levels for syntax pattern detection
+    expect(CONFIDENCE.SYNTAX_HIGH).toBe(0.75)
+    expect(CONFIDENCE.SYNTAX_MEDIUM).toBe(0.70)
+    expect(CONFIDENCE.SYNTAX_LOW).toBe(0.65)
+    expect(CONFIDENCE.SYNTAX_LOWER).toBe(0.60)
+    expect(CONFIDENCE.SYNTAX_LOWEST).toBe(0.55)
+  })
+
+  it('should have DEFAULT confidence of 0.50', () => {
+    expect(CONFIDENCE.DEFAULT).toBe(0.50)
+  })
+
+  it('should use CONFIDENCE.SHEBANG in shebang detection results', () => {
+    const result = detectLanguage('#!/usr/bin/env python3\nprint("hello")')
+    expect(result.confidence).toBe(CONFIDENCE.SHEBANG)
+  })
+
+  it('should use CONFIDENCE.INTERPRETER in interpreter detection results', () => {
+    const result = detectLanguage('python script.py')
+    expect(result.confidence).toBe(CONFIDENCE.INTERPRETER)
+  })
+
+  it('should use CONFIDENCE.EXTENSION in extension detection results', () => {
+    const result = detectLanguage('./analyze.py')
+    expect(result.confidence).toBe(CONFIDENCE.EXTENSION)
+  })
+
+  it('should use CONFIDENCE.DEFAULT in default detection results', () => {
+    const result = detectLanguage('echo "hello"')
+    expect(result.confidence).toBe(CONFIDENCE.DEFAULT)
+  })
+
+  it('confidence values should be in descending order of reliability', () => {
+    expect(CONFIDENCE.SHEBANG).toBeGreaterThan(CONFIDENCE.INTERPRETER)
+    expect(CONFIDENCE.INTERPRETER).toBeGreaterThan(CONFIDENCE.EXTENSION)
+    expect(CONFIDENCE.EXTENSION).toBeGreaterThan(CONFIDENCE.SYNTAX_HIGH)
+    expect(CONFIDENCE.SYNTAX_HIGH).toBeGreaterThan(CONFIDENCE.DEFAULT)
   })
 })

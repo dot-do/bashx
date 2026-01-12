@@ -25,6 +25,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   detectLanguage,
+  CONFIDENCE,
   type SupportedLanguage,
   type LanguageDetectionResult,
 } from './language-detector.js'
@@ -254,6 +255,59 @@ describe('Language Detection', () => {
       expect(result.language).toBe('bash')
       expect(result.method).toBe('default')
       expect(result.confidence).toBe(0.50)
+    })
+  })
+
+  // ==========================================================================
+  // Confidence Constants (7 tests)
+  // Verify that confidence constants are exported and have correct values
+  // ==========================================================================
+  describe('Confidence Constants', () => {
+    it('should export CONFIDENCE object', () => {
+      expect(CONFIDENCE).toBeDefined()
+      expect(typeof CONFIDENCE).toBe('object')
+    })
+
+    it('should have SHEBANG confidence of 0.95', () => {
+      expect(CONFIDENCE.SHEBANG).toBe(0.95)
+    })
+
+    it('should have INTERPRETER confidence of 0.90', () => {
+      expect(CONFIDENCE.INTERPRETER).toBe(0.90)
+    })
+
+    it('should have EXTENSION confidence of 0.85', () => {
+      expect(CONFIDENCE.EXTENSION).toBe(0.85)
+    })
+
+    it('should have syntax confidence levels in correct range', () => {
+      expect(CONFIDENCE.SYNTAX_HIGH).toBe(0.75)
+      expect(CONFIDENCE.SYNTAX_MEDIUM).toBe(0.70)
+      expect(CONFIDENCE.SYNTAX_LOW).toBe(0.65)
+      expect(CONFIDENCE.SYNTAX_LOWER).toBe(0.60)
+      expect(CONFIDENCE.SYNTAX_LOWEST).toBe(0.55)
+    })
+
+    it('should have DEFAULT confidence of 0.50', () => {
+      expect(CONFIDENCE.DEFAULT).toBe(0.50)
+    })
+
+    it('should use constants in detection results', () => {
+      // Shebang detection should use CONFIDENCE.SHEBANG
+      const shebangResult = detectLanguage('#!/usr/bin/env python3\nprint("hello")')
+      expect(shebangResult.confidence).toBe(CONFIDENCE.SHEBANG)
+
+      // Interpreter detection should use CONFIDENCE.INTERPRETER
+      const interpreterResult = detectLanguage('python script.py')
+      expect(interpreterResult.confidence).toBe(CONFIDENCE.INTERPRETER)
+
+      // Extension detection should use CONFIDENCE.EXTENSION
+      const extensionResult = detectLanguage('./analyze.py')
+      expect(extensionResult.confidence).toBe(CONFIDENCE.EXTENSION)
+
+      // Default detection should use CONFIDENCE.DEFAULT
+      const defaultResult = detectLanguage('echo "hello"')
+      expect(defaultResult.confidence).toBe(CONFIDENCE.DEFAULT)
     })
   })
 })
