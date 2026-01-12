@@ -46,6 +46,9 @@ export {
   InkWriteStream,
   InkReadStream,
   createInkStreams,
+  createInkStdout,
+  createInkStdin,
+  createInkStderr,
 } from './ink-adapter.js'
 
 export type {
