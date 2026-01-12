@@ -155,6 +155,60 @@ export type {
 } from './classify/index.js'
 
 // ============================================================================
+// Language Detection & Routing
+// ============================================================================
+
+/**
+ * Language detection and routing for multi-language shell support.
+ *
+ * **Language Detection:**
+ * - {@link detectLanguage} - Detect programming language from input
+ *
+ * **Language Routing:**
+ * - {@link LanguageRouter} - Unified facade for language detection and worker routing
+ *
+ * The LanguageRouter combines language detection with worker availability
+ * to determine optimal execution paths (polyglot vs sandbox).
+ *
+ * @example
+ * ```typescript
+ * import { LanguageRouter, detectLanguage } from '@dotdo/bashx'
+ *
+ * // Direct language detection
+ * const detection = detectLanguage('python3 script.py')
+ * // { language: 'python', method: 'interpreter', confidence: 0.90, ... }
+ *
+ * // Unified routing with worker availability
+ * const router = new LanguageRouter()
+ * const result = router.route('pip install requests', ['python', 'node'])
+ * // { language: 'python', routeTo: 'polyglot', worker: 'python', packageManager: 'pip' }
+ *
+ * // Package manager detection
+ * LanguageRouter.isPackageManager('pip')   // true
+ * LanguageRouter.isPackageManager('ls')    // false
+ * ```
+ */
+export {
+  detectLanguage,
+} from './classify/language-detector.js'
+
+export type {
+  SupportedLanguage,
+  DetectionMethod,
+  LanguageDetectionResult,
+  LanguageDetectionDetails,
+} from './classify/language-detector.js'
+
+export {
+  LanguageRouter,
+} from './classify/language-router.js'
+
+export type {
+  RoutingResult,
+  RoutingDestination,
+} from './classify/language-router.js'
+
+// ============================================================================
 // AST Utilities
 // ============================================================================
 
