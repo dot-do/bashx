@@ -25,7 +25,8 @@
 import { DurableObject } from 'cloudflare:workers'
 import { Hono } from 'hono'
 import { BashModule, TieredExecutor, type BashExecutor } from './index.js'
-import type { BashResult, ExecOptions, FsCapability } from '../types.js'
+import type { BashResult, ExecOptions, FsCapability, TypedFsCapability } from '../types.js'
+import { asTypedFs } from '../types.js'
 import {
   TerminalRenderer,
   StreamingRenderer,
@@ -528,7 +529,7 @@ function createShellDOBase(): typeof DurableObject<Env> {
       executor: (instance: { env: Env }): BashExecutor => {
         // Create FSX adapter for native file operations
         const fsAdapter = instance.env.FSX ? new FsxServiceAdapter(instance.env.FSX) : null
-        const fs = fsAdapter as unknown as FsCapability | undefined
+        const fs = fsAdapter ? asTypedFs(fsAdapter) : undefined
 
         // Create and return TieredExecutor as the bash executor
         return createExecutor(instance.env, fs)
@@ -594,13 +595,13 @@ export class ShellDO extends ShellDOBase {
     this.fsAdapter = env.FSX ? new FsxServiceAdapter(env.FSX) : null
 
     // Create tiered executor with available bindings
-    const fs = this.fsAdapter as unknown as FsCapability | undefined
+    const fs = this.fsAdapter ? asTypedFs(this.fsAdapter) : undefined
     const executor = createExecutor(env, fs)
 
     // Create BashModule with FsCapability for native ops (only if FSX is available)
     // This is kept for backward compatibility with existing RPC methods
     this.bashModule = new BashModule(executor, {
-      fs: fs,
+      fs: this.fsAdapter as unknown as FsCapability | undefined,
       useNativeOps: !!this.fsAdapter,
     })
 
@@ -1180,7 +1181,7 @@ const GITX_COMMANDS = ['git']
 /**
  * Create the appropriate executor based on available environment bindings
  */
-function createExecutor(env: Env, fs?: FsCapability): BashExecutor {
+function createExecutor(env: Env, fs?: TypedFsCapability): BashExecutor {
   // Build RPC bindings based on available service bindings
   const rpcBindings: Record<string, { name: string; endpoint: string | { fetch: typeof fetch }; commands: string[] }> = {}
 

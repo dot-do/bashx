@@ -670,7 +670,16 @@ export interface BashCapability {
  *
  * @see https://github.com/dot-do/fsx for full documentation
  */
-export type { FsCapability, Stats as FsStats, Dirent, ReadOptions, ListOptions } from 'fsx.do'
+import type { FsCapability as FsCapabilityBase, Stats as FsStatsBase, Dirent as DirentBase, ReadOptions as ReadOptionsBase, ListOptions as ListOptionsBase } from 'fsx.do'
+
+/**
+ * Re-export fsx.do types for backward compatibility.
+ */
+export type FsCapability = FsCapabilityBase
+export type FsStats = FsStatsBase
+export type Dirent = DirentBase
+export type ReadOptions = ReadOptionsBase
+export type ListOptions = ListOptionsBase
 
 /**
  * Filesystem entry returned by list operations.
@@ -726,6 +735,129 @@ export interface FsListOptions {
   recursive?: boolean
   /** Pattern to match (glob-like) */
   pattern?: string
+}
+
+// ============================================================================
+// Type-Safe FsCapability with Proper Read Overloads
+// ============================================================================
+
+/**
+ * String encoding types supported by the filesystem read operations.
+ * Matches fsx.do's BufferEncoding type.
+ */
+export type StringEncoding = 'utf-8' | 'utf8' | 'ascii' | 'base64' | 'hex' | 'binary' | 'latin1'
+
+/**
+ * Read options with typed encoding for proper return type inference.
+ */
+export interface TypedReadOptions {
+  /**
+   * Character encoding for string output.
+   * When specified (non-null), read() returns a string.
+   * When null or undefined, read() returns Uint8Array.
+   */
+  encoding?: StringEncoding | null
+  /** File open flag (default: 'r' for read) */
+  flag?: string
+  /** Start byte position for range reads (inclusive) */
+  start?: number
+  /** End byte position for range reads (inclusive) */
+  end?: number
+  /** Abort signal for cancellation support */
+  signal?: AbortSignal
+  /** High water mark for streaming reads (buffer size in bytes) */
+  highWaterMark?: number
+}
+
+/**
+ * Read options that explicitly specify a string encoding.
+ * Used for overload inference - when encoding is a StringEncoding, return string.
+ */
+export interface TypedReadOptionsWithEncoding extends TypedReadOptions {
+  encoding: StringEncoding
+}
+
+/**
+ * Read options with no encoding or null encoding.
+ * Used for overload inference - when encoding is absent/null, return Uint8Array.
+ */
+export interface TypedReadOptionsWithoutEncoding extends TypedReadOptions {
+  encoding?: null
+}
+
+/**
+ * Type-safe FsCapability interface with proper read() overloads.
+ *
+ * This interface extends the FsCapability from fsx.do with function overloads
+ * that properly infer the return type of read() based on the encoding option:
+ *
+ * - `read(path, { encoding: 'utf-8' })` returns `Promise<string>`
+ * - `read(path)` returns `Promise<Uint8Array>`
+ * - `read(path, { encoding: null })` returns `Promise<Uint8Array>`
+ *
+ * This eliminates the need for `as string` casts when reading files with encoding.
+ *
+ * @example
+ * ```typescript
+ * const fs: TypedFsCapability = ...
+ *
+ * // TypeScript knows this is a string - no cast needed!
+ * const content = await fs.read('/file.txt', { encoding: 'utf-8' })
+ * const lines = content.split('\n')  // Works without 'as string'
+ *
+ * // TypeScript knows this is Uint8Array
+ * const bytes = await fs.read('/file.bin')
+ * console.log(bytes.length)
+ * ```
+ */
+export interface TypedFsCapability extends Omit<FsCapability, 'read'> {
+  /**
+   * Read file contents as a string when encoding is specified.
+   *
+   * @param path - Absolute path to the file
+   * @param options - Read options with encoding specified
+   * @returns File contents as a string
+   */
+  read(path: string, options: TypedReadOptionsWithEncoding): Promise<string>
+
+  /**
+   * Read file contents as binary when no encoding is specified.
+   *
+   * @param path - Absolute path to the file
+   * @param options - Read options without encoding (or encoding: null)
+   * @returns File contents as Uint8Array
+   */
+  read(path: string, options?: TypedReadOptionsWithoutEncoding): Promise<Uint8Array>
+
+  /**
+   * Read file contents - return type depends on encoding option.
+   *
+   * @param path - Absolute path to the file
+   * @param options - Read options (optional)
+   * @returns File contents as string (with encoding) or Uint8Array (without)
+   */
+  read(path: string, options?: TypedReadOptions): Promise<string | Uint8Array>
+}
+
+/**
+ * Helper function to cast any filesystem implementation to TypedFsCapability.
+ * This provides runtime compatibility while enabling compile-time type safety.
+ *
+ * The cast is safe because TypedFsCapability only adds type-level information
+ * about the read() return type based on options. The actual implementation
+ * behavior is unchanged.
+ *
+ * @example
+ * ```typescript
+ * const fs = new FsxServiceAdapter(env.FSX)
+ * const typedFs = asTypedFs(fs)
+ *
+ * // Now you can use typed reads without casts
+ * const content = await typedFs.read('/file.txt', { encoding: 'utf-8' })
+ * ```
+ */
+export function asTypedFs(fs: unknown): TypedFsCapability {
+  return fs as TypedFsCapability
 }
 
 // ============================================================================
