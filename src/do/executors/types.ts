@@ -260,7 +260,7 @@ export interface TierClassification {
   /** Human-readable reason for the tier selection */
   reason: string
   /** The handler type that will execute the command */
-  handler: 'native' | 'rpc' | 'loader' | 'sandbox'
+  handler: 'native' | 'rpc' | 'loader' | 'sandbox' | 'polyglot'
   /** Optional: specific capability or service name */
   capability?: string
 }
@@ -371,3 +371,86 @@ export interface BaseExecutorConfig {
 export type ExecutorFactory<TConfig extends BaseExecutorConfig, TExecutor extends TierExecutor> = (
   config?: TConfig
 ) => TExecutor
+
+// ============================================================================
+// TIER EXECUTION METHOD TYPES
+// ============================================================================
+
+/**
+ * Type signature for tier execution methods.
+ *
+ * All tier execution methods (executeTier1, executeTier2, executeTier3,
+ * executeTier4, executePolyglot) share this signature. This type enables
+ * type-safe access from executor adapters without using `as any` casts.
+ *
+ * @param command - The command string to execute
+ * @param classification - The tier classification for routing decisions
+ * @param options - Optional execution options
+ * @returns Promise resolving to a BashResult
+ *
+ * @internal
+ */
+export type TierExecutionMethod = (
+  command: string,
+  classification: TierClassification,
+  options?: ExecOptions
+) => Promise<BashResult>
+
+/**
+ * Internal interface exposing tier execution methods.
+ *
+ * This interface is implemented by TieredExecutor and used by executor
+ * adapters to access tier-specific execution methods in a type-safe manner.
+ *
+ * The interface enables the adapter pattern without requiring `as any` casts
+ * to access private methods. Instead, adapters receive a reference to this
+ * interface and call the appropriate method directly.
+ *
+ * Architecture:
+ * ```
+ * TieredExecutor implements TieredExecutorInternal
+ *   |
+ *   +-- executeTier1() - Tier 1 native execution
+ *   +-- executeTier2() - Tier 2 RPC execution
+ *   +-- executeTier3() - Tier 3 loader execution
+ *   +-- executeTier4() - Tier 4 sandbox execution
+ *   +-- executePolyglot() - Polyglot language execution
+ *
+ * ExecutorAdapter receives TieredExecutorInternal reference
+ *   |
+ *   +-- Calls appropriate tier method via typed interface
+ * ```
+ *
+ * @internal
+ */
+export interface TieredExecutorInternal {
+  /**
+   * Execute command via Tier 1 (native in-Worker).
+   * @internal
+   */
+  executeTier1: TierExecutionMethod
+
+  /**
+   * Execute command via Tier 2 (RPC to external services).
+   * @internal
+   */
+  executeTier2: TierExecutionMethod
+
+  /**
+   * Execute command via Tier 3 (dynamic loader).
+   * @internal
+   */
+  executeTier3: TierExecutionMethod
+
+  /**
+   * Execute command via Tier 4 (sandbox).
+   * @internal
+   */
+  executeTier4: TierExecutionMethod
+
+  /**
+   * Execute command via polyglot runtime.
+   * @internal
+   */
+  executePolyglot: TierExecutionMethod
+}
