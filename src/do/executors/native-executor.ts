@@ -31,6 +31,7 @@
 
 import type { BashResult, ExecOptions, FsCapability } from '../../types.js'
 import type { TierExecutor, BaseExecutorConfig } from './types.js'
+import { safeEval, SafeExprError } from '../commands/safe-expr.js'
 
 // ============================================================================
 // TYPES
@@ -1201,16 +1202,15 @@ export class NativeExecutor implements TierExecutor {
 
   private executeBc(input: string): NativeCommandResult {
     try {
-      // Simple arithmetic expression evaluation
+      // Use safe expression evaluator instead of eval()
+      // This prevents code injection attacks
       const expr = input.trim()
-      // Only allow basic arithmetic for safety
-      if (!/^[\d\s+\-*/().]+$/.test(expr)) {
-        return { stdout: '', stderr: 'bc: invalid expression', exitCode: 1 }
+      const result = safeEval(expr)
+      return { stdout: result + '\n', stderr: '', exitCode: 0 }
+    } catch (error) {
+      if (error instanceof SafeExprError) {
+        return { stdout: '', stderr: error.message, exitCode: 1 }
       }
-      // eslint-disable-next-line no-eval
-      const result = eval(expr)
-      return { stdout: String(result) + '\n', stderr: '', exitCode: 0 }
-    } catch {
       return { stdout: '', stderr: 'bc: error', exitCode: 1 }
     }
   }

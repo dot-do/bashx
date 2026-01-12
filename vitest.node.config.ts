@@ -65,6 +65,10 @@ export default defineConfig({
       'tests/do/executors/**/*.test.ts',
       // Command handler tests (Strategy pattern for command execution)
       'tests/do/handlers/**/*.test.ts',
+      // Safe expression parser tests (security fix for eval() vulnerability)
+      'tests/do/commands/safe-expr.test.ts',
+      // Configuration tests (pure unit tests)
+      'tests/config/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
