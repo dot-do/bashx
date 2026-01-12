@@ -58,15 +58,28 @@ export interface RateLimitStats {
 // Rate Limit Error
 // ============================================================================
 
+import { BashxRateLimitError as UnifiedRateLimitError } from '../errors/bashx-error.js'
+
 /**
  * Error thrown when rate limit is exceeded.
+ *
+ * This class extends BashxRateLimitError for unified error handling
+ * while maintaining backward compatibility with the original API.
+ *
+ * @deprecated Use BashxRateLimitError from '../errors/bashx-error.js' for new code.
  */
-export class RateLimitError extends Error {
-  readonly code = 'RATE_LIMIT_EXCEEDED'
+export class RateLimitError extends UnifiedRateLimitError {
   readonly stats: RateLimitStats
 
   constructor(message: string, stats: RateLimitStats) {
-    super(message)
+    super(message, {
+      limit: stats.currentRequests, // Use current as limit for backward compat
+      remaining: 0,
+      windowStart: stats.windowStart,
+      totalRequests: stats.totalRequests,
+      totalRejected: stats.totalRejected,
+      provider: 'rpc',
+    })
     this.name = 'RateLimitError'
     this.stats = stats
   }

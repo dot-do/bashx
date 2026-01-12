@@ -391,7 +391,8 @@ describe('RateLimitError', () => {
     }
     const error = new RateLimitError('Test', stats)
 
-    expect(error.code).toBe('RATE_LIMIT_EXCEEDED')
+    // Now uses unified error code from BashxRateLimitError
+    expect(error.code).toBe('RATE_LIMIT_ERROR')
   })
 
   it('should store stats', () => {
