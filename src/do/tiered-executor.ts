@@ -125,6 +125,26 @@ import type { TierExecutor, LanguageExecutor, TieredExecutorInternal } from './e
 import { parseRpcResponse } from './executors/rpc-executor.js'
 import { PipelineExecutor } from './pipeline/index.js'
 
+// Import and re-export CommandClassifier module
+// This provides an extracted, standalone classification module for tier determination
+import {
+  CommandClassifier,
+  type ClassifyOptions,
+  type ClassificationMetrics,
+  type RpcServiceConfig,
+  type WorkerLoaderConfig,
+  type ClassifierConfig,
+} from './classify/command-classifier.js'
+
+export {
+  CommandClassifier,
+  type ClassifyOptions,
+  type ClassificationMetrics,
+  type RpcServiceConfig,
+  type WorkerLoaderConfig,
+  type ClassifierConfig,
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================

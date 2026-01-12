@@ -67,6 +67,8 @@ export default defineConfig({
       'tests/do/handlers/**/*.test.ts',
       // Safe expression parser tests (security fix for eval() vulnerability)
       'tests/do/commands/safe-expr.test.ts',
+      // Command classifier tests (pure unit tests for tier classification)
+      'tests/do/classify/**/*.test.ts',
       // Configuration tests (pure unit tests)
       'tests/config/**/*.test.ts',
     ],
