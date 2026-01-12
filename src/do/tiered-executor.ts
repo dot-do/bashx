@@ -505,7 +505,7 @@ class NativeExecutorAdapter extends ExecutorAdapter {
  * @internal
  */
 class RpcExecutorAdapter extends ExecutorAdapter {
-  canExecute(command: string): boolean {
+  canExecute(_command: string): boolean {
     return this.classification.handler === 'rpc'
   }
 
@@ -519,7 +519,7 @@ class RpcExecutorAdapter extends ExecutorAdapter {
  * @internal
  */
 class LoaderExecutorAdapter extends ExecutorAdapter {
-  canExecute(command: string): boolean {
+  canExecute(_command: string): boolean {
     return this.classification.handler === 'loader'
   }
 
@@ -533,7 +533,7 @@ class LoaderExecutorAdapter extends ExecutorAdapter {
  * @internal
  */
 class SandboxExecutorAdapter extends ExecutorAdapter {
-  canExecute(command: string): boolean {
+  canExecute(_command: string): boolean {
     return true // Sandbox can execute any command
   }
 
@@ -547,7 +547,7 @@ class SandboxExecutorAdapter extends ExecutorAdapter {
  * @internal
  */
 class PolyglotExecutorAdapter extends ExecutorAdapter {
-  canExecute(command: string): boolean {
+  canExecute(_command: string): boolean {
     return this.classification.handler === 'polyglot'
   }
 
@@ -736,78 +736,78 @@ export class TieredExecutor implements BashExecutor {
       // If it's a filesystem command, check if fs capability is available
       if (TIER_1_FS_COMMANDS.has(cmd)) {
         if (this.fs) {
-          return {
+          return this.withExecutor({
             tier: 1,
             reason: `Native filesystem operation via FsCapability`,
             handler: 'native',
             capability: 'fs',
-          }
+          })
         }
         // Fall through to sandbox if no fs capability
       } else if (TIER_1_HTTP_COMMANDS.has(cmd)) {
         // HTTP commands via native fetch API
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native HTTP operation via fetch API (${cmd})`,
           handler: 'native',
           capability: 'http',
-        }
+        })
       } else if (TIER_1_DATA_COMMANDS.has(cmd)) {
         // Data processing commands (jq, yq, base64, envsubst)
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native data processing command (${cmd})`,
           handler: 'native',
           capability: cmd, // Use command name as capability
-        }
+        })
       } else if (TIER_1_CRYPTO_COMMANDS.has(cmd)) {
         // Crypto commands via Web Crypto API
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native crypto command via Web Crypto API (${cmd})`,
           handler: 'native',
           capability: 'crypto',
-        }
+        })
       } else if (TIER_1_TEXT_PROCESSING_COMMANDS.has(cmd)) {
         // Text processing commands (sed, awk, diff, patch, tee, xargs)
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native text processing command (${cmd})`,
           handler: 'native',
           capability: 'text',
-        }
+        })
       } else if (TIER_1_POSIX_UTILS_COMMANDS.has(cmd)) {
         // POSIX utility commands (cut, sort, tr, uniq, wc, basename, dirname, echo, printf, date, dd, od)
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native POSIX utility command (${cmd})`,
           handler: 'native',
           capability: 'posix',
-        }
+        })
       } else if (TIER_1_SYSTEM_UTILS_COMMANDS.has(cmd)) {
         // System utility commands (yes, whoami, hostname, printenv)
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native system utility command (${cmd})`,
           handler: 'native',
           capability: 'system',
-        }
+        })
       } else if (TIER_1_EXTENDED_UTILS_COMMANDS.has(cmd)) {
         // Extended utility commands (env, id, uname, tac)
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native extended utility command (${cmd})`,
           handler: 'native',
           capability: 'extended',
-        }
+        })
       } else {
         // Pure computation commands
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Pure computation command (${cmd})`,
           handler: 'native',
           capability: 'compute',
-        }
+        })
       }
     }
 
@@ -817,12 +817,12 @@ export class TieredExecutor implements BashExecutor {
       const args = this.extractArgs(command)
       if (canExecuteNativeNpm(args)) {
         const subcommand = extractNpmSubcommand(command)
-        return {
+        return this.withExecutor({
           tier: 1,
           reason: `Native npm registry operation via npmx (${subcommand})`,
           handler: 'native',
           capability: 'npm-native',
-        }
+        })
       }
       // Fall through to Tier 2 RPC for complex npm operations
     }
@@ -838,12 +838,12 @@ export class TieredExecutor implements BashExecutor {
         const reason = routingResult.packageManager
           ? `polyglot execution via ${routingResult.language} worker (${routingResult.packageManager})`
           : `polyglot execution via ${routingResult.language} worker`
-        return {
+        return this.withExecutor({
           tier: 2, // Using tier 2 slot since there's no 1.5 in ExecutionTier type
           reason,
           handler: 'polyglot',
           capability: routingResult.language,
-        }
+        })
       } else {
         // No language worker configured for this language - skip RPC and go to sandbox
         // Perform safety analysis to determine sandbox resource limits
@@ -856,23 +856,23 @@ export class TieredExecutor implements BashExecutor {
 
     // Handle package managers that route to polyglot (e.g., pip -> python worker)
     if (routingResult.packageManager && routingResult.routeTo === 'polyglot' && routingResult.worker) {
-      return {
+      return this.withExecutor({
         tier: 2,
         reason: `polyglot execution via ${routingResult.language} worker (${routingResult.packageManager})`,
         handler: 'polyglot',
         capability: routingResult.language,
-      }
+      })
     }
 
     // Tier 2: RPC service commands
     for (const [serviceName, binding] of Object.entries(this.rpcBindings)) {
       if (binding.commands.includes(cmd)) {
-        return {
+        return this.withExecutor({
           tier: 2,
           reason: `RPC service available (${serviceName})`,
           handler: 'rpc',
           capability: serviceName,
-        }
+        })
       }
     }
 
@@ -880,23 +880,23 @@ export class TieredExecutor implements BashExecutor {
     // This is for Node.js tools that can run in Workers with worker_loaders
     const workerLoaderMatch = this.matchWorkerLoader(command)
     if (workerLoaderMatch) {
-      return {
+      return this.withExecutor({
         tier: 3,
         reason: `Dynamic npm module available (${workerLoaderMatch})`,
         handler: 'loader',
         capability: workerLoaderMatch,
-      }
+      })
     }
 
     // Tier 4: Sandbox for everything else
-    return {
+    return this.withExecutor({
       tier: 4,
       reason: TIER_4_SANDBOX_COMMANDS.has(cmd)
         ? `Requires Linux sandbox (${cmd})`
         : 'No higher tier available for this command',
       handler: 'sandbox',
       capability: 'container',
-    }
+    })
   }
 
   /**
@@ -914,13 +914,13 @@ export class TieredExecutor implements BashExecutor {
     language: SupportedLanguage
   ): TierClassification {
     const safetyAnalysis = analyzeMultiLanguageSync(command)
-    return {
+    return this.withExecutor({
       tier: 4,
       reason: `No language worker for ${language}, using sandbox`,
       handler: 'sandbox',
       capability: 'container',
       sandboxStrategy: safetyAnalysis.sandboxStrategy,
-    }
+    })
   }
 
   /**
@@ -952,12 +952,30 @@ export class TieredExecutor implements BashExecutor {
   /**
    * Execute a single command (no pipeline handling).
    * This is called by the PipelineExecutor for each segment.
+   *
+   * Uses polymorphic dispatch when an executor is present in the classification,
+   * falling back to switch-based dispatch for backward compatibility.
    */
   private async executeSingleCommand(command: string, options?: ExecOptions): Promise<BashResult> {
     const classification = this.classifyCommand(command)
 
     try {
-      // Handle polyglot (Tier 1.5) separately
+      // Polymorphic dispatch: use the executor instance if present
+      // This is the preferred execution path - no switch statement needed
+      if (classification.executor) {
+        // Handle LanguageExecutor (polyglot) separately since it has a different signature
+        if (classification.handler === 'polyglot') {
+          return await this.executePolyglot(command, classification, options)
+        }
+        // TierExecutor can be called directly - type assertion needed since
+        // the executor type is TierExecutor | LanguageExecutor but we've
+        // already handled LanguageExecutor case above
+        const executor = classification.executor as TierExecutor
+        return await executor.execute(command, options)
+      }
+
+      // Fallback: switch-based dispatch for backward compatibility
+      // This path is kept for cases where executor might not be set
       if (classification.handler === 'polyglot') {
         return await this.executePolyglot(command, classification, options)
       }
