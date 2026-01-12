@@ -15,7 +15,7 @@
  */
 
 import type { BashExecutor } from './index.js'
-import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle, TypedFsCapability } from '../types.js'
+import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle, TypedFsCapability, Dirent } from '../types.js'
 import {
   executeBc,
   executeExpr,
@@ -122,6 +122,12 @@ import {
   type LanguageBinding,
 } from './executors/polyglot-executor.js'
 import type { TierExecutor, LanguageExecutor, TieredExecutorInternal } from './executors/types.js'
+import {
+  isTierExecutor,
+  isSupportedLanguage,
+  isFetcherBinding,
+  isCliModule,
+} from './executors/types.js'
 import { parseRpcResponse } from './executors/rpc-executor.js'
 import { PipelineExecutor } from './pipeline/index.js'
 
@@ -687,6 +693,7 @@ export class TieredExecutor implements BashExecutor {
   public readonly preferFaster: boolean
   private readonly languageWorkers: Partial<Record<SupportedLanguage, LanguageBinding>>
   private readonly polyglotExecutor?: PolyglotExecutor
+  private readonly sandboxExecutor?: SandboxExecutor
   private readonly pipelineExecutor: PipelineExecutor
   private readonly languageRouter: LanguageRouter
 
@@ -1311,11 +1318,13 @@ export class TieredExecutor implements BashExecutor {
         if (classification.handler === 'polyglot') {
           return await this.executePolyglot(command, classification, options)
         }
-        // TierExecutor can be called directly - type assertion needed since
-        // the executor type is TierExecutor | LanguageExecutor but we've
-        // already handled LanguageExecutor case above
-        const executor = classification.executor as TierExecutor
-        return await executor.execute(command, options)
+        // Use type guard to safely narrow executor type
+        // isTierExecutor checks for absence of getAvailableLanguages method
+        if (isTierExecutor(classification.executor)) {
+          return await classification.executor.execute(command, options)
+        }
+        // Fallback for edge case where executor is LanguageExecutor but handler isn't polyglot
+        return await this.executePolyglot(command, classification, options)
       }
 
       // Fallback: switch-based dispatch for backward compatibility
@@ -1359,10 +1368,11 @@ export class TieredExecutor implements BashExecutor {
     classification: TierClassification,
     options?: ExecOptions
   ): Promise<BashResult> {
-    const language = classification.capability as SupportedLanguage
-    if (!language) {
-      throw new Error('No language specified for polyglot execution')
+    // Use type guard to safely narrow capability to SupportedLanguage
+    if (!isSupportedLanguage(classification.capability)) {
+      throw new Error('No valid language specified for polyglot execution')
     }
+    const language = classification.capability
 
     if (!this.polyglotExecutor) {
       throw new Error('PolyglotExecutor not initialized')
@@ -1522,8 +1532,9 @@ export class TieredExecutor implements BashExecutor {
           // Use withFileTypes: true to get Dirent objects from fsx.do
           const entries = await this.fs.list(path, { withFileTypes: true })
           // fsx.do returns Dirent[] when withFileTypes is true
-          // Dirent has isDirectory() as a method
-          stdout = (entries as Array<{ name: string; isDirectory(): boolean }>)
+          // Dirent class has isDirectory() method - cast to Dirent[] for type safety
+          const dirents = entries as Dirent[]
+          stdout = dirents
             .map(e => e.isDirectory() ? `${e.name}/` : e.name)
             .join('\n') + '\n'
           break
@@ -3352,7 +3363,11 @@ export class TieredExecutor implements BashExecutor {
 
       if (!endpoint) {
         // Use the binding's fetch method directly
-        const fetcher = binding.endpoint as { fetch: typeof fetch }
+        // Use type guard to validate the fetcher binding has a fetch method
+        if (!isFetcherBinding(binding.endpoint)) {
+          throw new Error(`Invalid RPC binding: ${serviceName} has no fetch method`)
+        }
+        const fetcher = binding.endpoint
         const response = await fetcher.fetch('/', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3446,50 +3461,48 @@ export class TieredExecutor implements BashExecutor {
     const cmd = this.extractCommandName(command)
     const args = this.extractArgs(command)
 
-    // Check if module has a CLI-like interface
-    const mod = module as Record<string, unknown>
+    // Check if module has a CLI-like interface using type guard
+    if (!isCliModule(module)) {
+      throw new Error(`Module ${cmd} does not have a callable interface`)
+    }
 
     // Try common patterns for CLI modules
-    if (typeof mod.run === 'function') {
-      const result = await mod.run(args)
+    if (module.run) {
+      const result = await module.run(args)
       return { stdout: String(result), stderr: '', exitCode: 0 }
     }
 
-    if (typeof mod.main === 'function') {
-      const result = await mod.main(args)
+    if (module.main) {
+      const result = await module.main(args)
       return { stdout: String(result), stderr: '', exitCode: 0 }
     }
 
-    if (typeof mod.default === 'function') {
-      const result = await mod.default(args)
+    if (module.default) {
+      const result = await module.default(args)
       return { stdout: String(result), stderr: '', exitCode: 0 }
     }
 
+    // This shouldn't be reachable since isCliModule ensures at least one method exists
     throw new Error(`Module ${cmd} does not have a callable interface`)
   }
 
   /**
    * Tier 4: Execute via Sandbox SDK
+   *
+   * Delegates to SandboxExecutor for full Linux sandbox execution.
+   * The SandboxExecutor handles tier metadata enhancement and error handling.
    */
   private async executeTier4(
     command: string,
     _classification: TierClassification,
     options?: ExecOptions
   ): Promise<BashResult> {
-    if (!this.sandbox) {
+    if (!this.sandboxExecutor) {
       throw new Error('Sandbox not configured. Tier 4 execution requires a sandbox binding.')
     }
 
-    const result = await this.sandbox.execute(command, options)
-
-    // Add tier info to result
-    return {
-      ...result,
-      classification: {
-        ...result.classification,
-        reason: `${result.classification.reason} (Tier 4: Sandbox)`,
-      },
-    }
+    // Delegate to SandboxExecutor - it handles tier metadata enhancement
+    return this.sandboxExecutor.execute(command, options)
   }
 
   // ============================================================================

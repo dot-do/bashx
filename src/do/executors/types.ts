@@ -454,3 +454,69 @@ export interface TieredExecutorInternal {
    */
   executePolyglot: TierExecutionMethod
 }
+
+// ============================================================================
+// TYPE GUARDS
+// ============================================================================
+
+/**
+ * Set of valid supported language names for runtime validation.
+ */
+const SUPPORTED_LANGUAGES = new Set<string>(['bash', 'python', 'ruby', 'node', 'go', 'rust'])
+
+/**
+ * Type guard to check if a string is a valid SupportedLanguage.
+ */
+export function isSupportedLanguage(value: unknown): value is SupportedLanguage {
+  return typeof value === 'string' && SUPPORTED_LANGUAGES.has(value)
+}
+
+/**
+ * Type guard to check if an executor is a TierExecutor (not a LanguageExecutor).
+ */
+export function isTierExecutor(executor: TierExecutor | LanguageExecutor): executor is TierExecutor {
+  return !('getAvailableLanguages' in executor)
+}
+
+/**
+ * Type guard to check if an executor is a LanguageExecutor (not a TierExecutor).
+ */
+export function isLanguageExecutor(executor: TierExecutor | LanguageExecutor): executor is LanguageExecutor {
+  return 'getAvailableLanguages' in executor
+}
+
+/**
+ * Type guard for fetcher objects that have a fetch method.
+ */
+export function isFetcherBinding(value: unknown): value is { fetch: typeof fetch } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'fetch' in value &&
+    typeof (value as { fetch: unknown }).fetch === 'function'
+  )
+}
+
+/**
+ * Interface for CLI-like module with optional entry points.
+ */
+export interface CliModule {
+  run?: (args: string[]) => unknown
+  main?: (args: string[]) => unknown
+  default?: (args: string[]) => unknown
+}
+
+/**
+ * Type guard to check if a module has a CLI-like interface.
+ */
+export function isCliModule(module: unknown): module is CliModule {
+  if (typeof module !== 'object' || module === null) {
+    return false
+  }
+  const mod = module as Record<string, unknown>
+  return (
+    typeof mod.run === 'function' ||
+    typeof mod.main === 'function' ||
+    typeof mod.default === 'function'
+  )
+}
