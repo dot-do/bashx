@@ -25,21 +25,51 @@ const execAsync = promisify(exec)
 /**
  * Error type for child_process exec errors.
  * Extends the standard Error with process-specific fields.
+ *
+ * @remarks
+ * When child_process.exec() fails, it throws an Error with additional properties:
+ * - `code`: The exit code of the process (number or undefined if killed)
+ * - `killed`: Whether the process was terminated by a signal
+ * - `stdout`: Standard output captured before the error occurred
+ * - `stderr`: Standard error output
  */
 interface ExecError extends Error {
-  /** Exit code from the process */
+  /** Exit code from the process (undefined if process was killed by signal) */
   code?: number
-  /** Standard output captured before error */
+  /** Whether the process was killed by a signal */
+  killed?: boolean
+  /** Standard output captured before error (may be Buffer or string) */
   stdout?: Buffer | string
-  /** Standard error captured */
+  /** Standard error captured (may be Buffer or string) */
   stderr?: Buffer | string
 }
 
 /**
  * Type guard to check if an error is an ExecError from child_process.
+ *
+ * An ExecError is an Error instance that has at least one of the exec-specific
+ * properties (code, killed, stdout, stderr) with the correct type.
+ *
+ * @param error - The value to check
+ * @returns True if the error is an ExecError with proper exec properties
  */
 function isExecError(error: unknown): error is ExecError {
-  return error instanceof Error
+  // Must be an Error instance
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  // Cast to check properties (Error + additional properties)
+  const err = error as unknown as Record<string, unknown>
+
+  // Check for at least one exec-specific property with correct type
+  const hasValidCode = 'code' in err && (typeof err.code === 'number' || err.code === undefined)
+  const hasValidKilled = 'killed' in err && typeof err.killed === 'boolean'
+  const hasValidStdout = 'stdout' in err && (typeof err.stdout === 'string' || Buffer.isBuffer(err.stdout))
+  const hasValidStderr = 'stderr' in err && (typeof err.stderr === 'string' || Buffer.isBuffer(err.stderr))
+
+  // Must have at least one exec-specific property
+  return hasValidCode || hasValidKilled || hasValidStdout || hasValidStderr
 }
 
 // ============================================================================
