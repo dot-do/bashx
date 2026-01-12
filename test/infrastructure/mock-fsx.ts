@@ -495,24 +495,306 @@ function createMockFSXHandler(initialFiles?: MockFSXInitialFiles) {
           }
 
           const withFileTypes = params.withFileTypes as boolean
+          const recursive = params.recursive as boolean
           const prefix = path === '/' ? '/' : path + '/'
 
-          // Get immediate children only
+          // Get children (immediate or recursive)
           const children = Array.from(fs.entries())
             .filter(([p]) => {
               if (!p.startsWith(prefix)) return false
               const relativePath = p.slice(prefix.length)
-              return relativePath && !relativePath.includes('/')
+              if (!relativePath) return false
+              if (recursive) return true
+              return !relativePath.includes('/')
             })
             .map(([p, e]) => {
               const name = p.slice(prefix.length)
               if (withFileTypes) {
-                return { name, type: e.type }
+                return { name, path: p, type: e.type }
               }
               return name
             })
 
           return new Response(JSON.stringify({ entries: children }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'rm': {
+          const entry = fs.get(path)
+          const forceOpt = params.force as boolean
+          const recursiveOpt = params.recursive as boolean
+
+          if (!entry) {
+            if (forceOpt) {
+              return new Response(JSON.stringify({ success: true }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              })
+            }
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, rm '${path}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          if (entry.type === 'directory') {
+            if (!recursiveOpt) {
+              return new Response(
+                JSON.stringify({ code: 'EISDIR', message: `EISDIR: is a directory, rm '${path}'` }),
+                { status: 400, headers: { 'Content-Type': 'application/json' } }
+              )
+            }
+            // Delete all children recursively
+            const childPaths = Array.from(fs.keys()).filter(
+              (p) => p !== path && p.startsWith(path + '/')
+            )
+            for (const childPath of childPaths) {
+              fs.delete(childPath)
+            }
+          }
+
+          fs.delete(path)
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'copyFile': {
+          const src = normalizePath((params.src as string) || '')
+          const dest = normalizePath((params.dest as string) || '')
+          const srcEntry = fs.get(src)
+
+          if (!srcEntry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, copyfile '${src}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const now = Date.now()
+          fs.set(dest, {
+            type: srcEntry.type,
+            content: srcEntry.content ? new Uint8Array(srcEntry.content) : undefined,
+            mode: srcEntry.mode,
+            mtime: now,
+            ctime: now,
+            birthtime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'rename': {
+          const oldPath = normalizePath((params.oldPath as string) || '')
+          const newPath = normalizePath((params.newPath as string) || '')
+          const oldEntry = fs.get(oldPath)
+
+          if (!oldEntry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, rename '${oldPath}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const now = Date.now()
+          fs.set(newPath, {
+            ...oldEntry,
+            ctime: now,
+          })
+          fs.delete(oldPath)
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'utimes': {
+          const entry = fs.get(path)
+          if (!entry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, utime '${path}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const atime = params.atime as number
+          const mtime = params.mtime as number
+          const now = Date.now()
+
+          fs.set(path, {
+            ...entry,
+            mtime: mtime ?? entry.mtime,
+            ctime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'truncate': {
+          const entry = fs.get(path)
+          if (!entry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, truncate '${path}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          if (entry.type === 'directory') {
+            return new Response(
+              JSON.stringify({ code: 'EISDIR', message: `EISDIR: is a directory, truncate '${path}'` }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const length = (params.length as number) ?? 0
+          const now = Date.now()
+          const newContent = entry.content
+            ? entry.content.slice(0, length)
+            : new Uint8Array(0)
+
+          fs.set(path, {
+            ...entry,
+            content: newContent,
+            mtime: now,
+            ctime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'readlink': {
+          const entry = fs.get(path)
+          if (!entry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, readlink '${path}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          // Mock doesn't track symlinks, return the path itself for now
+          return new Response(JSON.stringify({ target: path }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'symlink': {
+          const target = params.target as string
+          const symlinkPath = normalizePath((params.path as string) || path)
+
+          const existing = fs.get(symlinkPath)
+          if (existing) {
+            return new Response(
+              JSON.stringify({ code: 'EEXIST', message: `EEXIST: file already exists, symlink '${symlinkPath}'` }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const now = Date.now()
+          fs.set(symlinkPath, {
+            type: 'file', // Mock treats symlinks as files
+            content: new TextEncoder().encode(target), // Store target as content
+            mode: 0o777 | 0o120000, // symlink mode
+            mtime: now,
+            ctime: now,
+            birthtime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'link': {
+          const existingPath = normalizePath((params.existingPath as string) || '')
+          const newLinkPath = normalizePath((params.newPath as string) || '')
+
+          const srcEntry = fs.get(existingPath)
+          if (!srcEntry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, link '${existingPath}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const existing = fs.get(newLinkPath)
+          if (existing) {
+            return new Response(
+              JSON.stringify({ code: 'EEXIST', message: `EEXIST: file already exists, link '${newLinkPath}'` }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const now = Date.now()
+          fs.set(newLinkPath, {
+            ...srcEntry,
+            ctime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'chmod': {
+          const entry = fs.get(path)
+          if (!entry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, chmod '${path}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          const mode = params.mode as number
+          const now = Date.now()
+          // Preserve type bits (directory/file), update permission bits
+          const typeBits = entry.mode & 0o170000 // Keep type bits
+          const newMode = typeBits | (mode & 0o7777) // Set permission bits
+
+          fs.set(path, {
+            ...entry,
+            mode: newMode,
+            ctime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        case 'chown': {
+          const entry = fs.get(path)
+          if (!entry) {
+            return new Response(
+              JSON.stringify({ code: 'ENOENT', message: `ENOENT: no such file or directory, chown '${path}'` }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+
+          // Mock doesn't track uid/gid, just update ctime
+          const now = Date.now()
+          fs.set(path, {
+            ...entry,
+            ctime: now,
+          })
+
+          return new Response(JSON.stringify({ success: true }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           })

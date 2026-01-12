@@ -41,6 +41,11 @@ export { shellEscape, shellEscapeArg } from './escape.js'
 
 // Re-export undo tracking utilities
 export {
+  // Class-based API (recommended for concurrent environments)
+  UndoManager,
+  createUndoManager,
+  type UndoInfo,
+  // Backward-compatible module functions (use default instance)
   getUndoHistory,
   clearUndoHistory,
   setUndoOptions,

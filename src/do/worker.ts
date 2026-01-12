@@ -79,6 +79,9 @@ export interface Env {
   /** Service binding to fsx-do for filesystem operations (optional for tests) */
   FSX?: Fetcher
 
+  /** Service binding to gitx-do for git operations (Tier 2) */
+  GITX?: Fetcher
+
   /** Optional: Container service for Tier 4 sandbox execution */
   CONTAINER?: Fetcher
 
@@ -173,7 +176,11 @@ class FsxServiceAdapter {
 
   async stat(path: string): Promise<{
     size: number
+    mode: number
+    atime: Date
     mtime: Date
+    ctime: Date
+    birthtime: Date
     isFile(): boolean
     isDirectory(): boolean
   }> {
@@ -193,16 +200,24 @@ class FsxServiceAdapter {
 
     const result = await response.json() as {
       size: number
-      mtime: number
       mode: number
+      mtime: number
+      ctime: number
+      atime?: number
+      birthtime?: number
     }
 
     // Mode bits: S_IFDIR = 0o40000
     const isDir = (result.mode & 0o40000) === 0o40000
+    const now = Date.now()
 
     return {
       size: result.size,
-      mtime: new Date(result.mtime),
+      mode: result.mode,
+      atime: new Date(result.atime ?? result.mtime ?? now),
+      mtime: new Date(result.mtime ?? now),
+      ctime: new Date(result.ctime ?? result.mtime ?? now),
+      birthtime: new Date(result.birthtime ?? result.ctime ?? result.mtime ?? now),
       isFile: () => !isDir,
       isDirectory: () => isDir,
     }
@@ -210,14 +225,14 @@ class FsxServiceAdapter {
 
   async list(
     path: string,
-    options?: { withFileTypes?: boolean }
-  ): Promise<Array<string | { name: string; isDirectory(): boolean }>> {
+    options?: { withFileTypes?: boolean; recursive?: boolean }
+  ): Promise<Array<string | { name: string; path?: string; isDirectory(): boolean; isFile(): boolean }>> {
     const response = await this.fsx.fetch('https://fsx.do/rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         method: 'readdir',
-        params: { path, withFileTypes: options?.withFileTypes },
+        params: { path, withFileTypes: options?.withFileTypes, recursive: options?.recursive },
       }),
     })
 
@@ -227,13 +242,15 @@ class FsxServiceAdapter {
     }
 
     const result = await response.json() as {
-      entries: Array<string | { name: string; type: string }>
+      entries: Array<string | { name: string; path?: string; type: string }>
     }
 
     if (options?.withFileTypes) {
-      return (result.entries as Array<{ name: string; type: string }>).map((e) => ({
+      return (result.entries as Array<{ name: string; path?: string; type: string }>).map((e) => ({
         name: e.name,
+        path: e.path,
         isDirectory: () => e.type === 'directory',
+        isFile: () => e.type === 'file',
       }))
     }
 
@@ -285,6 +302,207 @@ class FsxServiceAdapter {
     if (!response.ok) {
       const error = await response.json() as { code?: string; message?: string }
       throw Object.assign(new Error(error.message || 'Rmdir failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Remove a file or directory (rm command support)
+   */
+  async rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'rm',
+        params: { path, ...options },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      // If force option is set and file doesn't exist, don't throw
+      if (options?.force && error.code === 'ENOENT') {
+        return
+      }
+      throw Object.assign(new Error(error.message || 'Rm failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Copy a file (cp command support)
+   */
+  async copyFile(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'copyFile',
+        params: { src, dest, ...options },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Copy failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Rename/move a file or directory (mv command support)
+   */
+  async rename(oldPath: string, newPath: string): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'rename',
+        params: { oldPath, newPath },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Rename failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Update file timestamps (touch command support)
+   */
+  async utimes(path: string, atime: Date | number, mtime: Date | number): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'utimes',
+        params: {
+          path,
+          atime: atime instanceof Date ? atime.getTime() : atime,
+          mtime: mtime instanceof Date ? mtime.getTime() : mtime,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Utimes failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Truncate a file to specified length (truncate command support)
+   */
+  async truncate(path: string, len?: number): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'truncate',
+        params: { path, length: len ?? 0 },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Truncate failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Read symbolic link target (readlink command support)
+   */
+  async readlink(path: string): Promise<string> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'readlink',
+        params: { path },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Readlink failed'), { code: error.code })
+    }
+
+    const result = await response.json() as { target: string }
+    return result.target
+  }
+
+  /**
+   * Create symbolic link (ln -s command support)
+   */
+  async symlink(target: string, path: string): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'symlink',
+        params: { target, path },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Symlink failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Create hard link (ln command support)
+   */
+  async link(existingPath: string, newPath: string): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'link',
+        params: { existingPath, newPath },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Link failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Change file permissions (chmod command support)
+   */
+  async chmod(path: string, mode: number): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'chmod',
+        params: { path, mode },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Chmod failed'), { code: error.code })
+    }
+  }
+
+  /**
+   * Change file ownership (chown command support)
+   */
+  async chown(path: string, uid: number, gid: number): Promise<void> {
+    const response = await this.fsx.fetch('https://fsx.do/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'chown',
+        params: { path, uid, gid },
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.json() as { code?: string; message?: string }
+      throw Object.assign(new Error(error.message || 'Chown failed'), { code: error.code })
     }
   }
 }
@@ -954,14 +1172,33 @@ export class ShellDO extends ShellDOBase {
 // ============================================================================
 
 /**
+ * Git commands supported by gitx.do service binding.
+ * These are routed to Tier 2 via the GITX service binding when available.
+ */
+const GITX_COMMANDS = ['git']
+
+/**
  * Create the appropriate executor based on available environment bindings
  */
 function createExecutor(env: Env, fs?: FsCapability): BashExecutor {
+  // Build RPC bindings based on available service bindings
+  const rpcBindings: Record<string, { name: string; endpoint: string | { fetch: typeof fetch }; commands: string[] }> = {}
+
+  // Add gitx binding if GITX service is available
+  // This routes git commands to gitx.do via service binding (Tier 2)
+  if (env.GITX) {
+    rpcBindings.gitx = {
+      name: 'gitx',
+      endpoint: env.GITX as { fetch: typeof fetch },
+      commands: GITX_COMMANDS,
+    }
+  }
+
   // Create tiered executor with FSX integration (if available)
   return new TieredExecutor({
     fs,
-    // RPC bindings can be added here for Tier 2 services
-    rpcBindings: {},
+    // RPC bindings for Tier 2 services
+    rpcBindings,
     // Sandbox binding if available for Tier 4 execution
     sandbox: env.CONTAINER
       ? {

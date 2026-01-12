@@ -986,10 +986,38 @@ describe('npm utility commands', () => {
   })
 
   it('should execute npm view package', async () => {
-    mockFetch.mockResolvedValue(createMockRpcResponse({
-      stdout: 'lodash@4.17.21 | MIT | deps: none | versions: 114\nA modern JavaScript utility library delivering modularity, performance, & extras.\n',
-      exitCode: 0,
-    }))
+    // npm view is now executed natively via npmx registry client (Tier 1)
+    // Mock the npm registry response instead of RPC response
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('registry.npmjs.org/lodash')) {
+        return {
+          ok: true,
+          json: async () => ({
+            _id: 'lodash',
+            name: 'lodash',
+            description: 'A modern JavaScript utility library',
+            'dist-tags': { latest: '4.17.21' },
+            versions: {
+              '4.17.21': {
+                name: 'lodash',
+                version: '4.17.21',
+                description: 'A modern JavaScript utility library',
+                license: 'MIT',
+                dependencies: {},
+                dist: {
+                  tarball: 'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
+                  shasum: 'abc123',
+                  integrity: 'sha512-abc123',
+                },
+                maintainers: [{ name: 'jdalton' }],
+              },
+            },
+            time: { '4.17.21': '2021-01-01T00:00:00.000Z' },
+          }),
+        } as Response
+      }
+      return createMockRpcResponse({ stdout: '', exitCode: 0 })
+    })
 
     const executor = new TieredExecutor({
       rpcBindings: {
@@ -1008,10 +1036,36 @@ describe('npm utility commands', () => {
   })
 
   it('should execute npm search', async () => {
-    mockFetch.mockResolvedValue(createMockRpcResponse({
-      stdout: 'NAME         DESCRIPTION                    AUTHOR\nlodash       A modern JavaScript utility... jdalton\n',
-      exitCode: 0,
-    }))
+    // npm search is now executed natively via npmx registry client (Tier 1)
+    // Mock the npm registry search response
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('registry.npmjs.org/-/v1/search')) {
+        return {
+          ok: true,
+          json: async () => ({
+            objects: [
+              {
+                package: {
+                  name: 'lodash',
+                  version: '4.17.21',
+                  description: 'A modern JavaScript utility library',
+                  keywords: ['utility', 'javascript'],
+                  author: { name: 'jdalton' },
+                },
+                score: {
+                  final: 0.95,
+                  detail: { quality: 0.9, popularity: 0.95, maintenance: 0.9 },
+                },
+                searchScore: 100,
+              },
+            ],
+            total: 1,
+            time: new Date().toISOString(),
+          }),
+        } as Response
+      }
+      return createMockRpcResponse({ stdout: '', exitCode: 0 })
+    })
 
     const executor = new TieredExecutor({
       rpcBindings: {
@@ -1729,6 +1783,39 @@ describe('npm command classification', () => {
 
     expect(classification.tier).toBe(2)
     expect(classification.handler).toBe('rpc')
+  })
+
+  // Native npm commands (via npmx registry client)
+  it('should classify npm view as Tier 1 (native)', () => {
+    const classification = executor.classifyCommand('npm view lodash')
+
+    expect(classification.tier).toBe(1)
+    expect(classification.handler).toBe('native')
+    expect(classification.capability).toBe('npm-native')
+  })
+
+  it('should classify npm info as Tier 1 (native)', () => {
+    const classification = executor.classifyCommand('npm info lodash')
+
+    expect(classification.tier).toBe(1)
+    expect(classification.handler).toBe('native')
+    expect(classification.capability).toBe('npm-native')
+  })
+
+  it('should classify npm search as Tier 1 (native)', () => {
+    const classification = executor.classifyCommand('npm search lodash')
+
+    expect(classification.tier).toBe(1)
+    expect(classification.handler).toBe('native')
+    expect(classification.capability).toBe('npm-native')
+  })
+
+  it('should classify npm show as Tier 1 (native)', () => {
+    const classification = executor.classifyCommand('npm show lodash')
+
+    expect(classification.tier).toBe(1)
+    expect(classification.handler).toBe('native')
+    expect(classification.capability).toBe('npm-native')
   })
 })
 

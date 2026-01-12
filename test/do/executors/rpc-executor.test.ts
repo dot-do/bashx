@@ -116,6 +116,7 @@ describe('RpcExecutor', () => {
       expect(executor.hasBinding('jq')).toBe(true)
       expect(executor.hasBinding('npm')).toBe(true)
       expect(executor.hasBinding('git')).toBe(true)
+      expect(executor.hasBinding('pyx')).toBe(true)
     })
 
     it('should allow overriding default services', () => {
@@ -146,6 +147,9 @@ describe('RpcExecutor', () => {
       expect(executor.canExecute('npm')).toBe(true)
       expect(executor.canExecute('npx')).toBe(true)
       expect(executor.canExecute('git')).toBe(true)
+      expect(executor.canExecute('python')).toBe(true)
+      expect(executor.canExecute('pip')).toBe(true)
+      expect(executor.canExecute('pyx')).toBe(true)
     })
 
     it('should reject non-RPC commands', () => {
@@ -160,6 +164,10 @@ describe('RpcExecutor', () => {
       expect(executor.getServiceForCommand('npx')).toBe('npm')
       expect(executor.getServiceForCommand('yarn')).toBe('npm')
       expect(executor.getServiceForCommand('git')).toBe('git')
+      expect(executor.getServiceForCommand('python')).toBe('pyx')
+      expect(executor.getServiceForCommand('pip')).toBe('pyx')
+      expect(executor.getServiceForCommand('pipx')).toBe('pyx')
+      expect(executor.getServiceForCommand('uvx')).toBe('pyx')
     })
 
     it('should return null for unknown commands', () => {
@@ -588,6 +596,201 @@ describe('DEFAULT_RPC_SERVICES', () => {
     expect(DEFAULT_RPC_SERVICES.git).toBeDefined()
     expect(DEFAULT_RPC_SERVICES.git.endpoint).toBe('https://git.do')
     expect(DEFAULT_RPC_SERVICES.git.commands).toContain('git')
+  })
+
+  it('should include pyx service', () => {
+    expect(DEFAULT_RPC_SERVICES.pyx).toBeDefined()
+    expect(DEFAULT_RPC_SERVICES.pyx.endpoint).toBe('https://pyx.do')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('python')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('python3')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('pip')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('pip3')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('pipx')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('uvx')
+    expect(DEFAULT_RPC_SERVICES.pyx.commands).toContain('pyx')
+  })
+})
+
+// ============================================================================
+// Pyx.do Python Integration Tests
+// ============================================================================
+
+describe('RpcExecutor Python Integration', () => {
+  let executor: RpcExecutor
+  let mockFetch: Mock
+
+  beforeEach(() => {
+    mockFetch = createMockFetch()
+    globalThis.fetch = mockFetch
+    executor = new RpcExecutor()
+  })
+
+  describe('Python Command Classification', () => {
+    it('should identify python commands', () => {
+      expect(executor.canExecute('python')).toBe(true)
+      expect(executor.canExecute('python3')).toBe(true)
+      expect(executor.canExecute('pip')).toBe(true)
+      expect(executor.canExecute('pip3')).toBe(true)
+      expect(executor.canExecute('pipx')).toBe(true)
+      expect(executor.canExecute('uvx')).toBe(true)
+      expect(executor.canExecute('pyx')).toBe(true)
+    })
+
+    it('should identify pyx service for python commands', () => {
+      expect(executor.getServiceForCommand('python')).toBe('pyx')
+      expect(executor.getServiceForCommand('python3')).toBe('pyx')
+      expect(executor.getServiceForCommand('pip')).toBe('pyx')
+      expect(executor.getServiceForCommand('pipx')).toBe('pyx')
+      expect(executor.getServiceForCommand('uvx')).toBe('pyx')
+    })
+  })
+
+  describe('Python Script Execution', () => {
+    it('should execute python script via pyx.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Hello from Python!\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('python -c "print(\'Hello from Python!\')"')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('pyx.do'),
+        expect.any(Object)
+      )
+    })
+
+    it('should execute python3 script via pyx.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: '3.11.0\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('python3 --version')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('pyx.do'),
+        expect.any(Object)
+      )
+    })
+
+    it('should handle python script errors', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: '',
+            stderr: 'NameError: name \'undefined_var\' is not defined\n',
+            exitCode: 1,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('python -c "print(undefined_var)"')
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('NameError')
+    })
+  })
+
+  describe('Package Installation', () => {
+    it('should execute pip install via pyx.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Successfully installed requests-2.31.0\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('pip install requests')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('pyx.do'),
+        expect.any(Object)
+      )
+
+      const call = mockFetch.mock.calls[0]
+      const body = JSON.parse(call[1].body)
+      expect(body.command).toBe('pip install requests')
+    })
+
+    it('should execute pipx run via pyx.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Black version 24.1.0\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('pipx run black --version')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('pyx.do'),
+        expect.any(Object)
+      )
+    })
+
+    it('should execute uvx commands via pyx.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'ruff 0.5.0\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('uvx ruff --version')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('pyx.do'),
+        expect.any(Object)
+      )
+    })
+  })
+
+  describe('Direct pyx Command', () => {
+    it('should execute pyx command directly', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Running black formatter...\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('pyx black --check .')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('pyx.do'),
+        expect.any(Object)
+      )
+    })
   })
 })
 

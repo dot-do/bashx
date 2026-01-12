@@ -99,6 +99,12 @@ import {
   executeTest,
   createFileInfoProvider,
 } from './commands/test-command.js'
+import {
+  executeNpmNative,
+  canExecuteNativeNpm,
+  extractNpmSubcommand,
+  type NpmNativeOptions,
+} from './commands/npm-native.js'
 
 // ============================================================================
 // TYPES
@@ -319,6 +325,18 @@ const TIER_1_EXTENDED_UTILS_COMMANDS = new Set([
   // Note: timeout and shuf have extended implementations but also exist in math-control
 ])
 
+/**
+ * npm commands that can be executed natively via npmx registry client
+ * These are read-only operations that don't require file system writes:
+ * - npm view/info/show: Get package metadata
+ * - npm search/find/s: Search packages
+ *
+ * More complex npm operations (install, run, etc.) go through Tier 2 RPC
+ */
+const TIER_1_NPM_NATIVE_COMMANDS = new Set([
+  'npm',  // Will check subcommand to determine if native execution is possible
+])
+
 // ============================================================================
 // TIER 2: RPC COMMANDS
 // ============================================================================
@@ -338,6 +356,10 @@ const DEFAULT_RPC_SERVICES: Record<string, { commands: string[]; endpoint: strin
   git: {
     commands: ['git'],
     endpoint: 'https://git.do',
+  },
+  pyx: {
+    commands: ['python', 'python3', 'pip', 'pip3', 'pipx', 'uvx', 'pyx'],
+    endpoint: 'https://pyx.do',
   },
 }
 
@@ -375,8 +397,8 @@ const TIER_4_SANDBOX_COMMANDS = new Set([
   'apt', 'apt-get', 'yum', 'dnf', 'brew',
   // Containers
   'docker', 'docker-compose', 'podman', 'kubectl',
-  // Compilers and runtimes
-  'gcc', 'g++', 'clang', 'rustc', 'cargo', 'go', 'python', 'python3', 'ruby', 'perl',
+  // Compilers and runtimes (python moved to Tier 2 via pyx.do RPC)
+  'gcc', 'g++', 'clang', 'rustc', 'cargo', 'go', 'ruby', 'perl',
   // System utilities (chmod/chown moved to Tier 1 via FsCapability)
   'sudo', 'su', 'chgrp',
   // Archive (gzip, tar, zip moved to Tier 1 via pako/fflate)
@@ -533,6 +555,22 @@ export class TieredExecutor implements BashExecutor {
           capability: 'compute',
         }
       }
+    }
+
+    // Check if npm command can be executed natively via npmx registry client
+    // This handles simple read-only operations like npm view, npm search
+    if (TIER_1_NPM_NATIVE_COMMANDS.has(cmd)) {
+      const args = this.extractArgs(command)
+      if (canExecuteNativeNpm(args)) {
+        const subcommand = extractNpmSubcommand(command)
+        return {
+          tier: 1,
+          reason: `Native npm registry operation via npmx (${subcommand})`,
+          handler: 'native',
+          capability: 'npm-native',
+        }
+      }
+      // Fall through to Tier 2 RPC for complex npm operations
     }
 
     // Tier 2: RPC service commands
@@ -763,6 +801,11 @@ export class TieredExecutor implements BashExecutor {
     // Handle extended utility commands (env, id, uname, tac)
     if (TIER_1_EXTENDED_UTILS_COMMANDS.has(cmd)) {
       return this.executeExtendedUtilsCommands(cmd, args, command, options)
+    }
+
+    // Handle npm native commands via npmx registry client
+    if (classification.capability === 'npm-native') {
+      return this.executeNpmNative(cmd, args, command, options)
     }
 
     // Handle pure computation commands
@@ -2559,6 +2602,62 @@ export class TieredExecutor implements BashExecutor {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return this.createResult(fullCommand, '', message, 1, 1)
+    }
+  }
+
+  /**
+   * Execute npm commands natively via npmx registry client
+   *
+   * Handles simple read-only npm operations that only need registry access:
+   * - npm view/info/show: Get package metadata
+   * - npm search/find/s: Search packages
+   *
+   * For complex operations (install, run, etc.), returns null to fall through
+   * to Tier 2 RPC execution.
+   */
+  private async executeNpmNative(
+    _cmd: string,
+    args: string[],
+    fullCommand: string,
+    options?: ExecOptions
+  ): Promise<BashResult> {
+    try {
+      // Build npm native options from exec options
+      const npmOptions: NpmNativeOptions = {
+        timeout: options?.timeout,
+        cache: true,
+      }
+
+      // Check for registry override in environment
+      const env = options?.env as Record<string, string> | undefined
+      if (env?.npm_config_registry) {
+        npmOptions.registry = env.npm_config_registry
+      }
+      if (env?.NPM_CONFIG_REGISTRY) {
+        npmOptions.registry = env.NPM_CONFIG_REGISTRY
+      }
+
+      // Check for auth token
+      if (env?.npm_config_token) {
+        npmOptions.token = env.npm_config_token
+      }
+      if (env?.NPM_TOKEN) {
+        npmOptions.token = env.NPM_TOKEN
+      }
+
+      // Execute the npm command natively
+      const result = await executeNpmNative(fullCommand, args, npmOptions)
+
+      if (result === null) {
+        // Command not supported natively, this shouldn't happen if classification
+        // worked correctly, but throw to fall back to RPC
+        throw new Error('npm command not supported natively')
+      }
+
+      return this.createResult(fullCommand, result.stdout, result.stderr, result.exitCode, 1)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return this.createResult(fullCommand, '', `npm: ${message}`, 1, 1)
     }
   }
 

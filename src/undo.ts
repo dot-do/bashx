@@ -7,6 +7,10 @@
  * - rm: track deleted file content for restoration
  * - mkdir: track created directory to remove
  *
+ * This module provides both:
+ * 1. An UndoManager class for request-scoped state (recommended for Workers)
+ * 2. Module-level functions using a default instance (for backward compatibility)
+ *
  * @module bashx/undo
  */
 
@@ -78,32 +82,386 @@ export interface UndoOptions {
   trackDeletedContent?: boolean
 }
 
-// ============================================================================
-// State
-// ============================================================================
-
-/** Undo history stack (LIFO) */
-let undoHistory: UndoEntry[] = []
-
-/** Current undo options */
-let undoOptions: UndoOptions = {
-  historyLimit: 100,
-  trackDeletedContent: true,
+/**
+ * Undo info returned from tracking operations
+ */
+export interface UndoInfo {
+  undoCommand: string
+  type: UndoEntry['type']
+  files: UndoEntry['files']
 }
 
-/** Counter for generating unique IDs */
-let idCounter = 0
-
 // ============================================================================
-// Helper Functions
+// UndoManager Class - Request-scoped state management
 // ============================================================================
 
 /**
- * Generate a unique ID for an undo entry
+ * UndoManager encapsulates all undo-related state for thread-safe operation.
+ *
+ * In a Cloudflare Workers environment, each request should create its own
+ * UndoManager instance to avoid race conditions from concurrent requests.
+ *
+ * @example
+ * ```typescript
+ * // Per-request usage in Workers
+ * export default {
+ *   async fetch(request: Request, env: Env) {
+ *     const undoManager = new UndoManager({ historyLimit: 50 })
+ *     // ... use undoManager for this request
+ *   }
+ * }
+ *
+ * // Or with Durable Objects for persistent state
+ * class BashSession extends DurableObject {
+ *   private undoManager = new UndoManager()
+ *   // ... undoManager persists across requests to this DO
+ * }
+ * ```
  */
-function generateId(): string {
-  return `undo-${Date.now()}-${++idCounter}`
+export class UndoManager {
+  /** Undo history stack (LIFO) */
+  private history: UndoEntry[] = []
+
+  /** Current undo options */
+  private options: Required<UndoOptions>
+
+  /** Counter for generating unique IDs - scoped to this instance */
+  private idCounter = 0
+
+  constructor(options?: UndoOptions) {
+    this.options = {
+      historyLimit: options?.historyLimit ?? 100,
+      trackDeletedContent: options?.trackDeletedContent ?? true,
+    }
+  }
+
+  /**
+   * Generate a unique ID for an undo entry
+   */
+  private generateId(): string {
+    return `undo-${Date.now()}-${++this.idCounter}`
+  }
+
+  /**
+   * Get the current undo history
+   */
+  getHistory(): UndoEntry[] {
+    return [...this.history]
+  }
+
+  /**
+   * Clear all undo history
+   */
+  clearHistory(): void {
+    this.history = []
+  }
+
+  /**
+   * Set undo tracking options
+   */
+  setOptions(options: UndoOptions): void {
+    if (options.historyLimit !== undefined) {
+      this.options.historyLimit = options.historyLimit
+    }
+    if (options.trackDeletedContent !== undefined) {
+      this.options.trackDeletedContent = options.trackDeletedContent
+    }
+
+    // Enforce new history limit
+    if (options.historyLimit !== undefined) {
+      if (options.historyLimit === 0) {
+        this.history = []
+      } else {
+        while (this.history.length > options.historyLimit) {
+          this.history.shift() // Remove oldest
+        }
+      }
+    }
+  }
+
+  /**
+   * Get current options
+   */
+  getOptions(): Required<UndoOptions> {
+    return { ...this.options }
+  }
+
+  /**
+   * Add an entry to undo history
+   */
+  addEntry(entry: Omit<UndoEntry, 'id' | 'timestamp'>): void {
+    if (this.options.historyLimit === 0) return
+
+    const fullEntry: UndoEntry = {
+      ...entry,
+      id: this.generateId(),
+      timestamp: new Date(),
+    }
+
+    this.history.push(fullEntry)
+
+    // Enforce history limit
+    while (this.history.length > this.options.historyLimit) {
+      this.history.shift() // Remove oldest
+    }
+  }
+
+  /**
+   * Execute an undo operation
+   *
+   * @param entryId - Optional ID of specific entry to undo. If not provided, undoes the most recent.
+   * @returns Result of the undo command execution
+   */
+  async undo(entryId?: string): Promise<BashResult> {
+    if (this.history.length === 0) {
+      throw new Error('No undo history available')
+    }
+
+    let entry: UndoEntry | undefined
+    let index: number
+
+    if (entryId) {
+      index = this.history.findIndex(e => e.id === entryId)
+      if (index === -1) {
+        throw new Error('Undo entry not found')
+      }
+      entry = this.history[index]
+    } else {
+      // Get most recent (last in array)
+      index = this.history.length - 1
+      entry = this.history[index]
+    }
+
+    // Execute the undo command
+    try {
+      const { stdout, stderr } = await execAsync(entry.undoCommand)
+
+      // Remove from history on success
+      this.history.splice(index, 1)
+
+      return {
+        input: entry.undoCommand,
+        valid: true,
+        intent: {
+          commands: [entry.undoCommand.split(' ')[0]],
+          reads: [],
+          writes: [],
+          deletes: [],
+          network: false,
+          elevated: false,
+        },
+        classification: {
+          type: 'write',
+          impact: 'low',
+          reversible: true,
+          reason: 'Undo operation',
+        },
+        command: entry.undoCommand,
+        generated: false,
+        stdout: stdout.toString(),
+        stderr: stderr.toString(),
+        exitCode: 0,
+      }
+    } catch (error: unknown) {
+      const execError = isExecError(error) ? error : null
+      return {
+        input: entry.undoCommand,
+        valid: true,
+        intent: {
+          commands: [entry.undoCommand.split(' ')[0]],
+          reads: [],
+          writes: [],
+          deletes: [],
+          network: false,
+          elevated: false,
+        },
+        classification: {
+          type: 'write',
+          impact: 'low',
+          reversible: true,
+          reason: 'Undo operation failed',
+        },
+        command: entry.undoCommand,
+        generated: false,
+        stdout: execError?.stdout?.toString() || '',
+        stderr: execError?.stderr?.toString() || execError?.message || 'Undo failed',
+        exitCode: execError?.code || 1,
+      }
+    }
+  }
+
+  /**
+   * Generate undo information for a command before execution
+   * Returns undo command and files to track, or null if not undoable
+   */
+  generateUndoInfo(command: string): UndoInfo | null {
+    const { cmd, args } = parseArgs(command.trim())
+
+    switch (cmd) {
+      case 'cp': {
+        const cpUndo = generateCpUndo(command, args)
+        return cpUndo ? { ...cpUndo, type: 'cp' } : null
+      }
+
+      case 'mv': {
+        const mvUndo = generateMvUndo(command, args)
+        return mvUndo ? { ...mvUndo, type: 'mv' } : null
+      }
+
+      case 'rm': {
+        const rmUndo = generateRmUndoWithOptions(command, args, this.options.trackDeletedContent)
+        return rmUndo ? { ...rmUndo, type: 'rm' } : null
+      }
+
+      case 'mkdir': {
+        const mkdirUndo = generateMkdirUndo(command, args)
+        return mkdirUndo ? { ...mkdirUndo, type: 'mkdir' } : null
+      }
+
+      case 'rmdir':
+        // rmdir is not easily undoable without content
+        return null
+
+      case 'touch': {
+        // touch creates or updates timestamp - track file creation
+        const { paths: touchPaths } = extractFlagsAndPaths(args)
+        if (touchPaths.length > 0) {
+          const touchFiles = touchPaths.map(p => ({
+            path: p,
+            existed: pathExists(p),
+          }))
+          const newFiles = touchPaths.filter(p => !pathExists(p))
+          if (newFiles.length > 0) {
+            return {
+              undoCommand: `rm ${newFiles.map(f => shellEscape(f)).join(' ')}`,
+              type: 'touch',
+              files: touchFiles,
+            }
+          }
+        }
+        return null
+      }
+
+      case 'echo':
+      case 'cat':
+      case 'printf':
+        // Check for redirect
+        if (command.includes('>')) {
+          return generateWriteUndo(command)
+        }
+        return null
+
+      default:
+        return null
+    }
+  }
+
+  /**
+   * Determine if a command is reversible based on analysis
+   */
+  isReversible(command: string, classification: SafetyClassification): boolean {
+    // Read-only commands are trivially "reversible" (no change)
+    if (classification.type === 'read' || classification.impact === 'none') {
+      return true
+    }
+
+    // Network operations are not reversible
+    if (classification.type === 'network') {
+      return false
+    }
+
+    // Check for specific reversible commands
+    const { cmd } = parseArgs(command.trim())
+    const reversibleCommands = new Set(['cp', 'mv', 'mkdir', 'touch'])
+
+    if (reversibleCommands.has(cmd)) {
+      return true
+    }
+
+    // rm is reversible only with content tracking enabled
+    if (cmd === 'rm' && this.options.trackDeletedContent) {
+      return true
+    }
+
+    // Write redirections are reversible
+    if ((cmd === 'echo' || cmd === 'cat' || cmd === 'printf') && command.includes('>')) {
+      return true
+    }
+
+    // Pipelines with file output are generally not reversible
+    if (command.includes('|')) {
+      return false
+    }
+
+    return classification.reversible
+  }
+
+  /**
+   * Track a command execution for undo
+   * Call this BEFORE executing the command to capture original state
+   *
+   * @param command - The command being executed
+   * @param classification - Safety classification of the command
+   * @returns Undo info if trackable, null otherwise
+   */
+  trackForUndo(command: string, classification: SafetyClassification): UndoInfo | null {
+    // Don't track read-only or blocked commands
+    if (classification.type === 'read' || classification.impact === 'none') {
+      return null
+    }
+
+    // Don't track critical/blocked commands
+    if (classification.impact === 'critical') {
+      return null
+    }
+
+    return this.generateUndoInfo(command)
+  }
+
+  /**
+   * Record a successful command execution in undo history
+   *
+   * @param command - The executed command
+   * @param undoInfo - The undo information from trackForUndo
+   */
+  recordEntry(command: string, undoInfo: UndoInfo): void {
+    this.addEntry({
+      command,
+      undoCommand: undoInfo.undoCommand,
+      type: undoInfo.type,
+      files: undoInfo.files,
+    })
+  }
 }
+
+// ============================================================================
+// Factory function
+// ============================================================================
+
+/**
+ * Create a new UndoManager instance with optional configuration.
+ * Use this for request-scoped undo tracking in concurrent environments.
+ *
+ * @param options - Configuration options
+ * @returns A new UndoManager instance
+ */
+export function createUndoManager(options?: UndoOptions): UndoManager {
+  return new UndoManager(options)
+}
+
+// ============================================================================
+// Default instance for backward compatibility
+// ============================================================================
+
+/**
+ * Default UndoManager instance.
+ *
+ * WARNING: This uses global mutable state and is NOT safe for concurrent
+ * Workers requests. Use createUndoManager() for request-scoped tracking.
+ *
+ * @deprecated Use createUndoManager() for new code in concurrent environments
+ */
+const defaultManager = new UndoManager()
 
 /**
  * Shell escape a string for safe use in commands
@@ -337,9 +695,13 @@ function generateMvUndo(_command: string, args: string[]): { undoCommand: string
 
 /**
  * Generate undo command for rm operation
+ *
+ * @param _command - The original rm command
+ * @param args - Parsed arguments
+ * @param trackDeletedContent - Whether to track deleted file content
  */
-function generateRmUndo(_command: string, args: string[]): { undoCommand: string; files: UndoEntry['files'] } | null {
-  if (!undoOptions.trackDeletedContent) return null
+function generateRmUndoWithOptions(_command: string, args: string[], trackDeletedContent: boolean): { undoCommand: string; files: UndoEntry['files'] } | null {
+  if (!trackDeletedContent) return null
 
   const { paths } = extractFlagsAndPaths(args)
   const files: UndoEntry['files'] = []
@@ -458,59 +820,43 @@ function generateWriteUndo(command: string): { undoCommand: string; type: UndoEn
 }
 
 // ============================================================================
-// Public API
+// Backward-Compatible Public API (delegates to defaultManager)
 // ============================================================================
 
 /**
  * Get the current undo history
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.getHistory()
  */
 export function getUndoHistory(): UndoEntry[] {
-  return [...undoHistory]
+  return defaultManager.getHistory()
 }
 
 /**
  * Clear all undo history
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.clearHistory()
  */
 export function clearUndoHistory(): void {
-  undoHistory = []
+  defaultManager.clearHistory()
 }
 
 /**
  * Set undo tracking options
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.setOptions()
  */
 export function setUndoOptions(options: UndoOptions): void {
-  undoOptions = { ...undoOptions, ...options }
-
-  // Enforce new history limit
-  if (options.historyLimit !== undefined) {
-    if (options.historyLimit === 0) {
-      undoHistory = []
-    } else {
-      while (undoHistory.length > options.historyLimit) {
-        undoHistory.shift() // Remove oldest
-      }
-    }
-  }
+  defaultManager.setOptions(options)
 }
 
 /**
  * Add an entry to undo history
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.addEntry()
  */
 export function addUndoEntry(entry: Omit<UndoEntry, 'id' | 'timestamp'>): void {
-  if (undoOptions.historyLimit === 0) return
-
-  const fullEntry: UndoEntry = {
-    ...entry,
-    id: generateId(),
-    timestamp: new Date(),
-  }
-
-  undoHistory.push(fullEntry)
-
-  // Enforce history limit
-  while (undoHistory.length > (undoOptions.historyLimit ?? 100)) {
-    undoHistory.shift() // Remove oldest
-  }
+  defaultManager.addEntry(entry)
 }
 
 /**
@@ -518,191 +864,33 @@ export function addUndoEntry(entry: Omit<UndoEntry, 'id' | 'timestamp'>): void {
  *
  * @param entryId - Optional ID of specific entry to undo. If not provided, undoes the most recent.
  * @returns Result of the undo command execution
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.undo()
  */
 export async function undo(entryId?: string): Promise<BashResult> {
-  if (undoHistory.length === 0) {
-    throw new Error('No undo history available')
-  }
-
-  let entry: UndoEntry | undefined
-  let index: number
-
-  if (entryId) {
-    index = undoHistory.findIndex(e => e.id === entryId)
-    if (index === -1) {
-      throw new Error('Undo entry not found')
-    }
-    entry = undoHistory[index]
-  } else {
-    // Get most recent (last in array)
-    index = undoHistory.length - 1
-    entry = undoHistory[index]
-  }
-
-  // Execute the undo command
-  try {
-    const { stdout, stderr } = await execAsync(entry.undoCommand)
-
-    // Remove from history on success
-    undoHistory.splice(index, 1)
-
-    return {
-      input: entry.undoCommand,
-      valid: true,
-      intent: {
-        commands: [entry.undoCommand.split(' ')[0]],
-        reads: [],
-        writes: [],
-        deletes: [],
-        network: false,
-        elevated: false,
-      },
-      classification: {
-        type: 'write',
-        impact: 'low',
-        reversible: true,
-        reason: 'Undo operation',
-      },
-      command: entry.undoCommand,
-      generated: false,
-      stdout: stdout.toString(),
-      stderr: stderr.toString(),
-      exitCode: 0,
-    }
-  } catch (error: unknown) {
-    const execError = isExecError(error) ? error : null
-    return {
-      input: entry.undoCommand,
-      valid: true,
-      intent: {
-        commands: [entry.undoCommand.split(' ')[0]],
-        reads: [],
-        writes: [],
-        deletes: [],
-        network: false,
-        elevated: false,
-      },
-      classification: {
-        type: 'write',
-        impact: 'low',
-        reversible: true,
-        reason: 'Undo operation failed',
-      },
-      command: entry.undoCommand,
-      generated: false,
-      stdout: execError?.stdout?.toString() || '',
-      stderr: execError?.stderr?.toString() || execError?.message || 'Undo failed',
-      exitCode: execError?.code || 1,
-    }
-  }
+  return defaultManager.undo(entryId)
 }
 
 /**
  * Generate undo information for a command before execution
  * Returns undo command and files to track, or null if not undoable
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.generateUndoInfo()
  */
-export function generateUndoInfo(command: string): {
-  undoCommand: string
-  type: UndoEntry['type']
-  files: UndoEntry['files']
-} | null {
-  const { cmd, args } = parseArgs(command.trim())
-
-  switch (cmd) {
-    case 'cp':
-      const cpUndo = generateCpUndo(command, args)
-      return cpUndo ? { ...cpUndo, type: 'cp' } : null
-
-    case 'mv':
-      const mvUndo = generateMvUndo(command, args)
-      return mvUndo ? { ...mvUndo, type: 'mv' } : null
-
-    case 'rm':
-      const rmUndo = generateRmUndo(command, args)
-      return rmUndo ? { ...rmUndo, type: 'rm' } : null
-
-    case 'mkdir':
-      const mkdirUndo = generateMkdirUndo(command, args)
-      return mkdirUndo ? { ...mkdirUndo, type: 'mkdir' } : null
-
-    case 'rmdir':
-      // rmdir is not easily undoable without content
-      return null
-
-    case 'touch':
-      // touch creates or updates timestamp - track file creation
-      const { paths: touchPaths } = extractFlagsAndPaths(args)
-      if (touchPaths.length > 0) {
-        const touchFiles = touchPaths.map(p => ({
-          path: p,
-          existed: pathExists(p),
-        }))
-        const newFiles = touchPaths.filter(p => !pathExists(p))
-        if (newFiles.length > 0) {
-          return {
-            undoCommand: `rm ${newFiles.map(f => shellEscape(f)).join(' ')}`,
-            type: 'touch',
-            files: touchFiles,
-          }
-        }
-      }
-      return null
-
-    case 'echo':
-    case 'cat':
-    case 'printf':
-      // Check for redirect
-      if (command.includes('>')) {
-        return generateWriteUndo(command)
-      }
-      return null
-
-    default:
-      return null
-  }
+export function generateUndoInfo(command: string): UndoInfo | null {
+  return defaultManager.generateUndoInfo(command)
 }
 
 /**
  * Determine if a command is reversible based on analysis
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.isReversible()
  */
 export function isReversible(
   command: string,
   classification: SafetyClassification
 ): boolean {
-  // Read-only commands are trivially "reversible" (no change)
-  if (classification.type === 'read' || classification.impact === 'none') {
-    return true
-  }
-
-  // Network operations are not reversible
-  if (classification.type === 'network') {
-    return false
-  }
-
-  // Check for specific reversible commands
-  const { cmd } = parseArgs(command.trim())
-  const reversibleCommands = new Set(['cp', 'mv', 'mkdir', 'touch'])
-
-  if (reversibleCommands.has(cmd)) {
-    return true
-  }
-
-  // rm is reversible only with content tracking enabled
-  if (cmd === 'rm' && undoOptions.trackDeletedContent) {
-    return true
-  }
-
-  // Write redirections are reversible
-  if ((cmd === 'echo' || cmd === 'cat' || cmd === 'printf') && command.includes('>')) {
-    return true
-  }
-
-  // Pipelines with file output are generally not reversible
-  if (command.includes('|')) {
-    return false
-  }
-
-  return classification.reversible
+  return defaultManager.isReversible(command, classification)
 }
 
 /**
@@ -712,22 +900,14 @@ export function isReversible(
  * @param command - The command being executed
  * @param classification - Safety classification of the command
  * @returns Undo info if trackable, null otherwise
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.trackForUndo()
  */
 export function trackForUndo(
   command: string,
   classification: SafetyClassification
-): { undoCommand: string; type: UndoEntry['type']; files: UndoEntry['files'] } | null {
-  // Don't track read-only or blocked commands
-  if (classification.type === 'read' || classification.impact === 'none') {
-    return null
-  }
-
-  // Don't track critical/blocked commands
-  if (classification.impact === 'critical') {
-    return null
-  }
-
-  return generateUndoInfo(command)
+): UndoInfo | null {
+  return defaultManager.trackForUndo(command, classification)
 }
 
 /**
@@ -735,6 +915,8 @@ export function trackForUndo(
  *
  * @param command - The executed command
  * @param undoInfo - The undo information from trackForUndo
+ *
+ * @deprecated For new code in concurrent environments, use UndoManager.recordEntry()
  */
 export function recordUndoEntry(
   command: string,

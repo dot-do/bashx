@@ -27,6 +27,12 @@ binding = "FSX"
 service = "fsx-do"
 environment = "production"
 
+# Service binding to gitx-do for git operations (Tier 2)
+[[services]]
+binding = "GITX"
+service = "gitx-do"
+environment = "production"
+
 # Optional: Container service for Tier 4 sandbox execution
 # [[services]]
 # binding = "CONTAINER"
