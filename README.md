@@ -1,34 +1,127 @@
 # bashx.do
 
-**Safe shell execution for AI agents.** AST-parsed. Tiered execution. 1,400+ tests.
+**Safe code execution for AI agents. Any language. Any scale.**
 
 [![npm version](https://img.shields.io/npm/v/bashx.do.svg)](https://www.npmjs.com/package/bashx.do)
 [![Tests](https://img.shields.io/badge/tests-1%2C415%20passing-brightgreen.svg)](https://github.com/dot-do/bashx)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Why bashx?
+---
 
-**AI agents need to run shell commands.** But giving an AI unrestricted shell access is terrifying.
+## The Problem
 
-**bashx wraps bash with judgment.** Every command is parsed to an AST, analyzed for safety, and executed in the optimal tier - from native Workers APIs to full sandboxed Linux.
+**AI agents need to execute code.** They need to run shell commands, Python scripts, Node.js programs, and more.
 
-**Scales to millions of agents.** Each agent gets its own isolated shell environment on Cloudflare's edge network. No shared state. No noisy neighbors. Just safe, fast shell execution at global scale.
+But you're forced to choose:
+
+- **Unsafe** — Give unrestricted shell access and pray nothing catastrophic happens
+- **Limited** — Lock down to a handful of "safe" commands and cripple your agent
+- **Slow** — Spin up containers for every command and wait seconds for cold starts
+- **Single-language** — Build separate integrations for bash, Python, Node, Ruby...
+
+What if one tool could handle everything — safely, instantly, in any language?
+
+---
+
+## The Solution
+
+**bashx wraps code execution with judgment.**
+
+Every command is parsed to an AST, analyzed for safety, and routed to the optimal runtime — from native Workers APIs to full sandboxed Linux to warm language runtimes globally.
 
 ```typescript
 import bash from 'bashx.do'
 
-// Run commands safely
+// Shell commands - instant
 await bash`ls -la`
-await bash`cat package.json`
+await bash`cat package.json | jq .name`
 
-// Dangerous commands are blocked
+// Python - routed to warm runtime
+await bash`python -c 'print(sum(range(100)))'`
+await bash`#!/usr/bin/env python3
+import json
+print(json.dumps({"status": "ok"}))
+`
+
+// Dangerous commands - blocked with explanation
 await bash`rm -rf /`
 // => { blocked: true, reason: 'Recursive delete targeting root filesystem' }
 
-// Unless explicitly confirmed
-await bash`rm -rf node_modules`({ confirm: true })
+// Natural language - auto-translated
+await bash`find all typescript files over 100 lines`
 ```
+
+**One tool. Every language. Zero cold starts.**
+
+---
+
+## How It Works
+
+```
+Your Code (bash, Python, Ruby, Node, Go, Rust)
+                    ↓
+         ┌─────────────────────┐
+         │   Language Detection │
+         │   Shebang → Syntax   │
+         └──────────┬──────────┘
+                    ↓
+         ┌─────────────────────┐
+         │    AST Parsing       │
+         │  tree-sitter (WASM)  │
+         └──────────┬──────────┘
+                    ↓
+         ┌─────────────────────┐
+         │   Safety Analysis    │
+         │  Structural, not regex│
+         └──────────┬──────────┘
+                    ↓
+         ┌─────────────────────┐
+         │    Safety Gate       │
+         │  Block or confirm    │
+         └──────────┬──────────┘
+                    ↓
+         ┌─────────────────────┐
+         │   Runtime Routing    │
+         │  Pick optimal tier   │
+         └──────────┬──────────┘
+                    ↓
+    ┌───────────┬───────────┬───────────┬───────────┐
+    ▼           ▼           ▼           ▼           ▼
+┌───────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+│Tier 1 │ │ Tier 2  │ │ Tier 3  │ │Tier 1.5 │ │ Tier 4  │
+│Native │ │  RPC    │ │ Loader  │ │  WASM   │ │ Sandbox │
+│ <1ms  │ │  <5ms   │ │  <10ms  │ │ <100ms  │ │  2-3s   │
+└───────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
+    │           │           │           │           │
+    └───────────┴───────────┴───────────┴───────────┘
+                            ↓
+              Unified BashResult with full metadata
+```
+
+### The Architecture Secret
+
+**Your function code stays tiny. Runtimes stay warm.**
+
+bashx doesn't embed heavy language runtimes. Instead, it routes to **always-warm runtime workers** via [capnweb](https://github.com/cloudflare/capnweb) RPC:
+
+```
+bashx (thin router, ~100KB)
+        │
+        │ Detect: "python script.py" → language=python
+        │
+        ↓ capnweb RPC (zero latency)
+┌───────────────────────────────────────────────────────┐
+│  pyx.do      │  node.do    │  ruby.do   │  go.do     │
+│  (Python)    │  (Node.js)  │  (Ruby)    │  (Go)      │
+│  Always warm │  Always warm│  Always warm│ Always warm│
+│  via sharding│  via sharding│ via sharding│via sharding│
+└───────────────────────────────────────────────────────┘
+```
+
+Cloudflare's intelligent request routing keeps runtimes warm 99.99% of the time. No cold starts, even for Python.
+
+---
 
 ## Installation
 
@@ -41,6 +134,8 @@ For the pure library without Cloudflare dependencies:
 ```bash
 npm install @dotdo/bashx
 ```
+
+---
 
 ## Quick Start
 
@@ -55,62 +150,64 @@ const content = await bash`cat README.md`
 const filename = 'my file.txt'
 await bash`cat ${filename}`  // => cat 'my file.txt'
 
+// Multi-language execution
+await bash`python -c 'import sys; print(sys.version)'`
+await bash`node -e 'console.log(process.version)'`
+await bash`ruby -e 'puts RUBY_VERSION'`
+
 // Natural language (auto-detected)
 await bash`find all typescript files over 100 lines`
 await bash`show disk usage for current directory`
 ```
 
-## Architecture
+---
 
-```
-Input (command OR natural language intent)
-         |
-         v
-+-----------------------------------+
-|         AST Parser                |
-|    tree-sitter-bash (WASM)        |
-+-----------------------------------+
-         |
-         v
-+-----------------------------------+
-|         Safety Analysis           |
-|    Structural analysis, not regex |
-|    -> type: 'delete'              |
-|    -> impact: 'high'              |
-|    -> reversible: false           |
-+-----------------------------------+
-         |
-         v
-+-----------------------------------+
-|         Safety Gate               |
-|    Block or require confirmation  |
-+-----------------------------------+
-         |
-         v
-+-----------------------------------+
-|         Tier Selection            |
-|    Pick optimal execution tier    |
-+-----------------------------------+
-         |
-         v
-+-----------------------------------+
-|         Execute                   |
-|    Run in selected tier           |
-|    Track for undo                 |
-+-----------------------------------+
-         |
-         v
-Output: BashResult with full metadata
-```
+## Language Support
 
-## Features
+| Language | Detection | Runtime | Cold Start |
+|----------|-----------|---------|------------|
+| **Bash** | Default | Tier 1-4 | Instant |
+| **Python** | `python`, `#!/usr/bin/env python`, `.py` | pyx.do | <100ms* |
+| **Node.js** | `node`, `#!/usr/bin/env node`, `.js` | node.do | <50ms* |
+| **Ruby** | `ruby`, `#!/usr/bin/env ruby`, `.rb` | ruby.do | <100ms* |
+| **Go** | `go run`, `.go` | go.do | <200ms* |
+| **Rust** | `cargo run`, `.rs` | rust.do | <200ms* |
 
-### AST-Based Safety Analysis
+*With distributed runtime architecture (always-warm workers)
 
-Every command is parsed with tree-sitter-bash and analyzed structurally - not with regex:
+### Language Detection
+
+bashx detects language automatically via:
+
+1. **Shebang** — `#!/usr/bin/env python3` → Python
+2. **Interpreter** — `python script.py` → Python
+3. **File extension** — `./app.rb` → Ruby
+4. **Syntax patterns** — `def foo():` → Python
 
 ```typescript
-// bashx understands command structure
+// Explicit shebang
+await bash`#!/usr/bin/env python3
+import json
+data = {"name": "Alice", "age": 30}
+print(json.dumps(data))
+`
+
+// Interpreter command
+await bash`python -c 'print("hello")'`
+
+// File execution
+await bash`ruby ./scripts/deploy.rb`
+```
+
+---
+
+## Safety Analysis
+
+### AST-Based, Not Regex
+
+Every command is parsed with tree-sitter and analyzed structurally:
+
+```typescript
 await bash`rm -rf /`
 // AST analysis:
 // {
@@ -120,25 +217,65 @@ await bash`rm -rf /`
 //   reason: 'Recursive delete targeting root filesystem'
 // }
 
-// Safe commands execute immediately
-await bash`ls -la`  // impact: 'none', executes
+await bash`ls -la`  // impact: 'none', executes immediately
 
-// Dangerous commands require confirmation
 await bash`chmod -R 777 /`  // blocked, requires confirm: true
 ```
 
-### Tiered Execution
+### Multi-Language Safety
+
+Each language has its own dangerous pattern detection:
+
+| Language | Blocked Patterns |
+|----------|------------------|
+| **Bash** | `rm -rf /`, `chmod -R 777`, `eval`, `source` untrusted |
+| **Python** | `eval()`, `exec()`, `os.system()`, `pickle.loads()` |
+| **Ruby** | `eval`, `system()`, backticks, `instance_eval` |
+| **Node.js** | `eval()`, `child_process.exec()`, `require()` untrusted |
+
+```typescript
+// Python code injection - blocked
+await bash`python -c 'import os; os.system("rm -rf /")'`
+// => { blocked: true, reason: 'System command execution in Python' }
+
+// Safe Python - allowed
+await bash`python -c 'print(sum(range(100)))'`
+// => { stdout: '4950', exitCode: 0 }
+```
+
+---
+
+## Tiered Execution
 
 Commands run in the optimal tier for performance:
 
 | Tier | Latency | Commands | Implementation |
 |------|---------|----------|----------------|
-| 1 | <1ms | cat, ls, head, tail, curl, wget, echo, printf | Native Workers APIs |
-| 2 | <5ms | jq, git, npm | RPC to specialized services |
-| 3 | <10ms | Node.js packages | Dynamic modules from esm.sh |
-| 4 | 2-3s cold | Python, bash scripts, binaries | Full sandboxed Linux |
+| **1** | <1ms | cat, ls, head, tail, curl, wget, echo | Native Workers APIs |
+| **1.5** | <100ms | Python, Ruby, Node (inline) | WASM runtimes / warm workers |
+| **2** | <5ms | jq, git, npm | RPC to specialized services |
+| **3** | <10ms | Dynamic Node.js packages | Modules from esm.sh |
+| **4** | 2-3s cold | Full scripts, binaries | Sandboxed Linux container |
 
-### Command Options
+### Tier Selection Logic
+
+```typescript
+// Tier 1: Native - cat is implemented in Workers
+await bash`cat package.json`  // <1ms
+
+// Tier 1.5: Warm runtime - Python routed to pyx.do
+await bash`python -c 'print(42)'`  // <100ms (warm)
+
+// Tier 2: RPC - jq routed to jq.do
+await bash`echo '{"a":1}' | jq .a`  // <5ms
+
+// Tier 4: Sandbox - complex bash script needs real shell
+await bash`./deploy.sh --env production`  // 2-3s (cold) or <100ms (warm)
+```
+
+---
+
+## Command Options
 
 ```typescript
 // Confirm dangerous operations
@@ -152,9 +289,14 @@ await bash`long-running-task`({ timeout: 60000 })
 
 // Working directory
 await bash`npm install`({ cwd: './packages/core' })
+
+// Force specific language
+await bash`script.txt`({ language: 'python' })
 ```
 
-### Rich Results
+---
+
+## Rich Results
 
 Every command returns detailed information:
 
@@ -169,32 +311,15 @@ result.ast           // Parsed AST (tree-sitter)
 result.intent        // { commands: ['git'], reads: [], writes: [] }
 result.classification // { type: 'read', impact: 'none', reversible: true }
 
+result.language      // Detected language
+result.tier          // Execution tier used
+
 result.undo          // Command to reverse (if reversible)
 result.blocked       // Was execution blocked?
 result.blockReason   // Why it was blocked
 ```
 
-### Syntax Fixing
-
-bashx can detect and fix malformed commands:
-
-```typescript
-await bash`echo "hello`
-// => Detects unclosed quote
-// => fixed: { command: 'echo "hello"', changes: [...] }
-```
-
-### Undo Support
-
-Reversible commands can be undone:
-
-```typescript
-await bash`mv file.txt backup.txt`
-// result.undo = 'mv backup.txt file.txt'
-
-await bash`mkdir -p /app/data`
-// result.undo = 'rmdir /app/data'
-```
+---
 
 ## MCP Integration
 
@@ -211,21 +336,24 @@ One tool for Claude Desktop and other MCP clients:
 }
 ```
 
-The AI gets one tool: `bash`. It handles everything.
+The AI gets one tool: `bash`. It handles everything — shell, Python, Node, Ruby, Go.
 
 ```typescript
 {
   name: 'bash',
-  description: 'Execute commands with AST-based safety analysis',
+  description: 'Execute code in any language with AST-based safety analysis',
   inputSchema: {
     type: 'object',
     properties: {
-      input: { type: 'string', description: 'Command or intent' },
-      confirm: { type: 'boolean', description: 'Confirm dangerous operations' }
+      input: { type: 'string', description: 'Command, script, or intent' },
+      confirm: { type: 'boolean', description: 'Confirm dangerous operations' },
+      language: { type: 'string', description: 'Force language (auto-detected if omitted)' }
     }
   }
 }
 ```
+
+---
 
 ## Durable Object Integration
 
@@ -239,6 +367,11 @@ class MySite extends withBash(DO) {
   async build() {
     await this.$.bash`npm install`
     await this.$.bash`npm run build`
+
+    // Multi-language in same workflow
+    await this.$.bash`python scripts/validate.py`
+    await this.$.bash`ruby scripts/notify.rb`
+
     const result = await this.$.bash`npm test`
     return result.exitCode === 0
   }
@@ -258,61 +391,18 @@ service = "bashx-worker"
 const result = await env.BASHX.exec('complex-script.sh')
 ```
 
-## API Reference
-
-### Tagged Template
-
-```typescript
-import bash from 'bashx.do'
-
-// Basic usage
-await bash`command`
-
-// With options
-await bash`command`({ confirm: true, timeout: 5000 })
-
-// With interpolation (auto-escaped)
-const file = 'my file.txt'
-await bash`cat ${file}`
-```
-
-### Options
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `confirm` | boolean | Allow dangerous operations |
-| `dryRun` | boolean | Show what would happen |
-| `timeout` | number | Timeout in milliseconds |
-| `cwd` | string | Working directory |
-
-### Result Type
-
-```typescript
-interface BashResult {
-  stdout: string
-  stderr: string
-  exitCode: number
-
-  ast?: Program           // Parsed AST
-  intent: Intent          // Extracted intent
-  classification: Safety  // Safety classification
-
-  blocked?: boolean
-  blockReason?: string
-  undo?: string
-  suggestions?: string[]
-}
-```
+---
 
 ## Core Library
 
-For platform-agnostic usage without Cloudflare dependencies, use `@dotdo/bashx`:
+For platform-agnostic usage without Cloudflare dependencies:
 
 ```typescript
 import {
   shellEscape,
   classifyInput,
   analyze,
+  detectLanguage,
   createProgram,
   createCommand
 } from '@dotdo/bashx'
@@ -324,13 +414,17 @@ const escaped = shellEscape('my file.txt')  // => 'my file.txt'
 const result = await classifyInput('ls -la')
 // { type: 'command', confidence: 0.95, ... }
 
+// Detect language from code
+const lang = detectLanguage('#!/usr/bin/env python3\nprint("hi")')
+// { language: 'python', confidence: 0.95, method: 'shebang' }
+
 // Analyze AST for safety
 const ast = createProgram([createCommand('rm', ['-rf', 'temp'])])
 const { classification, intent } = analyze(ast)
-// classification: { type: 'delete', impact: 'high', reversible: false, ... }
+// classification: { type: 'delete', impact: 'high', reversible: false }
 ```
 
-See [core/README.md](./core/README.md) for full documentation of the core library.
+---
 
 ## Project Structure
 
@@ -340,20 +434,35 @@ bashx/
     ast/                  # AST parsing with tree-sitter WASM
     mcp/                  # MCP tool definition
     do/                   # Durable Object integration
+      executors/          # Tiered execution system
+        native-executor   # Tier 1: Native Workers APIs
+        rpc-executor      # Tier 2: RPC to services
+        loader-executor   # Tier 3: Dynamic modules
+        wasm-executor     # Tier 1.5: WASM runtimes
+        sandbox-executor  # Tier 4: Full Linux sandbox
   core/                   # Pure library (@dotdo/bashx)
     ast/                  # AST type guards, factory functions
     safety/               # Safety analysis, classification
+      analyze.ts          # Bash safety analysis
+      multi-language.ts   # Python/Ruby/Node safety patterns
     escape/               # Shell escaping utilities
     classify/             # Input classification
+      index.ts            # Command vs intent
+      language-detector.ts # Language detection
     backend.ts            # Abstract backend interface
 ```
 
+---
+
 ## Safety Principles
 
-1. **Never execute without classification** - Every command gets classified
+1. **Never execute without classification** — Every command gets classified
 2. **Dry-run by default** for dangerous operations
-3. **Structural analysis** - AST-based, not regex pattern matching
-4. **Safer alternatives** - Always suggest when blocking
+3. **Structural analysis** — AST-based, not regex pattern matching
+4. **Language-aware** — Each language has its own safety patterns
+5. **Safer alternatives** — Always suggest when blocking
+
+---
 
 ## Comparison
 
@@ -361,26 +470,81 @@ bashx/
 |---------|-----------|----------|
 | Safety analysis | None | AST-based |
 | Dangerous command blocking | No | Yes |
+| Multi-language support | Manual | Automatic |
 | Undo support | No | Yes |
 | Tiered execution | No | Yes |
 | Edge-native | No | Yes |
+| Zero cold starts | No | Yes* |
 | AI-friendly | No | Yes |
+
+*With distributed runtime architecture
+
+---
+
+## Why bashx?
+
+### vs Raw Shell Access
+- **Catastrophe prevention** — bashx blocks `rm -rf /` before it happens
+- **Audit trail** — Every command is logged with full metadata
+- **Reversibility** — Undo support for file operations
+
+### vs Language-Specific SDKs
+- **One integration** — Don't build separate Python, Ruby, Node integrations
+- **Unified safety** — Same security model across all languages
+- **Automatic detection** — No need to specify language
+
+### vs Container-Per-Request
+- **No cold starts** — Warm runtimes via Cloudflare sharding
+- **Sub-100ms** — Even Python runs in <100ms
+- **Cost efficient** — Shared runtimes, not per-request containers
+
+---
 
 ## Performance
 
 - **1,400+ tests** covering all operations
 - **<1ms** for Tier 1 (native) commands
 - **<5ms** for Tier 2 (RPC) commands
+- **<100ms** for Tier 1.5 (warm runtime) commands
 - **AST parsing** with tree-sitter WASM
+
+---
+
+## Roadmap
+
+- [x] Bash AST parsing and safety analysis
+- [x] Tiered execution (Tier 1-4)
+- [x] MCP tool integration
+- [ ] Language detection (shebang, interpreter, syntax)
+- [ ] Python safety patterns and routing
+- [ ] Ruby safety patterns and routing
+- [ ] Node.js safety patterns and routing
+- [ ] Go/Rust WASM runtime support
+- [ ] Unified multi-language safety gate
+
+---
 
 ## License
 
 MIT
+
+---
 
 ## Links
 
 - [GitHub](https://github.com/dot-do/bashx)
 - [Documentation](https://bashx.do)
 - [Core Library](./core/README.md)
+- [Functions.do](https://functions.do) — Multi-language serverless platform
 - [.do](https://do.org.ai)
 - [Platform.do](https://platform.do)
+
+---
+
+<p align="center">
+  <strong>bashx.do</strong> — Safe code execution for AI agents.
+</p>
+
+<p align="center">
+  One tool. Every language. Zero cold starts.
+</p>
