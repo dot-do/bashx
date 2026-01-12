@@ -951,3 +951,497 @@ describe('TieredExecutor - Edge Cases', () => {
     expect(result).toHaveProperty('classification')
   })
 })
+
+// ============================================================================
+// LANGUAGE ROUTING TESTS (RED PHASE - TDD)
+// ============================================================================
+
+/**
+ * Tests for TieredExecutor language-aware routing.
+ *
+ * These tests verify the integration of language detection and routing
+ * to PolyglotExecutor for non-bash languages. The TieredExecutor will:
+ *
+ * 1. Detect language from input using detectLanguage()
+ * 2. If non-bash, route to PolyglotExecutor (Tier 1.5)
+ * 3. If bash, use existing tier logic
+ *
+ * This is "Tier 1.5" - warm language runtimes that are faster than
+ * cold-start sandbox but not as fast as native in-Worker execution.
+ *
+ * These tests are RED phase - they will FAIL until the implementation
+ * is added to TieredExecutor.
+ */
+describe('TieredExecutor - Language Routing', () => {
+  // Mock language bindings for polyglot executor
+  function createMockLanguageBinding(language: string, output: string): { fetch: typeof fetch } {
+    return {
+      fetch: vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(init.body as string) : {}
+        return new Response(JSON.stringify({
+          stdout: output,
+          stderr: '',
+          exitCode: 0,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }),
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Language Detection Integration
+  // --------------------------------------------------------------------------
+
+  describe('Language Detection Integration', () => {
+    it('detects Python from python command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('python -c "print(1+1)"')
+
+      expect(detection.language).toBe('python')
+      expect(detection.confidence).toBeGreaterThan(0.8)
+    })
+
+    it('detects Python from python3 command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('python3 script.py')
+
+      expect(detection.language).toBe('python')
+      expect(detection.method).toBe('interpreter')
+    })
+
+    it('detects Ruby from ruby command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('ruby -e "puts 1+1"')
+
+      expect(detection.language).toBe('ruby')
+      expect(detection.confidence).toBeGreaterThan(0.8)
+    })
+
+    it('detects Node from node command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('node -e "console.log(1+1)"')
+
+      expect(detection.language).toBe('node')
+      expect(detection.confidence).toBeGreaterThan(0.8)
+    })
+
+    it('detects Go from go run command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('go run main.go')
+
+      expect(detection.language).toBe('go')
+    })
+
+    it('detects Rust from cargo command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('cargo run')
+
+      expect(detection.language).toBe('rust')
+    })
+
+    it('detects bash from shell commands', () => {
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('ls -la')
+
+      expect(detection.language).toBe('bash')
+    })
+
+    it('detects bash from echo command', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const detection = executor.detectLanguage('echo "hello world"')
+
+      expect(detection.language).toBe('bash')
+    })
+
+    it('detects language from shebang in multi-line input', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const pythonScript = `#!/usr/bin/env python3
+print("Hello, World!")
+`
+      const detection = executor.detectLanguage(pythonScript)
+
+      expect(detection.language).toBe('python')
+      expect(detection.method).toBe('shebang')
+      expect(detection.confidence).toBeGreaterThan(0.9)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Routing to PolyglotExecutor
+  // --------------------------------------------------------------------------
+
+  describe('Routing to PolyglotExecutor', () => {
+    it('routes Python commands to PolyglotExecutor', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'Hello from Python\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('python -c "print(\'Hello from Python\')"')
+
+      expect(result.stdout).toBe('Hello from Python\n')
+      expect(result.exitCode).toBe(0)
+      expect(pythonBinding.fetch).toHaveBeenCalled()
+    })
+
+    it('routes Ruby commands to PolyglotExecutor', async () => {
+      const rubyBinding = createMockLanguageBinding('ruby', 'Hello from Ruby\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          ruby: rubyBinding,
+        },
+      })
+
+      const result = await executor.execute('ruby -e "puts \'Hello from Ruby\'"')
+
+      expect(result.stdout).toBe('Hello from Ruby\n')
+      expect(result.exitCode).toBe(0)
+      expect(rubyBinding.fetch).toHaveBeenCalled()
+    })
+
+    it('routes Node commands to PolyglotExecutor', async () => {
+      const nodeBinding = createMockLanguageBinding('node', 'Hello from Node\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          node: nodeBinding,
+        },
+      })
+
+      const result = await executor.execute('node -e "console.log(\'Hello from Node\')"')
+
+      expect(result.stdout).toBe('Hello from Node\n')
+      expect(result.exitCode).toBe(0)
+      expect(nodeBinding.fetch).toHaveBeenCalled()
+    })
+
+    it('routes Go commands to PolyglotExecutor', async () => {
+      const goBinding = createMockLanguageBinding('go', 'Hello from Go\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          go: goBinding,
+        },
+      })
+
+      const result = await executor.execute('go run main.go')
+
+      expect(result.stdout).toBe('Hello from Go\n')
+      expect(result.exitCode).toBe(0)
+      expect(goBinding.fetch).toHaveBeenCalled()
+    })
+
+    it('routes Rust/Cargo commands to PolyglotExecutor', async () => {
+      const rustBinding = createMockLanguageBinding('rust', 'Hello from Rust\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          rust: rustBinding,
+        },
+      })
+
+      const result = await executor.execute('cargo run')
+
+      expect(result.stdout).toBe('Hello from Rust\n')
+      expect(result.exitCode).toBe(0)
+      expect(rustBinding.fetch).toHaveBeenCalled()
+    })
+
+    it('routes pip commands to Python PolyglotExecutor', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'Successfully installed requests\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('pip install requests')
+
+      expect(result.stdout).toContain('Successfully installed')
+      expect(pythonBinding.fetch).toHaveBeenCalled()
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Result Format
+  // --------------------------------------------------------------------------
+
+  describe('Result Format', () => {
+    it('includes language in BashResult', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'output\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('python -c "print(1)"')
+
+      // The result should have language information in classification or metadata
+      expect(result.classification.language).toBe('python')
+    })
+
+    it('includes tier 1.5 in BashResult for polyglot execution', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'output\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('python -c "print(1)"')
+
+      // The classification should indicate polyglot tier (1.5)
+      expect(result.classification.handler).toBe('polyglot')
+    })
+
+    it('includes polyglot reason in classification', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'output\n')
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('python -c "print(1)"')
+
+      expect(result.classification.reason).toContain('polyglot')
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Fallback Behavior
+  // --------------------------------------------------------------------------
+
+  describe('Fallback Behavior', () => {
+    it('falls back to sandbox when language worker unavailable', async () => {
+      const mockSandbox = createMockSandbox()
+      const executor = new TieredExecutor({
+        sandbox: mockSandbox,
+        // No languageWorkers configured for python
+      })
+
+      const result = await executor.execute('python -c "print(1)"')
+
+      // Should fallback to sandbox
+      expect(mockSandbox.execute).toHaveBeenCalled()
+    })
+
+    it('falls back to sandbox when PolyglotExecutor RPC fails', async () => {
+      const failingBinding: { fetch: typeof fetch } = {
+        fetch: vi.fn(async () => {
+          throw new Error('Service unavailable')
+        }),
+      }
+      const mockSandbox = createMockSandbox()
+      const executor = new TieredExecutor({
+        sandbox: mockSandbox,
+        languageWorkers: {
+          python: failingBinding,
+        },
+      })
+
+      const result = await executor.execute('python -c "print(1)"')
+
+      // Should fallback to sandbox after polyglot failure
+      expect(mockSandbox.execute).toHaveBeenCalled()
+    })
+
+    it('uses existing tier selection for bash commands', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'Python output\n')
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('echo "hello bash"')
+
+      // Should NOT call pythonBinding for bash commands
+      expect(pythonBinding.fetch).not.toHaveBeenCalled()
+      // Should execute via Tier 1 native
+      expect(result.stdout).toBe('hello bash\n')
+    })
+
+    it('uses existing tier selection for cat command', async () => {
+      const pythonBinding = createMockLanguageBinding('python', 'Python output\n')
+      const executor = new TieredExecutor({
+        fs: createMockFsCapability(),
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+        },
+      })
+
+      const result = await executor.execute('cat /test.txt')
+
+      // Should NOT call pythonBinding for bash commands
+      expect(pythonBinding.fetch).not.toHaveBeenCalled()
+      // Should execute via Tier 1 filesystem
+      expect(result.stdout).toBe('hello world\n')
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Configuration
+  // --------------------------------------------------------------------------
+
+  describe('Configuration', () => {
+    it('accepts languageWorkers in config', () => {
+      const pythonBinding = createMockLanguageBinding('python', 'output')
+      const rubyBinding = createMockLanguageBinding('ruby', 'output')
+
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: pythonBinding,
+          ruby: rubyBinding,
+        },
+      })
+
+      expect(executor).toBeDefined()
+      expect(executor.hasLanguageWorker('python')).toBe(true)
+      expect(executor.hasLanguageWorker('ruby')).toBe(true)
+      expect(executor.hasLanguageWorker('go')).toBe(false)
+    })
+
+    it('works without languageWorkers configured', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      expect(executor).toBeDefined()
+      expect(executor.hasLanguageWorker('python')).toBe(false)
+    })
+
+    it('getAvailableLanguages returns configured languages', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: createMockLanguageBinding('python', ''),
+          ruby: createMockLanguageBinding('ruby', ''),
+          node: createMockLanguageBinding('node', ''),
+        },
+      })
+
+      const languages = executor.getAvailableLanguages()
+
+      expect(languages).toContain('python')
+      expect(languages).toContain('ruby')
+      expect(languages).toContain('node')
+      expect(languages).not.toContain('go')
+      expect(languages).not.toContain('rust')
+    })
+
+    it('getAvailableLanguages returns empty array when no workers configured', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+      })
+
+      const languages = executor.getAvailableLanguages()
+
+      expect(languages).toEqual([])
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Classification with Language
+  // --------------------------------------------------------------------------
+
+  describe('Classification with Language', () => {
+    it('classifies python command as polyglot tier when worker available', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          python: createMockLanguageBinding('python', ''),
+        },
+      })
+
+      const classification = executor.classifyCommand('python script.py')
+
+      expect(classification.handler).toBe('polyglot')
+      expect(classification.capability).toBe('python')
+    })
+
+    it('classifies python command as sandbox when no worker available', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        // No languageWorkers
+      })
+
+      const classification = executor.classifyCommand('python script.py')
+
+      // Should fall through to sandbox (Tier 4)
+      expect(classification.tier).toBe(4)
+      expect(classification.handler).toBe('sandbox')
+    })
+
+    it('classifies ruby command as polyglot tier when worker available', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          ruby: createMockLanguageBinding('ruby', ''),
+        },
+      })
+
+      const classification = executor.classifyCommand('ruby script.rb')
+
+      expect(classification.handler).toBe('polyglot')
+      expect(classification.capability).toBe('ruby')
+    })
+
+    it('classifies node command as polyglot tier when worker available', () => {
+      const executor = new TieredExecutor({
+        sandbox: createMockSandbox(),
+        languageWorkers: {
+          node: createMockLanguageBinding('node', ''),
+        },
+      })
+
+      const classification = executor.classifyCommand('node app.js')
+
+      expect(classification.handler).toBe('polyglot')
+      expect(classification.capability).toBe('node')
+    })
+  })
+})
