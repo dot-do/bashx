@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { VirtualPTY } from '../../../core/pty/virtual-pty.js'
 import { ANSIParser } from '../../../core/pty/parser.js'
 import { TerminalBuffer } from '../../../core/pty/buffer.js'
-import type { ParsedSequence, ScreenChangeEvent, ScreenBuffer } from '../../../core/pty/types.js'
+import type { ParsedSequence, ScreenChangeEvent, ScreenBuffer, KeyEvent } from '../../../core/pty/types.js'
 
 // ============================================================================
 // VirtualPTY Basic Tests
@@ -458,6 +458,262 @@ describe('VirtualPTY', () => {
 
       // Snapshot should be unchanged
       expect(snapshot.cells[0][0].char).toBe('B')
+    })
+  })
+
+  // ==========================================================================
+  // Input Handling Tests
+  // ==========================================================================
+
+  describe('Input Handling', () => {
+    describe('sendInput', () => {
+      it('should accept string input', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendInput('hello')
+
+        expect(received).toEqual(['hello'])
+      })
+
+      it('should accept Uint8Array input', () => {
+        const pty = new VirtualPTY()
+        const received: Uint8Array[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? new TextEncoder().encode(data) : data))
+
+        const bytes = new Uint8Array([104, 105]) // 'hi'
+        pty.sendInput(bytes)
+
+        expect(received.length).toBe(1)
+        expect(received[0]).toEqual(bytes)
+      })
+
+      it('should buffer input when no callback registered', () => {
+        const pty = new VirtualPTY()
+        pty.sendInput('buffered')
+
+        const received: string[] = []
+        pty.onInput((data) => {
+          // New callbacks should not receive buffered input
+          received.push(typeof data === 'string' ? data : new TextDecoder().decode(data))
+        })
+
+        // Send new input
+        pty.sendInput('new')
+
+        expect(received).toEqual(['new'])
+      })
+    })
+
+    describe('sendKey', () => {
+      it('should translate simple key events', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'a' })
+
+        expect(received).toEqual(['a'])
+      })
+
+      it('should translate enter key to carriage return', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'return' })
+
+        expect(received).toEqual(['\r'])
+      })
+
+      it('should translate escape key', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'escape' })
+
+        expect(received).toEqual(['\x1b'])
+      })
+
+      it('should translate arrow keys to ANSI sequences', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'up' })
+        pty.sendKey({ key: 'down' })
+        pty.sendKey({ key: 'left' })
+        pty.sendKey({ key: 'right' })
+
+        expect(received).toEqual([
+          '\x1b[A', // up
+          '\x1b[B', // down
+          '\x1b[D', // left
+          '\x1b[C', // right
+        ])
+      })
+
+      it('should handle ctrl modifier', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'c', ctrl: true })
+
+        expect(received).toEqual(['\x03']) // Ctrl+C
+      })
+
+      it('should handle tab key', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'tab' })
+
+        expect(received).toEqual(['\t'])
+      })
+
+      it('should handle backspace key', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'backspace' })
+
+        expect(received).toEqual(['\x7f']) // DEL character
+      })
+
+      it('should handle delete key', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'delete' })
+
+        expect(received).toEqual(['\x1b[3~'])
+      })
+
+      it('should handle home and end keys', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'home' })
+        pty.sendKey({ key: 'end' })
+
+        expect(received).toEqual(['\x1b[H', '\x1b[F'])
+      })
+
+      it('should handle page up and page down', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendKey({ key: 'pageup' })
+        pty.sendKey({ key: 'pagedown' })
+
+        expect(received).toEqual(['\x1b[5~', '\x1b[6~'])
+      })
+    })
+
+    describe('Raw Mode', () => {
+      it('should start in cooked mode by default', () => {
+        const pty = new VirtualPTY()
+        expect(pty.isRawMode).toBe(false)
+      })
+
+      it('should allow setting raw mode', () => {
+        const pty = new VirtualPTY()
+        pty.setRawMode(true)
+        expect(pty.isRawMode).toBe(true)
+      })
+
+      it('should allow disabling raw mode', () => {
+        const pty = new VirtualPTY()
+        pty.setRawMode(true)
+        pty.setRawMode(false)
+        expect(pty.isRawMode).toBe(false)
+      })
+    })
+
+    describe('Device Status Report (DSR)', () => {
+      it('should respond to cursor position request (DSR 6)', () => {
+        const pty = new VirtualPTY({ cols: 80, rows: 24 })
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        // Move cursor to row 5, col 10
+        pty.write('\x1b[5;10H')
+
+        // Request cursor position (DSR 6)
+        pty.write('\x1b[6n')
+
+        // Should receive CPR (Cursor Position Report): ESC [ row ; col R
+        expect(received).toEqual(['\x1b[5;10R'])
+      })
+
+      it('should respond to device status request (DSR 5)', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+        pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        // Request device status (DSR 5)
+        pty.write('\x1b[5n')
+
+        // Should receive "device OK" response
+        expect(received).toEqual(['\x1b[0n'])
+      })
+    })
+
+    describe('onInput callback', () => {
+      it('should allow multiple input callbacks', () => {
+        const pty = new VirtualPTY()
+        const received1: string[] = []
+        const received2: string[] = []
+
+        pty.onInput((data) => received1.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+        pty.onInput((data) => received2.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendInput('test')
+
+        expect(received1).toEqual(['test'])
+        expect(received2).toEqual(['test'])
+      })
+
+      it('should allow unsubscribing from input callback', () => {
+        const pty = new VirtualPTY()
+        const received: string[] = []
+
+        const unsubscribe = pty.onInput((data) => received.push(typeof data === 'string' ? data : new TextDecoder().decode(data)))
+
+        pty.sendInput('first')
+        unsubscribe()
+        pty.sendInput('second')
+
+        expect(received).toEqual(['first'])
+      })
+    })
+
+    describe('getReadableStream', () => {
+      it('should provide a ReadableStream for input', async () => {
+        const pty = new VirtualPTY()
+        const stream = pty.getReadableStream()
+
+        expect(stream).toBeInstanceOf(ReadableStream)
+
+        // Send some input
+        pty.sendInput('streaming')
+
+        // Read from the stream
+        const reader = stream.getReader()
+        const { value, done } = await reader.read()
+        reader.releaseLock()
+
+        expect(done).toBe(false)
+        expect(new TextDecoder().decode(value)).toBe('streaming')
+      })
     })
   })
 })

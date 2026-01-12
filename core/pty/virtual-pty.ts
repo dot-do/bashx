@@ -19,8 +19,10 @@ import type {
   ScreenChangeCallback,
   SequenceCallback,
   EventCallback,
+  InputCallback,
   ScreenBuffer,
   Color,
+  KeyEvent,
 } from './types.js'
 import {
   BEL,
@@ -86,6 +88,13 @@ export class VirtualPTY {
   private screenChangeCallbacks: ScreenChangeCallback[] = []
   private sequenceCallbacks: SequenceCallback[] = []
   private eventCallbacks: EventCallback[] = []
+  private inputCallbacks: InputCallback[] = []
+
+  /** Raw mode state (for character-by-character input) */
+  private _rawMode = false
+
+  /** ReadableStream controller for input (stored for potential cancel/close operations) */
+  private _readableStreamController: ReadableStreamDefaultController<Uint8Array> | null = null
 
   constructor(options: VirtualPTYOptions = {}) {
     this.options = {
@@ -298,6 +307,95 @@ export class VirtualPTY {
       const idx = this.eventCallbacks.indexOf(callback)
       if (idx >= 0) this.eventCallbacks.splice(idx, 1)
     }
+  }
+
+  // ==========================================================================
+  // Public API - Input Handling
+  // ==========================================================================
+
+  /**
+   * Register callback for input data (simulated stdin).
+   * This is called when input is sent via sendInput() or sendKey(),
+   * or when the terminal generates responses (like DSR responses).
+   */
+  onInput(callback: InputCallback): () => void {
+    this.inputCallbacks.push(callback)
+    return () => {
+      const idx = this.inputCallbacks.indexOf(callback)
+      if (idx >= 0) this.inputCallbacks.splice(idx, 1)
+    }
+  }
+
+  /**
+   * Send raw input data (simulates typing into the terminal)
+   */
+  sendInput(data: string | Uint8Array): void {
+    this.emitInput(data)
+  }
+
+  /**
+   * Send a key event (translates to appropriate terminal sequence)
+   */
+  sendKey(event: KeyEvent): void {
+    const sequence = this.translateKeyEvent(event)
+    if (sequence) {
+      this.emitInput(sequence)
+    }
+  }
+
+  /**
+   * Get whether raw mode is enabled
+   */
+  get isRawMode(): boolean {
+    return this._rawMode
+  }
+
+  /**
+   * Set raw mode for character-by-character input
+   * In raw mode, input is sent immediately without line buffering.
+   * This is required for React Ink's useInput() hook.
+   */
+  setRawMode(enabled: boolean): void {
+    this._rawMode = enabled
+  }
+
+  /**
+   * Get a ReadableStream that receives input data.
+   * This allows consumers to read input data as a stream.
+   * Note: Only one readable stream should be active at a time.
+   */
+  getReadableStream(): ReadableStream<Uint8Array> {
+    const pty = this
+
+    // Close any existing stream
+    if (this._readableStreamController) {
+      try {
+        this._readableStreamController.close()
+      } catch {
+        // Stream may already be closed
+      }
+      this._readableStreamController = null
+    }
+
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        pty._readableStreamController = controller
+        // Register input callback to push to the stream
+        pty.onInput((data) => {
+          const bytes = typeof data === 'string'
+            ? new TextEncoder().encode(data)
+            : data
+          try {
+            controller.enqueue(bytes)
+          } catch {
+            // Stream may be closed
+          }
+        })
+      },
+      cancel() {
+        pty._readableStreamController = null
+      },
+    })
   }
 
   // ==========================================================================
@@ -521,9 +619,27 @@ export class VirtualPTY {
         this.buffer.restoreCursor()
         break
 
-      // Device status reports (we just acknowledge them)
+      // Device status reports
       case 'n': // DSR - Device Status Report
-        // Would need to implement response mechanism
+        this.handleDSR(params[0] ?? 0)
+        break
+    }
+  }
+
+  /**
+   * Handle Device Status Report requests
+   */
+  private handleDSR(code: number): void {
+    switch (code) {
+      case 5: // Device Status Report - request status
+        // Response: ESC [ 0 n (device OK)
+        this.emitInput('\x1b[0n')
+        break
+      case 6: // Cursor Position Report - request cursor position
+        // Response: ESC [ row ; col R (1-based)
+        const row = this.buffer.cursor.y + 1
+        const col = this.buffer.cursor.x + 1
+        this.emitInput(`\x1b[${row};${col}R`)
         break
     }
   }
@@ -761,6 +877,122 @@ export class VirtualPTY {
   private emitEvent(event: PTYEvent): void {
     for (const cb of this.eventCallbacks) {
       cb(event)
+    }
+  }
+
+  /**
+   * Emit input data to registered callbacks
+   */
+  private emitInput(data: string | Uint8Array): void {
+    for (const cb of this.inputCallbacks) {
+      cb(data)
+    }
+  }
+
+  /**
+   * Translate a KeyEvent to the appropriate terminal escape sequence.
+   * Returns null if the key should not produce any output.
+   */
+  private translateKeyEvent(event: KeyEvent): string | null {
+    const { key, ctrl, meta, shift } = event
+
+    // Handle ctrl modifier for single characters (Ctrl+A = 0x01, Ctrl+Z = 0x1A)
+    if (ctrl && typeof key === 'string' && key.length === 1) {
+      const char = key.toLowerCase()
+      if (char >= 'a' && char <= 'z') {
+        // Ctrl+A = 1, Ctrl+B = 2, ..., Ctrl+Z = 26
+        const code = char.charCodeAt(0) - 'a'.charCodeAt(0) + 1
+        return String.fromCharCode(code)
+      }
+      // Special ctrl combinations
+      if (char === '[') return '\x1b' // Ctrl+[ = ESC
+      if (char === '\\') return '\x1c' // Ctrl+\
+      if (char === ']') return '\x1d' // Ctrl+]
+      if (char === '^') return '\x1e' // Ctrl+^
+      if (char === '_') return '\x1f' // Ctrl+_
+    }
+
+    // Handle special keys
+    switch (key) {
+      // Enter/Return
+      case 'return':
+      case 'enter':
+        return '\r'
+
+      // Escape
+      case 'escape':
+        return '\x1b'
+
+      // Tab
+      case 'tab':
+        return shift ? '\x1b[Z' : '\t' // Shift+Tab sends CSI Z
+
+      // Backspace
+      case 'backspace':
+        return '\x7f' // DEL character
+
+      // Delete
+      case 'delete':
+        return '\x1b[3~'
+
+      // Arrow keys
+      case 'up':
+        return meta ? '\x1b\x1b[A' : '\x1b[A'
+      case 'down':
+        return meta ? '\x1b\x1b[B' : '\x1b[B'
+      case 'right':
+        return meta ? '\x1b\x1b[C' : '\x1b[C'
+      case 'left':
+        return meta ? '\x1b\x1b[D' : '\x1b[D'
+
+      // Home/End
+      case 'home':
+        return '\x1b[H'
+      case 'end':
+        return '\x1b[F'
+
+      // Page Up/Down
+      case 'pageup':
+        return '\x1b[5~'
+      case 'pagedown':
+        return '\x1b[6~'
+
+      // Insert
+      case 'insert':
+        return '\x1b[2~'
+
+      // Function keys
+      case 'f1':
+        return '\x1bOP'
+      case 'f2':
+        return '\x1bOQ'
+      case 'f3':
+        return '\x1bOR'
+      case 'f4':
+        return '\x1bOS'
+      case 'f5':
+        return '\x1b[15~'
+      case 'f6':
+        return '\x1b[17~'
+      case 'f7':
+        return '\x1b[18~'
+      case 'f8':
+        return '\x1b[19~'
+      case 'f9':
+        return '\x1b[20~'
+      case 'f10':
+        return '\x1b[21~'
+      case 'f11':
+        return '\x1b[23~'
+      case 'f12':
+        return '\x1b[24~'
+
+      default:
+        // Single character - return as is
+        if (typeof key === 'string' && key.length === 1) {
+          return key
+        }
+        return null
     }
   }
 }

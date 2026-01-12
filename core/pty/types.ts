@@ -291,6 +291,48 @@ export interface TitleChangeEvent {
 export type PTYEvent = ScreenChangeEvent | BellEvent | TitleChangeEvent
 
 // ============================================================================
+// Input Types
+// ============================================================================
+
+/**
+ * Key names for special keys
+ */
+export type SpecialKey =
+  | 'return'
+  | 'enter'
+  | 'escape'
+  | 'tab'
+  | 'backspace'
+  | 'delete'
+  | 'up'
+  | 'down'
+  | 'left'
+  | 'right'
+  | 'home'
+  | 'end'
+  | 'pageup'
+  | 'pagedown'
+  | 'insert'
+  | 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6'
+  | 'f7' | 'f8' | 'f9' | 'f10' | 'f11' | 'f12'
+
+/**
+ * Key event for sendKey() method
+ *
+ * Compatible with React Ink's useInput hook key events
+ */
+export interface KeyEvent {
+  /** The key pressed (single character or special key name) */
+  key: string | SpecialKey
+  /** Ctrl modifier */
+  ctrl?: boolean
+  /** Alt/Meta modifier */
+  meta?: boolean
+  /** Shift modifier */
+  shift?: boolean
+}
+
+// ============================================================================
 // Callback Types
 // ============================================================================
 
@@ -313,6 +355,11 @@ export type SequenceCallback = (sequence: ParsedSequence) => void
  * Callback for PTY events
  */
 export type EventCallback = (event: PTYEvent) => void
+
+/**
+ * Callback for input data (simulated stdin)
+ */
+export type InputCallback = (data: Uint8Array | string) => void
 
 // ============================================================================
 // Configuration Types
