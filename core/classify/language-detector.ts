@@ -13,10 +13,10 @@
  * @packageDocumentation
  */
 
-/**
- * Supported programming languages for detection.
- */
-export type SupportedLanguage = 'bash' | 'python' | 'ruby' | 'node' | 'go' | 'rust'
+import type { SupportedLanguage } from '../types.js'
+
+// Re-export SupportedLanguage for backward compatibility
+export type { SupportedLanguage } from '../types.js'
 
 /**
  * Detection method used to identify the language.

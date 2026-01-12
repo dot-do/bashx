@@ -201,7 +201,8 @@ const BufferUtils = {
     // Try decode and re-encode, compare lengths
     try {
       // Use fatal: true option in constructor to throw on invalid UTF-8
-      const decoder = new TextDecoder('utf-8', { fatal: true })
+      // Cast to standard TextDecoder type since Cloudflare Workers types may differ
+      const decoder = new (TextDecoder as unknown as new (label?: string, options?: { fatal?: boolean }) => TextDecoder)('utf-8', { fatal: true })
       const decoded = decoder.decode(bytes)
       const reencoded = new TextEncoder().encode(decoded)
       return bytes.length === reencoded.length

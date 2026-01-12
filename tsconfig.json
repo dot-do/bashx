@@ -15,12 +15,9 @@
     "declaration": true,
     "declarationMap": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "types": ["@cloudflare/workers-types", "@types/node"]
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"],
-  "references": [
-    { "path": "./core" }
-  ]
+  "include": ["src/**/*", "core/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

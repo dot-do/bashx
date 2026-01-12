@@ -193,7 +193,7 @@ export {
 } from './classify/language-detector.js'
 
 export type {
-  SupportedLanguage,
+  // SupportedLanguage is already exported from './types.js'
   DetectionMethod,
   LanguageDetectionResult,
   LanguageDetectionDetails,

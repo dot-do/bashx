@@ -657,6 +657,13 @@ export interface ExtendedIntent extends Intent {
 }
 
 /**
+ * Partial extended intent type that properly includes base Intent fields.
+ * TypeScript's Partial<ExtendedIntent> doesn't properly handle inherited fields
+ * when crossing module boundaries, so we explicitly define the partial type.
+ */
+type PartialExtendedIntent = Partial<Intent> & Partial<Omit<ExtendedIntent, keyof Intent>>
+
+/**
  * Maps file extensions to human-readable descriptions
  */
 const FILE_TYPE_DESCRIPTIONS: Record<string, string> = {
@@ -760,13 +767,13 @@ function getActionType(commandName: string, args: string[]): ExtendedIntent['act
 /**
  * Extract intent from a single command
  */
-function extractCommandIntent(cmd: Command): Partial<ExtendedIntent> {
+function extractCommandIntent(cmd: Command): PartialExtendedIntent {
   const name = getCommandName(cmd.name)
   const args = getArgs(cmd.args)
   const paths = extractPaths(args)
   const modifiers = extractModifiers(args)
 
-  const intent: Partial<ExtendedIntent> = {
+  const intent: PartialExtendedIntent = {
     modifiers,
     actionType: getActionType(name, args),
   }
@@ -1249,14 +1256,14 @@ function extractCommandIntent(cmd: Command): Partial<ExtendedIntent> {
 /**
  * Extract intent from pipeline
  */
-function extractPipelineIntent(pipeline: Pipeline): Partial<ExtendedIntent> {
-  const commands = pipeline.commands.map(cmd => ({
+function extractPipelineIntent(pipeline: Pipeline): PartialExtendedIntent {
+  const commands = pipeline.commands.map((cmd: Command) => ({
     name: getCommandName(cmd.name),
     args: getArgs(cmd.args),
     intent: extractCommandIntent(cmd),
   }))
 
-  const commandNames = commands.map(c => c.name)
+  const commandNames = commands.map((c: { name: string }) => c.name)
   const firstCmd = commands[0]
   const lastCmd = commands[commands.length - 1]
 
@@ -1323,7 +1330,7 @@ function extractPipelineIntent(pipeline: Pipeline): Partial<ExtendedIntent> {
 /**
  * Extract intent from List (&&, ||)
  */
-function extractListIntent(list: List): Partial<ExtendedIntent> {
+function extractListIntent(list: List): PartialExtendedIntent {
   const leftIntent = extractNodeIntent(list.left)
   const rightIntent = extractNodeIntent(list.right)
 
@@ -1370,7 +1377,7 @@ function extractListIntent(list: List): Partial<ExtendedIntent> {
 /**
  * Extract intent from any AST node
  */
-function extractNodeIntent(node: BashNode): Partial<ExtendedIntent> {
+function extractNodeIntent(node: BashNode): PartialExtendedIntent {
   switch (node.type) {
     case 'Command':
       return extractCommandIntent(node)
@@ -1402,7 +1409,7 @@ export function extractIntentFromAST(ast: Program): ExtendedIntent {
 
   // Get semantic intent from first statement
   const firstNode = ast.body[0]
-  let semanticIntent: Partial<ExtendedIntent> = {
+  let semanticIntent: PartialExtendedIntent = {
     action: 'execute',
     object: 'command',
     description: 'execute command',
@@ -1468,7 +1475,7 @@ export function describeIntent(intent: Intent): string {
   // Detect move operation: when reads, writes, and deletes overlap (source is read, deleted, dest is written)
   const isMoveOperation = intent.commands.includes('mv') ||
     (intent.writes.length > 0 && intent.reads.length > 0 &&
-     intent.deletes.length > 0 && intent.reads.some(r => intent.deletes.includes(r)))
+     intent.deletes.length > 0 && intent.reads.some((r: string) => intent.deletes.includes(r)))
 
   // Describe main operation
   if (isMoveOperation && intent.reads.length > 0 && intent.writes.length > 0) {
