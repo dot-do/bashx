@@ -85,12 +85,14 @@ const SHEBANG_MAP: Record<string, { pattern: RegExp; language: SupportedLanguage
 }
 
 /**
- * Interpreter commands mapped to languages
+ * Interpreter commands mapped to languages.
+ * Note: Package managers (pip, npm, gem) are excluded because they should
+ * go through Tier 2 RPC, not polyglot language execution.
  */
 const INTERPRETERS: Record<SupportedLanguage, string[]> = {
-  python: ['python', 'python3', 'python3.11', 'pip', 'pip3'],
-  ruby: ['ruby', 'gem', 'bundle'],
-  node: ['node', 'npm', 'npx', 'pnpm', 'yarn'],
+  python: ['python', 'python3', 'python3.11'],
+  ruby: ['ruby'],
+  node: ['node'],
   go: ['go'],
   rust: ['cargo', 'rustc'],
   bash: ['bash', 'sh', 'zsh'],
@@ -126,6 +128,10 @@ const SYNTAX_PATTERNS: { lang: SupportedLanguage; pattern: RegExp; confidence: n
   { lang: 'ruby', pattern: /\b(puts|end)\b/m, confidence: 0.70 },
   // Python patterns - 'def' with parens and colon, or import/from/class
   { lang: 'python', pattern: /^(import|from|class)\s+|^def\s+\w+\s*\(/m, confidence: 0.75 },
+  // Python functions - print, eval, exec, open (common Python builtins)
+  { lang: 'python', pattern: /\b(print|eval|exec|compile)\s*\(/, confidence: 0.60 },
+  // Python-style assignment with function call (bash doesn't allow spaces around =)
+  { lang: 'python', pattern: /^\w+\s+=\s+\w+\s*\(/m, confidence: 0.55 },
   { lang: 'node', pattern: /\b(const|let|async|await|=>)\s+/m, confidence: 0.65 },
 ]
 

@@ -20,7 +20,11 @@
  */
 
 import type { SafetyClassification } from '../types.js'
-import type { SupportedLanguage } from '../classify/language-detector.js'
+import { detectLanguage, type SupportedLanguage } from '../classify/language-detector.js'
+import { analyzePythonSafety } from './patterns/python.js'
+import { analyzeRubySafety } from './patterns/ruby.js'
+import { analyzeNodeSafety } from './patterns/nodejs.js'
+import { classifyCommand } from './analyze.js'
 
 /**
  * Sandbox strategy configuration for code execution.
@@ -140,6 +144,150 @@ export interface MultiLanguageAnalysis {
  * // safeResult.sandboxStrategy.filesystem === 'unrestricted'
  * ```
  */
+/**
+ * Determine sandbox strategy based on classification and detected patterns.
+ */
+function determineSandboxStrategy(
+  classification: SafetyClassification,
+  patterns: DetectedPattern[]
+): SandboxStrategy {
+  const hasSystemExecution = patterns.some(
+    (p) => p.type === 'system' || p.type === 'subprocess' || p.type === 'child_process'
+  )
+  const hasCodeExecution = patterns.some(
+    (p) => p.type === 'eval' || p.type === 'exec' || p.type === 'compile'
+  )
+
+  // Critical impact: most restrictive sandbox
+  if (classification.impact === 'critical') {
+    return {
+      timeout: 5000,
+      resources: {
+        memoryMB: 64,
+        diskMB: 32,
+      },
+      network: 'none',
+      filesystem: 'read-only',
+    }
+  }
+
+  // High impact: restricted sandbox
+  if (classification.impact === 'high') {
+    return {
+      timeout: 10000,
+      resources: {
+        memoryMB: 128,
+        diskMB: 64,
+      },
+      network: hasSystemExecution ? 'none' : 'filtered',
+      filesystem: 'read-only',
+    }
+  }
+
+  // Medium impact: moderate restrictions
+  if (classification.impact === 'medium') {
+    return {
+      timeout: 30000,
+      resources: {
+        memoryMB: 256,
+        diskMB: 128,
+      },
+      network: hasCodeExecution ? 'none' : 'filtered',
+      filesystem: 'temp-only',
+    }
+  }
+
+  // Low/none impact: permissive sandbox
+  return {
+    timeout: 60000,
+    resources: {
+      memoryMB: 512,
+      diskMB: 256,
+    },
+    network: 'unrestricted',
+    filesystem: 'unrestricted',
+  }
+}
+
+/**
+ * Analyze bash code for safety classification.
+ *
+ * Parses the command and classifies it using the bash safety analyzer.
+ * Handles complex commands by extracting the primary command.
+ */
+function analyzeBashSafety(code: string): { classification: SafetyClassification; patterns: DetectedPattern[] } {
+  // Handle pipeline and compound commands - extract first command
+  const trimmed = code.trim()
+
+  // Split on common command separators to get first command
+  const firstCommand = trimmed.split(/\s*(?:&&|\|\||;|\|)\s*/)[0]
+
+  // Parse command into name and arguments
+  const parts = firstCommand.trim().split(/\s+/)
+  const command = parts[0] || ''
+  const args = parts.slice(1)
+
+  const classification = classifyCommand(command, args)
+
+  return {
+    classification,
+    patterns: [], // Bash patterns are handled via AST analysis, not pattern detection
+  }
+}
+
 export async function analyzeMultiLanguage(code: string): Promise<MultiLanguageAnalysis> {
-  throw new Error('Not implemented')
+  // 1. Detect language
+  const detection = detectLanguage(code)
+
+  // 2. Route to appropriate analyzer
+  let classification: SafetyClassification
+  let patterns: DetectedPattern[] = []
+
+  switch (detection.language) {
+    case 'python': {
+      const analysis = analyzePythonSafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns.map((p) => ({ type: p.type, impact: p.impact }))
+      break
+    }
+    case 'ruby': {
+      const analysis = analyzeRubySafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns.map((p) => ({ type: p.type, impact: p.impact }))
+      break
+    }
+    case 'node': {
+      const analysis = analyzeNodeSafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns.map((p) => ({ type: p.type, impact: p.impact }))
+      break
+    }
+    case 'bash':
+    default: {
+      const analysis = analyzeBashSafety(code)
+      classification = analysis.classification
+      patterns = analysis.patterns
+      break
+    }
+  }
+
+  // 3. Determine sandbox strategy based on classification
+  const sandboxStrategy = determineSandboxStrategy(classification, patterns)
+
+  // 4. Determine if safe
+  // Unsafe if critical impact or high impact with dangerous patterns
+  const isSafe =
+    classification.impact === 'none' ||
+    (classification.impact === 'low' && patterns.length === 0)
+
+  const reason = isSafe ? undefined : classification.reason
+
+  return {
+    language: detection.language,
+    classification,
+    patterns,
+    sandboxStrategy,
+    isSafe,
+    reason,
+  }
 }

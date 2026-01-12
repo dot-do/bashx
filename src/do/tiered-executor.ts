@@ -105,6 +105,15 @@ import {
   extractNpmSubcommand,
   type NpmNativeOptions,
 } from './commands/npm-native.js'
+import {
+  detectLanguage,
+  type SupportedLanguage,
+  type LanguageDetectionResult,
+} from '../../core/classify/language-detector.js'
+import {
+  PolyglotExecutor,
+  type LanguageBinding,
+} from './executors/polyglot-executor.js'
 
 // ============================================================================
 // TYPES
@@ -124,7 +133,7 @@ export interface TierClassification {
   /** Reason for the tier selection */
   reason: string
   /** The handler that will execute the command */
-  handler: 'native' | 'rpc' | 'loader' | 'sandbox'
+  handler: 'native' | 'rpc' | 'loader' | 'sandbox' | 'polyglot'
   /** Specific capability or service that will be used */
   capability?: string
 }
@@ -212,6 +221,21 @@ export interface TieredExecutorConfig {
    * @default true
    */
   preferFaster?: boolean
+
+  /**
+   * Tier 1.5: Language runtime worker bindings for multi-language execution.
+   * Routes language-specific commands to warm runtime workers.
+   *
+   * @example
+   * ```typescript
+   * languageWorkers: {
+   *   python: env.PYX_SERVICE,
+   *   ruby: env.RUBY_SERVICE,
+   *   node: env.NODE_SERVICE,
+   * }
+   * ```
+   */
+  languageWorkers?: Partial<Record<SupportedLanguage, LanguageBinding>>
 }
 
 // ============================================================================
@@ -447,6 +471,8 @@ export class TieredExecutor implements BashExecutor {
   private readonly defaultTimeout: number
   /** @internal Reserved for future optimization strategy selection */
   public readonly preferFaster: boolean
+  private readonly languageWorkers: Partial<Record<SupportedLanguage, LanguageBinding>>
+  private readonly polyglotExecutor?: PolyglotExecutor
 
   constructor(config: TieredExecutorConfig) {
     this.fs = config.fs
@@ -455,6 +481,15 @@ export class TieredExecutor implements BashExecutor {
     this.sandbox = config.sandbox
     this.defaultTimeout = config.defaultTimeout ?? 30000
     this.preferFaster = config.preferFaster ?? true
+    this.languageWorkers = config.languageWorkers ?? {}
+
+    // Initialize PolyglotExecutor if language workers are configured
+    if (Object.keys(this.languageWorkers).length > 0) {
+      this.polyglotExecutor = new PolyglotExecutor({
+        bindings: this.languageWorkers,
+        defaultTimeout: this.defaultTimeout,
+      })
+    }
 
     // Merge default RPC services with provided bindings
     for (const [name, service] of Object.entries(DEFAULT_RPC_SERVICES)) {
@@ -466,6 +501,37 @@ export class TieredExecutor implements BashExecutor {
         }
       }
     }
+  }
+
+  /**
+   * Detect the language of a command or code input.
+   *
+   * @param input - The command or code to analyze
+   * @returns Language detection result with language, confidence, and method
+   */
+  detectLanguage(input: string): LanguageDetectionResult {
+    return detectLanguage(input)
+  }
+
+  /**
+   * Check if a language worker is available.
+   *
+   * @param language - The language to check
+   * @returns true if a worker is configured for the language
+   */
+  hasLanguageWorker(language: SupportedLanguage): boolean {
+    return this.languageWorkers[language] !== undefined
+  }
+
+  /**
+   * Get list of languages with configured workers.
+   *
+   * @returns Array of language names with workers
+   */
+  getAvailableLanguages(): SupportedLanguage[] {
+    return Object.keys(this.languageWorkers).filter(
+      (key) => this.languageWorkers[key as SupportedLanguage] !== undefined
+    ) as SupportedLanguage[]
   }
 
   /**
@@ -573,6 +639,52 @@ export class TieredExecutor implements BashExecutor {
       // Fall through to Tier 2 RPC for complex npm operations
     }
 
+    // Tier 1.5: Polyglot - Check if command is for a non-bash language with available worker
+    const detection = detectLanguage(command)
+
+    // Map package managers to their language (for polyglot routing when worker is available)
+    const packageManagerToLanguage: Record<string, SupportedLanguage> = {
+      pip: 'python',
+      pip3: 'python',
+      pipx: 'python',
+      uvx: 'python',
+      pyx: 'python',
+      gem: 'ruby',
+      bundle: 'ruby',
+      // npm/npx/etc. go through RPC, not polyglot
+    }
+    const packageManagerLanguage = packageManagerToLanguage[cmd]
+
+    // Check if it's a language interpreter command
+    if (detection.language !== 'bash') {
+      if (this.hasLanguageWorker(detection.language)) {
+        return {
+          tier: 2, // Using tier 2 slot since there's no 1.5 in ExecutionTier type
+          reason: `polyglot execution via ${detection.language} worker`,
+          handler: 'polyglot',
+          capability: detection.language,
+        }
+      } else {
+        // No language worker configured for this language - skip RPC and go to sandbox
+        return {
+          tier: 4,
+          reason: `No language worker for ${detection.language}, using sandbox`,
+          handler: 'sandbox',
+          capability: 'container',
+        }
+      }
+    }
+
+    // Check if it's a package manager with configured language worker
+    if (packageManagerLanguage && this.hasLanguageWorker(packageManagerLanguage)) {
+      return {
+        tier: 2,
+        reason: `polyglot execution via ${packageManagerLanguage} worker (${cmd})`,
+        handler: 'polyglot',
+        capability: packageManagerLanguage,
+      }
+    }
+
     // Tier 2: RPC service commands
     for (const [serviceName, binding] of Object.entries(this.rpcBindings)) {
       if (binding.commands.includes(cmd)) {
@@ -639,6 +751,11 @@ export class TieredExecutor implements BashExecutor {
     const classification = this.classifyCommand(command)
 
     try {
+      // Handle polyglot (Tier 1.5) separately
+      if (classification.handler === 'polyglot') {
+        return await this.executePolyglot(command, classification, options)
+      }
+
       switch (classification.tier) {
         case 1:
           return await this.executeTier1(command, classification, options)
@@ -659,6 +776,57 @@ export class TieredExecutor implements BashExecutor {
           error
         )
         return this.executeTier4(command, { ...classification, tier: 4 }, options)
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Execute a command via the PolyglotExecutor (Tier 1.5).
+   * Routes to language-specific warm runtime workers.
+   * Falls back to sandbox on RPC failure.
+   */
+  private async executePolyglot(
+    command: string,
+    classification: TierClassification,
+    options?: ExecOptions
+  ): Promise<BashResult> {
+    const language = classification.capability as SupportedLanguage
+    if (!language) {
+      throw new Error('No language specified for polyglot execution')
+    }
+
+    if (!this.polyglotExecutor) {
+      throw new Error('PolyglotExecutor not initialized')
+    }
+
+    try {
+      const result = await this.polyglotExecutor.execute(command, language, options)
+
+      // Check if the result indicates an RPC failure that should trigger fallback
+      if (result.exitCode !== 0 && result.stderr?.includes('Network error')) {
+        // RPC failed - throw to trigger fallback to sandbox
+        throw new Error(`Polyglot RPC failed: ${result.stderr}`)
+      }
+
+      // Enhance result with polyglot-specific classification info
+      return {
+        ...result,
+        classification: {
+          ...result.classification,
+          handler: 'polyglot',
+          language,
+          reason: `polyglot execution via ${language} worker`,
+        } as typeof result.classification & { handler: string; language: string },
+      }
+    } catch (error) {
+      // If sandbox is available, fall back to it
+      if (this.sandbox) {
+        console.warn(
+          `Polyglot execution failed for "${command}", falling back to sandbox:`,
+          error
+        )
+        return this.executeTier4(command, { ...classification, tier: 4, handler: 'sandbox' }, options)
       }
       throw error
     }

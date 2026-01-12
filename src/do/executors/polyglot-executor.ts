@@ -138,8 +138,6 @@ export class PolyglotExecutor implements TierExecutor {
   private readonly defaultTimeout: number
 
   constructor(config: PolyglotExecutorConfig) {
-    // STUB: This class will be implemented in the GREEN phase.
-    // For now, throw errors to make tests fail (RED phase TDD).
     this.bindings = config.bindings
     this.defaultTimeout = config.defaultTimeout ?? 30000
   }
@@ -151,7 +149,7 @@ export class PolyglotExecutor implements TierExecutor {
    * @returns true if a binding exists for the language
    */
   canExecute(language: SupportedLanguage): boolean {
-    throw new Error('Not implemented')
+    return this.bindings[language] !== undefined
   }
 
   /**
@@ -161,7 +159,7 @@ export class PolyglotExecutor implements TierExecutor {
    * @returns The language binding or undefined
    */
   getBinding(language: SupportedLanguage): LanguageBinding | undefined {
-    throw new Error('Not implemented')
+    return this.bindings[language]
   }
 
   /**
@@ -170,7 +168,77 @@ export class PolyglotExecutor implements TierExecutor {
    * @returns Array of language names with bindings
    */
   getAvailableLanguages(): SupportedLanguage[] {
-    throw new Error('Not implemented')
+    return Object.keys(this.bindings).filter(
+      (key) => this.bindings[key as SupportedLanguage] !== undefined
+    ) as SupportedLanguage[]
+  }
+
+  /**
+   * Create a blocked BashResult when execution cannot proceed.
+   */
+  private createBlockedResult(
+    command: string,
+    reason: string,
+    language: SupportedLanguage
+  ): BashResult {
+    return {
+      input: command,
+      command,
+      valid: true,
+      generated: false,
+      stdout: '',
+      stderr: reason,
+      exitCode: 1,
+      blocked: true,
+      blockReason: reason,
+      intent: {
+        commands: [],
+        reads: [],
+        writes: [],
+        deletes: [],
+        network: true,
+        elevated: false,
+      },
+      classification: {
+        type: 'execute',
+        impact: 'medium',
+        reversible: false,
+        reason: `Polyglot execution blocked for ${language}: ${reason}`,
+      },
+    }
+  }
+
+  /**
+   * Create an error BashResult for execution failures.
+   */
+  private createErrorResult(
+    command: string,
+    error: string,
+    language: SupportedLanguage
+  ): BashResult {
+    return {
+      input: command,
+      command,
+      valid: true,
+      generated: false,
+      stdout: '',
+      stderr: error,
+      exitCode: 1,
+      intent: {
+        commands: [],
+        reads: [],
+        writes: [],
+        deletes: [],
+        network: true,
+        elevated: false,
+      },
+      classification: {
+        type: 'execute',
+        impact: 'medium',
+        reversible: false,
+        reason: `Polyglot ${language} execution error`,
+      },
+    }
   }
 
   /**
@@ -186,7 +254,110 @@ export class PolyglotExecutor implements TierExecutor {
     language: SupportedLanguage,
     options?: ExecOptions
   ): Promise<BashResult> {
-    throw new Error('Not implemented')
+    const binding = this.bindings[language]
+
+    // Check if binding is available
+    if (!binding) {
+      return this.createBlockedResult(
+        command,
+        `No binding available for ${language} runtime`,
+        language
+      )
+    }
+
+    // Build request payload
+    const payload: PolyglotRequestPayload = {
+      command,
+      timeout: options?.timeout ?? this.defaultTimeout,
+    }
+
+    if (options?.cwd) {
+      payload.cwd = options.cwd
+    }
+    if (options?.env) {
+      payload.env = options.env
+    }
+    if (options?.stdin) {
+      payload.stdin = options.stdin
+    }
+
+    // Execute via RPC
+    try {
+      const timeout = payload.timeout!
+
+      // Create timeout promise for reliable timeout handling
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Request timeout exceeded')), timeout)
+      })
+
+      // Race fetch against timeout
+      let response: Response
+      try {
+        response = await Promise.race([
+          binding.fetch(DEFAULT_LANGUAGE_SERVICES[language], {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          }),
+          timeoutPromise,
+        ])
+      } catch (err) {
+        // Handle timeout from race
+        if (err instanceof Error && err.message === 'Request timeout exceeded') {
+          return this.createErrorResult(command, 'Request timeout exceeded', language)
+        }
+        throw err
+      }
+
+      // Handle non-OK response
+      if (!response.ok) {
+        const errorText = await response.text()
+        return this.createErrorResult(
+          command,
+          `RPC error (${response.status}): ${errorText}`,
+          language
+        )
+      }
+
+      // Parse response
+      let responsePayload: PolyglotResponsePayload
+      try {
+        responsePayload = (await response.json()) as PolyglotResponsePayload
+      } catch {
+        return this.createErrorResult(command, 'Failed to parse RPC response as JSON', language)
+      }
+
+      // Build successful result
+      return {
+        input: command,
+        command,
+        valid: true,
+        generated: false,
+        stdout: responsePayload.stdout,
+        stderr: responsePayload.stderr,
+        exitCode: responsePayload.exitCode,
+        intent: {
+          commands: [],
+          reads: [],
+          writes: [],
+          deletes: [],
+          network: true,
+          elevated: false,
+        },
+        classification: {
+          type: 'execute',
+          impact: 'medium',
+          reversible: false,
+          reason: `Polyglot ${language} execution`,
+        },
+      }
+    } catch (error) {
+      // Handle network errors
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      return this.createErrorResult(command, `Network error: ${errorMessage}`, language)
+    }
   }
 }
 
