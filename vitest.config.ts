@@ -30,6 +30,8 @@ export default defineWorkersConfig({
       'src/remote/errors.test.ts',
       'src/remote/http-client.test.ts',
       'src/remote/protocol-v2.test.ts',
+      // Pipeline executor tests (run in Node.js)
+      'tests/do/pipeline/**/*.test.ts',
     ],
     poolOptions: {
       workers: {
