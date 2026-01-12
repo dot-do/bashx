@@ -1,17 +1,30 @@
 /**
- * Tier-specific Executor Modules
+ * Executor Modules
  *
  * This module provides the building blocks for the tiered execution system.
- * Each tier implements the TierExecutor interface, allowing the TieredExecutor
- * to compose them into a unified execution strategy.
+ * There are two distinct executor interfaces:
+ *
+ * 1. TierExecutor - For bash command execution (Tiers 1-4)
+ * 2. LanguageExecutor - For polyglot language execution (PolyglotExecutor)
  *
  * Architecture:
  * -------------
- * - types.ts: Common interfaces and type definitions (TierExecutor, etc.)
- * - native-executor.ts: Tier 1 - In-Worker native commands
- * - rpc-executor.ts: Tier 2 - RPC service calls
- * - loader-executor.ts: Tier 3 - Dynamic npm module loading
- * - sandbox-executor.ts: Tier 4 - Full Linux sandbox
+ * - types.ts: Interfaces (TierExecutor, LanguageExecutor) and type definitions
+ * - native-executor.ts: Tier 1 - In-Worker native commands (TierExecutor)
+ * - rpc-executor.ts: Tier 2 - RPC service calls (TierExecutor)
+ * - loader-executor.ts: Tier 3 - Dynamic npm module loading (TierExecutor)
+ * - sandbox-executor.ts: Tier 4 - Full Linux sandbox (TierExecutor)
+ * - polyglot-executor.ts: Language runtimes via RPC (LanguageExecutor)
+ *
+ * Interface Separation:
+ * --------------------
+ * TierExecutor and LanguageExecutor are separate interfaces because they
+ * have different contracts:
+ * - TierExecutor.canExecute(command: string)
+ * - LanguageExecutor.canExecute(language: SupportedLanguage)
+ *
+ * This follows the Liskov Substitution Principle - they cannot be
+ * interchanged without breaking type safety.
  *
  * Dependency Rules:
  * -----------------
@@ -24,10 +37,12 @@
  * ```typescript
  * import {
  *   TierExecutor,
+ *   LanguageExecutor,
  *   NativeExecutor,
  *   RpcExecutor,
  *   LoaderExecutor,
  *   SandboxExecutor,
+ *   PolyglotExecutor,
  * } from './executors/index.js'
  * ```
  *
@@ -40,6 +55,8 @@
 
 export type {
   TierExecutor,
+  LanguageExecutor,
+  SupportedLanguage,
   ExecutionTier,
   TierClassification,
   CommandResult,
@@ -140,3 +157,28 @@ export {
   SANDBOX_COMMANDS,
   SANDBOX_CATEGORIES,
 } from './sandbox-executor.js'
+
+// ============================================================================
+// POLYGLOT: LANGUAGE-SPECIFIC EXECUTION
+// ============================================================================
+// Handles execution via language-specific warm runtime workers:
+// - pyx.do for Python
+// - ruby.do for Ruby
+// - node.do for Node.js
+// - go.do for Go
+// - rust.do for Rust
+//
+// Note: PolyglotExecutor implements LanguageExecutor, NOT TierExecutor.
+// This is because it has a different interface contract:
+// - canExecute(language) instead of canExecute(command)
+// - execute(command, language, options) instead of execute(command, options)
+// ============================================================================
+export {
+  PolyglotExecutor,
+  createPolyglotExecutor,
+  type PolyglotExecutorConfig,
+  type LanguageBinding,
+  type PolyglotRequestPayload,
+  type PolyglotResponsePayload,
+  DEFAULT_LANGUAGE_SERVICES,
+} from './polyglot-executor.js'

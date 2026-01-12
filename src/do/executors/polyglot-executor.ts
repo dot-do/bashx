@@ -18,8 +18,7 @@
  */
 
 import type { BashResult, ExecOptions } from '../../types.js'
-import type { TierExecutor, BaseExecutorConfig } from './types.js'
-import type { SupportedLanguage } from '../../../core/classify/language-detector.js'
+import type { LanguageExecutor, SupportedLanguage, BaseExecutorConfig } from './types.js'
 
 // ============================================================================
 // TYPES
@@ -131,9 +130,16 @@ export const DEFAULT_LANGUAGE_SERVICES: Record<SupportedLanguage, string> = {
  * }
  * ```
  *
- * @implements {TierExecutor}
+ * Note: PolyglotExecutor implements LanguageExecutor, NOT TierExecutor.
+ * This is intentional because the interface contracts differ:
+ * - LanguageExecutor.canExecute(language) - checks language availability
+ * - LanguageExecutor.execute(command, language, options) - requires language param
+ *
+ * See types.ts for detailed documentation on the interface separation.
+ *
+ * @implements {LanguageExecutor}
  */
-export class PolyglotExecutor implements TierExecutor {
+export class PolyglotExecutor implements LanguageExecutor {
   private readonly bindings: Partial<Record<SupportedLanguage, LanguageBinding>>
   private readonly defaultTimeout: number
 

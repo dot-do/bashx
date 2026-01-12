@@ -1,18 +1,28 @@
 /**
- * Tier Executor Type Definitions
+ * Executor Type Definitions
  *
- * This module defines the shared interfaces and types for all tier-specific
- * executors. These interfaces form the contract between the TieredExecutor
- * orchestrator and the individual tier implementations.
+ * This module defines the shared interfaces and types for all executors.
+ * There are TWO distinct executor interfaces:
+ *
+ * 1. TierExecutor - For bash command execution (Tiers 1-4)
+ * 2. LanguageExecutor - For polyglot language execution (Python, Ruby, etc.)
+ *
+ * These interfaces are intentionally SEPARATE because they have different
+ * contracts (Liskov Substitution Principle):
+ *
+ * - TierExecutor.canExecute(command: string) - checks if command can be handled
+ * - LanguageExecutor.canExecute(language: SupportedLanguage) - checks if runtime available
  *
  * Architecture Overview:
  * ---------------------
  * The tiered execution system uses a strategy pattern where each tier
  * implements a common interface. The TieredExecutor acts as an orchestrator
- * that delegates to the appropriate tier based on command analysis.
+ * that delegates to the appropriate executor based on command analysis.
  *
  * ```
  * TieredExecutor (orchestrator)
+ *   |
+ *   +-- [TierExecutor implementations - for bash commands]
  *   |
  *   +-- Tier 1: NativeExecutor (in-Worker commands)
  *   |     - Filesystem operations via FsCapability
@@ -30,10 +40,36 @@
  *   |     - esbuild, typescript, prettier, etc.
  *   |
  *   +-- Tier 4: SandboxExecutor (full Linux sandbox)
- *         - System commands (ps, kill, etc.)
- *         - Compilers and runtimes
- *         - Full Linux capabilities
+ *   |     - System commands (ps, kill, etc.)
+ *   |     - Compilers and runtimes
+ *   |     - Full Linux capabilities
+ *   |
+ *   +-- [LanguageExecutor implementation - for non-bash languages]
+ *   |
+ *   +-- Polyglot: PolyglotExecutor (language runtimes via RPC)
+ *         - pyx.do for Python
+ *         - ruby.do for Ruby
+ *         - node.do for Node.js
+ *         - go.do for Go
+ *         - rust.do for Rust
  * ```
+ *
+ * Interface Separation:
+ * --------------------
+ * The LanguageExecutor interface is DISTINCT from TierExecutor because:
+ *
+ * 1. canExecute() has different semantics:
+ *    - TierExecutor: "Can I handle this bash command?"
+ *    - LanguageExecutor: "Do I have a binding for this language?"
+ *
+ * 2. execute() has different signatures:
+ *    - TierExecutor: execute(command, options)
+ *    - LanguageExecutor: execute(command, language, options)
+ *
+ * This separation ensures that:
+ * - Type safety is maintained (can't pass wrong arguments)
+ * - LSP (Liskov Substitution Principle) is respected
+ * - Each interface has clear, single responsibility
  *
  * Dependency Rules:
  * -----------------
@@ -97,6 +133,103 @@ export interface TierExecutor {
    * @throws May throw if the command cannot be executed (but prefer returning error in result)
    */
   execute(command: string, options?: ExecOptions): Promise<BashResult>
+}
+
+// ============================================================================
+// LANGUAGE EXECUTOR INTERFACE
+// ============================================================================
+
+/**
+ * Supported programming languages for polyglot execution.
+ *
+ * This type is re-exported from core/classify/language-detector for convenience.
+ * The canonical definition is in the core module.
+ */
+export type SupportedLanguage = 'bash' | 'python' | 'ruby' | 'node' | 'go' | 'rust'
+
+/**
+ * Interface for language-specific executors (polyglot execution).
+ *
+ * This interface is DISTINCT from TierExecutor because it has different semantics:
+ *
+ * TierExecutor (command-based):
+ * - canExecute(command: string) - checks if a command string can be handled
+ * - execute(command, options) - executes a bash-style command
+ *
+ * LanguageExecutor (language-based):
+ * - canExecute(language: SupportedLanguage) - checks if a language runtime is available
+ * - execute(command, language, options) - executes code in a specific language
+ *
+ * The key difference is that LanguageExecutor requires explicit language specification,
+ * as it routes to different language runtimes (Python, Ruby, Node.js, etc.) via RPC.
+ *
+ * Architecture:
+ * ```
+ * TieredExecutor (orchestrator)
+ *   |
+ *   +-- Tier 1-4: TierExecutor implementations (bash commands)
+ *   |
+ *   +-- Polyglot: LanguageExecutor implementation (non-bash languages)
+ *         |
+ *         +-- pyx.do (Python runtime)
+ *         +-- ruby.do (Ruby runtime)
+ *         +-- node.do (Node.js runtime)
+ *         +-- go.do (Go runtime)
+ *         +-- rust.do (Rust runtime)
+ * ```
+ *
+ * This separation follows the Liskov Substitution Principle - LanguageExecutor
+ * cannot be substituted for TierExecutor because their contracts differ.
+ *
+ * @example
+ * ```typescript
+ * class MyLanguageExecutor implements LanguageExecutor {
+ *   canExecute(language: SupportedLanguage): boolean {
+ *     // Return true if this language runtime is available
+ *     return language === 'python'
+ *   }
+ *
+ *   async execute(
+ *     command: string,
+ *     language: SupportedLanguage,
+ *     options?: ExecOptions
+ *   ): Promise<BashResult> {
+ *     // Execute code in the specified language runtime
+ *   }
+ * }
+ * ```
+ */
+export interface LanguageExecutor {
+  /**
+   * Check if this executor can handle a given language.
+   *
+   * This method checks if a language runtime binding is available.
+   * It should be fast and not perform any side effects.
+   *
+   * @param language - The language to check
+   * @returns true if this executor has a binding for the language
+   */
+  canExecute(language: SupportedLanguage): boolean
+
+  /**
+   * Execute code in a specific language runtime.
+   *
+   * This method routes execution to the appropriate language runtime
+   * service (e.g., pyx.do for Python, ruby.do for Ruby).
+   *
+   * @param command - The code or command to execute
+   * @param language - The target language runtime
+   * @param options - Optional execution options (cwd, env, stdin, timeout)
+   * @returns A promise resolving to a BashResult
+   */
+  execute(command: string, language: SupportedLanguage, options?: ExecOptions): Promise<BashResult>
+
+  /**
+   * Get list of available language runtimes.
+   *
+   * @returns Array of language names with available bindings
+   */
+  getAvailableLanguages(): SupportedLanguage[]
 }
 
 // ============================================================================

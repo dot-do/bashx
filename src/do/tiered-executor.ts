@@ -111,9 +111,13 @@ import {
   type LanguageDetectionResult,
 } from '../../core/classify/language-detector.js'
 import {
+  LanguageRouter,
+} from '../../core/classify/language-router.js'
+import {
   PolyglotExecutor,
   type LanguageBinding,
 } from './executors/polyglot-executor.js'
+import { PipelineExecutor } from './pipeline/index.js'
 
 // ============================================================================
 // TYPES
@@ -473,6 +477,8 @@ export class TieredExecutor implements BashExecutor {
   public readonly preferFaster: boolean
   private readonly languageWorkers: Partial<Record<SupportedLanguage, LanguageBinding>>
   private readonly polyglotExecutor?: PolyglotExecutor
+  private readonly pipelineExecutor: PipelineExecutor
+  private readonly languageRouter: LanguageRouter
 
   constructor(config: TieredExecutorConfig) {
     this.fs = config.fs
@@ -482,6 +488,7 @@ export class TieredExecutor implements BashExecutor {
     this.defaultTimeout = config.defaultTimeout ?? 30000
     this.preferFaster = config.preferFaster ?? true
     this.languageWorkers = config.languageWorkers ?? {}
+    this.languageRouter = new LanguageRouter()
 
     // Initialize PolyglotExecutor if language workers are configured
     if (Object.keys(this.languageWorkers).length > 0) {
@@ -490,6 +497,12 @@ export class TieredExecutor implements BashExecutor {
         defaultTimeout: this.defaultTimeout,
       })
     }
+
+    // Initialize PipelineExecutor with a bound executor function
+    // This allows pipeline orchestration to be separated from command execution
+    this.pipelineExecutor = new PipelineExecutor(
+      (cmd, opts) => this.executeSingleCommand(cmd, opts)
+    )
 
     // Merge default RPC services with provided bindings
     for (const [name, service] of Object.entries(DEFAULT_RPC_SERVICES)) {
@@ -639,49 +652,41 @@ export class TieredExecutor implements BashExecutor {
       // Fall through to Tier 2 RPC for complex npm operations
     }
 
-    // Tier 1.5: Polyglot - Check if command is for a non-bash language with available worker
-    const detection = detectLanguage(command)
+    // Tier 1.5: Polyglot - Use LanguageRouter for unified language detection and routing
+    // LanguageRouter consolidates language detection and package manager mappings
+    const availableWorkers = this.getAvailableLanguages()
+    const routingResult = this.languageRouter.route(command, availableWorkers)
 
-    // Map package managers to their language (for polyglot routing when worker is available)
-    const packageManagerToLanguage: Record<string, SupportedLanguage> = {
-      pip: 'python',
-      pip3: 'python',
-      pipx: 'python',
-      uvx: 'python',
-      pyx: 'python',
-      gem: 'ruby',
-      bundle: 'ruby',
-      // npm/npx/etc. go through RPC, not polyglot
-    }
-    const packageManagerLanguage = packageManagerToLanguage[cmd]
-
-    // Check if it's a language interpreter command
-    if (detection.language !== 'bash') {
-      if (this.hasLanguageWorker(detection.language)) {
+    // Route non-bash languages based on worker availability
+    if (routingResult.language !== 'bash') {
+      if (routingResult.routeTo === 'polyglot' && routingResult.worker) {
+        const reason = routingResult.packageManager
+          ? `polyglot execution via ${routingResult.language} worker (${routingResult.packageManager})`
+          : `polyglot execution via ${routingResult.language} worker`
         return {
           tier: 2, // Using tier 2 slot since there's no 1.5 in ExecutionTier type
-          reason: `polyglot execution via ${detection.language} worker`,
+          reason,
           handler: 'polyglot',
-          capability: detection.language,
+          capability: routingResult.language,
         }
       } else {
         // No language worker configured for this language - skip RPC and go to sandbox
         return {
           tier: 4,
-          reason: `No language worker for ${detection.language}, using sandbox`,
+          reason: `No language worker for ${routingResult.language}, using sandbox`,
           handler: 'sandbox',
           capability: 'container',
         }
       }
     }
 
-    // Check if it's a package manager with configured language worker
-    if (packageManagerLanguage && this.hasLanguageWorker(packageManagerLanguage)) {
+    // Handle package managers that route to polyglot (e.g., pip -> python worker)
+    if (routingResult.packageManager && routingResult.routeTo === 'polyglot' && routingResult.worker) {
       return {
         tier: 2,
-        reason: `polyglot execution via ${packageManagerLanguage} worker (${cmd})`,
+        reason: `polyglot execution via ${routingResult.language} worker (${routingResult.packageManager})`,
         handler: 'polyglot',
-        capability: packageManagerLanguage,
+        capability: routingResult.language,
       }
     }
 
@@ -742,12 +747,15 @@ export class TieredExecutor implements BashExecutor {
       }
     }
 
-    // Handle pipelines - split by | and execute in sequence
-    const pipelineSegments = this.splitPipeline(command)
-    if (pipelineSegments.length > 1) {
-      return this.executePipeline(pipelineSegments, options)
-    }
+    // Delegate to PipelineExecutor for all commands (handles both pipelines and single commands)
+    return this.pipelineExecutor.execute(command, options)
+  }
 
+  /**
+   * Execute a single command (no pipeline handling).
+   * This is called by the PipelineExecutor for each segment.
+   */
+  private async executeSingleCommand(command: string, options?: ExecOptions): Promise<BashResult> {
     const classification = this.classifyCommand(command)
 
     try {
@@ -840,76 +848,6 @@ export class TieredExecutor implements BashExecutor {
       throw new Error('Spawn requires sandbox with spawn support')
     }
     return this.sandbox.spawn(command, args, options)
-  }
-
-  /**
-   * Split a command into pipeline segments, respecting quotes
-   */
-  private splitPipeline(command: string): string[] {
-    const segments: string[] = []
-    let current = ''
-    let inSingleQuote = false
-    let inDoubleQuote = false
-
-    for (let i = 0; i < command.length; i++) {
-      const char = command[i]
-
-      if (char === "'" && !inDoubleQuote) {
-        inSingleQuote = !inSingleQuote
-        current += char
-      } else if (char === '"' && !inSingleQuote) {
-        inDoubleQuote = !inDoubleQuote
-        current += char
-      } else if (char === '\\' && !inSingleQuote && command[i + 1] === '|') {
-        // Escaped pipe - keep it as \|, don't split
-        current += '\\|'
-        i++
-      } else if (char === '|' && !inSingleQuote && !inDoubleQuote) {
-        // Check if it's || (logical OR) - skip if so
-        if (command[i + 1] === '|') {
-          current += '||'
-          i++
-        } else {
-          segments.push(current.trim())
-          current = ''
-        }
-      } else {
-        current += char
-      }
-    }
-
-    if (current.trim()) {
-      segments.push(current.trim())
-    }
-
-    return segments
-  }
-
-  /**
-   * Execute a pipeline of commands, passing stdout of each to stdin of next
-   */
-  private async executePipeline(segments: string[], options?: ExecOptions): Promise<BashResult> {
-    let stdin = options?.stdin || ''
-    let lastResult: BashResult | null = null
-
-    for (const segment of segments) {
-      const segmentOptions: ExecOptions = {
-        ...options,
-        stdin,
-      }
-
-      lastResult = await this.execute(segment, segmentOptions)
-
-      // If command failed, stop the pipeline
-      if (lastResult.exitCode !== 0) {
-        return lastResult
-      }
-
-      // Pass stdout to next command's stdin
-      stdin = lastResult.stdout
-    }
-
-    return lastResult!
   }
 
   // ============================================================================
