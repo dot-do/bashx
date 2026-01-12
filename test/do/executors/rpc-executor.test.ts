@@ -855,3 +855,300 @@ describe('RpcExecutor Type Definitions', () => {
     expect(response).toBeDefined()
   })
 })
+
+// ============================================================================
+// esm.do ESM Module Integration Tests
+// ============================================================================
+
+describe('RpcExecutor ESM Module Integration', () => {
+  let executor: RpcExecutor
+  let mockFetch: Mock
+
+  beforeEach(() => {
+    mockFetch = createMockFetch()
+    globalThis.fetch = mockFetch
+    executor = new RpcExecutor()
+  })
+
+  describe('ESM Command Classification', () => {
+    it('should include esm service in default bindings', () => {
+      expect(executor.hasBinding('esm')).toBe(true)
+    })
+
+    it('should identify esm commands', () => {
+      expect(executor.canExecute('esm')).toBe(true)
+    })
+
+    it('should identify esm service for esm commands', () => {
+      expect(executor.getServiceForCommand('esm')).toBe('esm')
+    })
+
+    it('should get commands for esm service', () => {
+      const commands = executor.getCommandsForService('esm')
+      expect(commands).toContain('esm')
+    })
+  })
+
+  describe('DEFAULT_RPC_SERVICES esm binding', () => {
+    it('should include esm service in DEFAULT_RPC_SERVICES', () => {
+      expect(DEFAULT_RPC_SERVICES.esm).toBeDefined()
+    })
+
+    it('should have correct esm endpoint', () => {
+      expect(DEFAULT_RPC_SERVICES.esm.endpoint).toBe('https://esm.do')
+    })
+
+    it('should have esm in commands list', () => {
+      expect(DEFAULT_RPC_SERVICES.esm.commands).toContain('esm')
+    })
+
+    it('should have correct esm service name', () => {
+      expect(DEFAULT_RPC_SERVICES.esm.name).toBe('esm')
+    })
+  })
+
+  describe('ESM Module Creation', () => {
+    it('should execute esm create via esm.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Created module: my-module\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('esm create my-module')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('esm.do'),
+        expect.any(Object)
+      )
+
+      const call = mockFetch.mock.calls[0]
+      const body = JSON.parse(call[1].body)
+      expect(body.command).toBe('esm create my-module')
+    })
+
+    it('should include environment variables in esm create', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Created module: my-module\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('esm create my-module', {
+        env: { ESM_TOKEN: 'test-token' },
+      })
+
+      const call = mockFetch.mock.calls[0]
+      const body = JSON.parse(call[1].body)
+      expect(body.env).toEqual({ ESM_TOKEN: 'test-token' })
+    })
+  })
+
+  describe('ESM Module Testing', () => {
+    it('should execute esm test via esm.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'All tests passed (3/3)\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('esm test my-module')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('esm.do'),
+        expect.any(Object)
+      )
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('All tests passed')
+    })
+
+    it('should handle test failures', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: '',
+            stderr: 'Test failed: expected 2 but got 3\n',
+            exitCode: 1,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('esm test my-module')
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Test failed')
+    })
+  })
+
+  describe('ESM Module Execution', () => {
+    it('should execute esm run via esm.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Hello from ESM module!\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('esm run my-module')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('esm.do'),
+        expect.any(Object)
+      )
+      expect(result.stdout).toBe('Hello from ESM module!\n')
+    })
+
+    it('should pass arguments to esm run', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Result: 42\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      await executor.execute('esm run my-module --input=42')
+
+      const call = mockFetch.mock.calls[0]
+      const body = JSON.parse(call[1].body)
+      expect(body.command).toBe('esm run my-module --input=42')
+    })
+
+    it('should handle runtime errors', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: '',
+            stderr: 'ReferenceError: x is not defined\n',
+            exitCode: 1,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('esm run broken-module')
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('ReferenceError')
+    })
+  })
+
+  describe('ESM Module Publishing', () => {
+    it('should execute esm publish via esm.do', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: 'Published my-module@1.0.0\n',
+            stderr: '',
+            exitCode: 0,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('esm publish my-module')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('esm.do'),
+        expect.any(Object)
+      )
+      expect(result.stdout).toContain('Published')
+    })
+
+    it('should handle authentication errors during publish', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            stdout: '',
+            stderr: 'Error: Authentication required. Please provide ESM_TOKEN.\n',
+            exitCode: 1,
+          }),
+          { status: 200 }
+        )
+      )
+
+      const result = await executor.execute('esm publish my-module')
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Authentication required')
+    })
+  })
+
+  describe('ESM HTTP Endpoint', () => {
+    it('should make POST request to esm.do/execute', async () => {
+      await executor.execute('esm create test-module')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://esm.do/execute',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    })
+
+    it('should handle esm.do server errors', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('Internal Server Error', { status: 500 })
+      )
+
+      const result = await executor.execute('esm create test-module')
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('RPC error')
+    })
+
+    it('should handle network errors to esm.do', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Network error'))
+
+      await expect(executor.execute('esm create test-module')).rejects.toThrow(
+        'Tier 2 RPC execution failed'
+      )
+    })
+  })
+
+  describe('ESM Result Format', () => {
+    it('should return BashResult for esm commands', async () => {
+      const result = await executor.execute('esm run my-module')
+
+      expect(result).toHaveProperty('input')
+      expect(result).toHaveProperty('command')
+      expect(result).toHaveProperty('stdout')
+      expect(result).toHaveProperty('stderr')
+      expect(result).toHaveProperty('exitCode')
+      expect(result).toHaveProperty('valid')
+      expect(result).toHaveProperty('generated')
+      expect(result).toHaveProperty('intent')
+      expect(result).toHaveProperty('classification')
+    })
+
+    it('should include tier information for esm commands', async () => {
+      const result = await executor.execute('esm run my-module')
+
+      expect(result.classification.reason).toContain('Tier 2')
+    })
+  })
+})

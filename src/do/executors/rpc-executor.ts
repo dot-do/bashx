@@ -128,6 +128,11 @@ export const DEFAULT_RPC_SERVICES: Record<string, RpcServiceBinding> = {
     endpoint: 'https://pyx.do',
     commands: ['python', 'python3', 'pip', 'pip3', 'pipx', 'uvx', 'pyx'],
   },
+  esm: {
+    name: 'esm',
+    endpoint: 'https://esm.do',
+    commands: ['esm'],
+  },
 }
 
 // ============================================================================
