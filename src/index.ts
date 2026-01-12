@@ -58,6 +58,24 @@ export {
   type UndoOptions,
 } from './undo.js'
 
+// Re-export configuration utilities
+export {
+  type BashxConfig,
+  type PartialBashxConfig,
+  type CacheConfig,
+  type TimeoutConfig,
+  type LimitConfig,
+  type ExecutionConfig,
+  type RetryConfig,
+  type ConfigValidationError,
+  type ConfigDiffEntry,
+  DEFAULT_CONFIG,
+  getConfig,
+  validateConfig,
+  mergeConfig,
+  configDiff,
+} from './config/index.js'
+
 /**
  * Escape a value for safe shell interpolation.
  * Uses single quotes and escapes any internal single quotes.
