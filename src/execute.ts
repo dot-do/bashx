@@ -44,28 +44,453 @@ export interface ExecuteResult extends BashResult {
 /**
  * Error type for child_process exec errors.
  * Extends the standard Error with process-specific fields.
+ *
+ * @remarks
+ * When child_process.exec() fails, it throws an Error with additional properties:
+ * - `code`: The exit code of the process (number or undefined if killed)
+ * - `killed`: Whether the process was terminated by a signal
+ * - `stdout`: Standard output captured before the error occurred
+ * - `stderr`: Standard error output
  */
-interface ExecError extends Error {
-  /** Exit code from the process */
+export interface ExecError extends Error {
+  /** Exit code from the process (undefined if process was killed by signal) */
   code?: number
-  /** Whether the process was killed */
+  /** Whether the process was killed by a signal (e.g., SIGTERM, SIGKILL) */
   killed?: boolean
-  /** Standard output captured before error */
+  /** Standard output captured before error (may be Buffer or string depending on encoding option) */
   stdout?: Buffer | string
-  /** Standard error captured */
+  /** Standard error captured (may be Buffer or string depending on encoding option) */
   stderr?: Buffer | string
 }
 
 /**
  * Type guard to check if an error is an ExecError from child_process.
+ *
+ * An ExecError is an Error instance that has at least one of the exec-specific
+ * properties (code, killed, stdout, stderr) with the correct type.
+ *
+ * @param error - The value to check
+ * @returns True if the error is an ExecError with proper exec properties
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await execAsync('invalid-command')
+ * } catch (error) {
+ *   if (isExecError(error)) {
+ *     console.log(`Exit code: ${error.code}`)
+ *     console.log(`Stderr: ${error.stderr}`)
+ *   }
+ * }
+ * ```
  */
-function isExecError(error: unknown): error is ExecError {
-  return error instanceof Error
+export function isExecError(error: unknown): error is ExecError {
+  // Must be an Error instance
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  // Cast to check properties (Error + additional properties)
+  const err = error as unknown as Record<string, unknown>
+
+  // Check for at least one exec-specific property with correct type
+  const hasValidCode = 'code' in err && (typeof err.code === 'number' || err.code === undefined)
+  const hasValidKilled = 'killed' in err && typeof err.killed === 'boolean'
+  const hasValidStdout = 'stdout' in err && (typeof err.stdout === 'string' || Buffer.isBuffer(err.stdout))
+  const hasValidStderr = 'stderr' in err && (typeof err.stderr === 'string' || Buffer.isBuffer(err.stderr))
+
+  // Must have at least one exec-specific property
+  return hasValidCode || hasValidKilled || hasValidStdout || hasValidStderr
 }
 
 // ============================================================================
 // Simple Parser (lightweight, no tree-sitter dependency)
 // ============================================================================
+
+/**
+ * Quote state for tracking quote context during parsing
+ */
+type QuoteState = 'none' | 'single' | 'double'
+
+/**
+ * Result of quote validation
+ */
+interface QuoteValidationResult {
+  valid: boolean
+  error?: {
+    message: string
+    line: number
+    column: number
+  }
+}
+
+/**
+ * Validates shell quotes using proper stateful parsing.
+ *
+ * This function handles:
+ * - Nested quotes: `echo "it's a 'test'"` (single quotes inside double are literal)
+ * - Escaped quotes: `echo "he said \"hello\""` (backslash escapes in double quotes)
+ * - Mixed quotes: `echo 'single' "double"` (alternating quote types)
+ * - POSIX escaping: `echo 'it'"'"'s'` (end quote, add escaped quote, restart)
+ * - ANSI-C quoting: `echo $'hello\n'` ($'...' with escape sequences)
+ * - Command substitution: `echo $(echo "hello")` (quotes reset in subshell)
+ * - Parameter expansion: `echo ${VAR:-"default"}` (quotes inside ${...})
+ *
+ * POSIX Shell Quoting Rules:
+ * - Single quotes preserve ALL characters literally (no escape sequences)
+ * - Double quotes allow: $, `, \, !, " (only these are special)
+ * - Backslash outside quotes escapes the next character
+ * - $'...' allows C-style escape sequences
+ *
+ * @param input - The shell command string to validate
+ * @returns Object with valid boolean and optional error details
+ *
+ * @example
+ * ```typescript
+ * validateQuotes('echo "hello"')           // { valid: true }
+ * validateQuotes('echo "it\'s fine"')      // { valid: true } - single quote in double
+ * validateQuotes('echo "unclosed')         // { valid: false, error: {...} }
+ * validateQuotes('echo "say \\"hi\\""')    // { valid: true } - escaped quotes
+ * ```
+ */
+function validateQuotes(input: string): QuoteValidationResult {
+  let state: QuoteState = 'none'
+  let quoteStartLine = 1
+  let quoteStartColumn = 1
+  let line = 1
+  let column = 1
+
+  // Stack for tracking nested structures like $() and ${}
+  // Each entry contains: type ('subst' | 'param' | 'arith'), saved state, and quote state within the structure
+  const nestingStack: Array<{ type: string; savedState: QuoteState; innerQuoteState: QuoteState; innerQuoteStartLine: number; innerQuoteStartColumn: number }> = []
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    const nextCh = input[i + 1]
+
+    // Track position
+    if (ch === '\n') {
+      line++
+      column = 1
+    } else {
+      column++
+    }
+
+    // Handle escape sequences outside of single quotes
+    if (ch === '\\' && state !== 'single') {
+      // In double quotes, backslash only escapes: $, `, ", \, newline
+      // Outside quotes, backslash escapes the next character
+      if (i + 1 < input.length) {
+        i++ // Skip the escaped character
+        if (input[i] === '\n') {
+          line++
+          column = 1
+        } else {
+          column++
+        }
+      }
+      continue
+    }
+
+    // Handle $'...' ANSI-C quoting (outside of quotes)
+    if (state === 'none' && ch === '$' && nextCh === "'") {
+      // ANSI-C quoting: $'...' - allows escape sequences like \n, \t
+      i++ // Skip the $
+      column++
+      state = 'single' // Treat as single quoted for parsing purposes
+      quoteStartLine = line
+      quoteStartColumn = column
+      // Note: ANSI-C quotes DO allow escape sequences, but for validation
+      // purposes we still need to find the closing quote
+      // We need special handling for \' inside $'...'
+      i++ // Skip the opening '
+      column++
+
+      // Parse the ANSI-C quoted string
+      while (i < input.length) {
+        const c = input[i]
+        if (c === '\\' && i + 1 < input.length) {
+          // ANSI-C strings DO process backslash escapes
+          i++ // Skip the backslash
+          column++
+          const escaped = input[i]
+          if (escaped === '\n') {
+            line++
+            column = 1
+          } else {
+            column++
+          }
+          i++
+          continue
+        }
+        if (c === "'") {
+          // End of ANSI-C string
+          state = 'none'
+          column++
+          break
+        }
+        if (c === '\n') {
+          line++
+          column = 1
+        } else {
+          column++
+        }
+        i++
+      }
+
+      if (state !== 'none') {
+        return {
+          valid: false,
+          error: {
+            message: "Unclosed ANSI-C quote ($'...')",
+            line: quoteStartLine,
+            column: quoteStartColumn,
+          },
+        }
+      }
+      continue
+    }
+
+    // Handle command substitution $() - quotes reset inside
+    if (state === 'none' && ch === '$' && nextCh === '(') {
+      nestingStack.push({ type: 'subst', savedState: state, innerQuoteState: 'none', innerQuoteStartLine: line, innerQuoteStartColumn: column })
+      i++ // Skip the (
+      column++
+
+      // Check for arithmetic expansion $((
+      if (input[i + 1] === '(') {
+        nestingStack[nestingStack.length - 1].type = 'arith'
+        i++ // Skip the second (
+        column++
+      }
+      continue
+    }
+
+    // Handle parameter expansion ${...}
+    if (state === 'none' && ch === '$' && nextCh === '{') {
+      nestingStack.push({ type: 'param', savedState: state, innerQuoteState: 'none', innerQuoteStartLine: line, innerQuoteStartColumn: column })
+      i++ // Skip the {
+      column++
+      continue
+    }
+
+    // Handle command substitution inside double quotes
+    if (state === 'double' && ch === '$' && nextCh === '(') {
+      nestingStack.push({ type: 'subst', savedState: state, innerQuoteState: 'none', innerQuoteStartLine: line, innerQuoteStartColumn: column })
+      state = 'none' // Reset quote state inside substitution
+      i++ // Skip the (
+      column++
+
+      // Check for arithmetic expansion $((
+      if (input[i + 1] === '(') {
+        nestingStack[nestingStack.length - 1].type = 'arith'
+        i++ // Skip the second (
+        column++
+      }
+      continue
+    }
+
+    // Handle parameter expansion inside double quotes
+    if (state === 'double' && ch === '$' && nextCh === '{') {
+      nestingStack.push({ type: 'param', savedState: state, innerQuoteState: 'none', innerQuoteStartLine: line, innerQuoteStartColumn: column })
+      // Note: Inside ${} within double quotes, quote state continues
+      // but we need to track the brace nesting
+      i++ // Skip the {
+      column++
+      continue
+    }
+
+    // Handle closing ) for command substitution
+    if (ch === ')' && nestingStack.length > 0 && state === 'none') {
+      const top = nestingStack[nestingStack.length - 1]
+      if (top.type === 'arith') {
+        // Need two closing parens for $((...))
+        if (nextCh === ')') {
+          // Check that quotes are balanced inside the arithmetic expansion
+          if (top.innerQuoteState !== 'none') {
+            const quoteType = top.innerQuoteState === 'single' ? 'single' : 'double'
+            return {
+              valid: false,
+              error: {
+                message: `Unclosed ${quoteType} quote inside arithmetic expansion`,
+                line: top.innerQuoteStartLine,
+                column: top.innerQuoteStartColumn,
+              },
+            }
+          }
+          nestingStack.pop()
+          state = top.savedState
+          i++ // Skip the second )
+          column++
+        }
+      } else if (top.type === 'subst') {
+        // Check that quotes are balanced inside the command substitution
+        if (top.innerQuoteState !== 'none') {
+          const quoteType = top.innerQuoteState === 'single' ? 'single' : 'double'
+          return {
+            valid: false,
+            error: {
+              message: `Unclosed ${quoteType} quote inside command substitution`,
+              line: top.innerQuoteStartLine,
+              column: top.innerQuoteStartColumn,
+            },
+          }
+        }
+        nestingStack.pop()
+        state = top.savedState
+      }
+      continue
+    }
+
+    // Handle closing } for parameter expansion
+    if (ch === '}' && nestingStack.length > 0 && state === 'none') {
+      const top = nestingStack[nestingStack.length - 1]
+      if (top.type === 'param') {
+        // Check that quotes are balanced inside the parameter expansion
+        if (top.innerQuoteState !== 'none') {
+          const quoteType = top.innerQuoteState === 'single' ? 'single' : 'double'
+          return {
+            valid: false,
+            error: {
+              message: `Unclosed ${quoteType} quote inside parameter expansion`,
+              line: top.innerQuoteStartLine,
+              column: top.innerQuoteStartColumn,
+            },
+          }
+        }
+        nestingStack.pop()
+        state = top.savedState
+      }
+      continue
+    }
+
+    // Handle backtick command substitution
+    if (ch === '`') {
+      if (state === 'none' || state === 'double') {
+        // Inside backticks, quotes have their own context
+        // For simplicity, we'll scan for the closing backtick
+        const savedState: QuoteState = state
+        i++ // Move past the opening backtick
+        column++
+
+        let depth = 1
+        while (i < input.length && depth > 0) {
+          const c = input[i]
+          if (c === '\\' && i + 1 < input.length) {
+            i += 2 // Skip escape sequence
+            column += 2
+            continue
+          }
+          if (c === '`') {
+            depth--
+          }
+          if (c === '\n') {
+            line++
+            column = 1
+          } else {
+            column++
+          }
+          i++
+        }
+
+        if (depth > 0) {
+          return {
+            valid: false,
+            error: {
+              message: 'Unclosed backtick command substitution',
+              line,
+              column,
+            },
+          }
+        }
+        state = savedState
+        i-- // Adjust for the loop increment
+        continue
+      }
+    }
+
+    // Handle quote characters
+    if (ch === "'") {
+      if (state === 'none') {
+        state = 'single'
+        quoteStartLine = line
+        quoteStartColumn = column
+        // Track inner quote state if we're inside a nested structure
+        if (nestingStack.length > 0) {
+          const top = nestingStack[nestingStack.length - 1]
+          top.innerQuoteState = 'single'
+          top.innerQuoteStartLine = line
+          top.innerQuoteStartColumn = column
+        }
+      } else if (state === 'single') {
+        state = 'none'
+        // Clear inner quote state if we're inside a nested structure
+        if (nestingStack.length > 0) {
+          nestingStack[nestingStack.length - 1].innerQuoteState = 'none'
+        }
+      }
+      // Single quote inside double quote is literal, no state change
+      continue
+    }
+
+    if (ch === '"') {
+      if (state === 'none') {
+        state = 'double'
+        quoteStartLine = line
+        quoteStartColumn = column
+        // Track inner quote state if we're inside a nested structure
+        if (nestingStack.length > 0) {
+          const top = nestingStack[nestingStack.length - 1]
+          top.innerQuoteState = 'double'
+          top.innerQuoteStartLine = line
+          top.innerQuoteStartColumn = column
+        }
+      } else if (state === 'double') {
+        state = 'none'
+        // Clear inner quote state if we're inside a nested structure
+        if (nestingStack.length > 0) {
+          nestingStack[nestingStack.length - 1].innerQuoteState = 'none'
+        }
+      }
+      // Double quote inside single quote is literal, no state change
+      continue
+    }
+  }
+
+  // Check for unclosed quotes at end
+  if (state !== 'none') {
+    const quoteType = state === 'single' ? 'single' : 'double'
+    return {
+      valid: false,
+      error: {
+        message: `Unclosed ${quoteType} quote`,
+        line: quoteStartLine,
+        column: quoteStartColumn,
+      },
+    }
+  }
+
+  // Check for unclosed nesting (shouldn't happen if quotes are balanced)
+  if (nestingStack.length > 0) {
+    const unclosed = nestingStack[nestingStack.length - 1]
+    const typeMsg =
+      unclosed.type === 'subst'
+        ? 'command substitution $('
+        : unclosed.type === 'arith'
+          ? 'arithmetic expansion $(('
+          : 'parameter expansion ${'
+    return {
+      valid: false,
+      error: {
+        message: `Unclosed ${typeMsg}`,
+        line,
+        column,
+      },
+    }
+  }
+
+  return { valid: true }
+}
 
 /**
  * Parse a command string into a simple AST structure
@@ -83,16 +508,13 @@ function parseCommand(input: string): { ast: Program; valid: boolean; errors?: A
     }
   }
 
-  // Check for unclosed quotes
-  const singleQuotes = (trimmed.match(/'/g) || []).length
-  const doubleQuotes = (trimmed.match(/"/g) || []).length
-
-  // Check for balanced quotes (odd number means unclosed)
-  if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
+  // Validate quotes using proper stateful parsing
+  const quoteValidation = validateQuotes(trimmed)
+  if (!quoteValidation.valid && quoteValidation.error) {
     return {
       ast: { type: 'Program', body: [] },
       valid: false,
-      errors: [{ message: 'Unclosed quote', line: 1, column: 1 }],
+      errors: [quoteValidation.error],
     }
   }
 
