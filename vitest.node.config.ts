@@ -62,6 +62,8 @@ export default defineConfig({
       'tests/do/result/**/*.test.ts',
       // Polyglot executor tests (LanguageExecutor interface compliance)
       'tests/do/executors/**/*.test.ts',
+      // Command handler tests (Strategy pattern for command execution)
+      'tests/do/handlers/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
