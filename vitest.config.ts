@@ -22,6 +22,14 @@ export default defineWorkersConfig({
       'tests/posix/**/*.test.ts',
       // Core package tests require Node.js file system access
       'test/**/*.test.ts',
+      // Pack file tests use Node.js crypto/binary handling
+      'src/remote/pack-generator.test.ts',
+      'src/remote/pack-parser.test.ts',
+      'src/remote/pack-streaming.test.ts',
+      // MSW tests use BroadcastChannel which isn't available in Workers
+      'src/remote/errors.test.ts',
+      'src/remote/http-client.test.ts',
+      'src/remote/protocol-v2.test.ts',
     ],
     poolOptions: {
       workers: {

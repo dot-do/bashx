@@ -81,7 +81,7 @@ export function parsePktLine(input: string | Buffer): PktLineResult {
   const text = typeof input === 'string' ? input : input.toString('utf-8')
 
   if (text.length < 4) {
-    throw new Error('Input too short for pkt-line header')
+    throw new Error('Invalid pkt-line: input too short for header')
   }
 
   const lenHex = text.slice(0, 4)
@@ -116,15 +116,15 @@ export function parsePktLine(input: string | Buffer): PktLineResult {
 
   const len = parseInt(lenHex, 16)
   if (isNaN(len)) {
-    throw new Error(`Invalid pkt-line length: ${lenHex}`)
+    throw new Error(`Invalid pkt-line: non-hex length prefix '${lenHex}'`)
   }
 
   if (len < 4) {
-    throw new Error(`Invalid pkt-line length: ${len} (must be >= 4)`)
+    throw new Error(`Invalid pkt-line: length ${len} must be >= 4`)
   }
 
   if (len > PKT_LINE_MAX_LENGTH) {
-    throw new Error(`pkt-line too long: ${len} (max ${PKT_LINE_MAX_LENGTH})`)
+    throw new Error(`Payload exceeds maximum: ${len} bytes (max ${PKT_LINE_MAX_LENGTH})`)
   }
 
   if (text.length < len) {
@@ -147,7 +147,7 @@ export function parsePktLine(input: string | Buffer): PktLineResult {
  */
 export function parsePktLineBinary(data: Uint8Array, offset = 0): BinaryPktLineResult {
   if (offset + 4 > data.length) {
-    throw new Error('Input too short for pkt-line header')
+    throw new Error('Invalid pkt-line: input too short for header')
   }
 
   const lenHex = String.fromCharCode(
@@ -187,15 +187,15 @@ export function parsePktLineBinary(data: Uint8Array, offset = 0): BinaryPktLineR
 
   const len = parseInt(lenHex, 16)
   if (isNaN(len)) {
-    throw new Error(`Invalid pkt-line length: ${lenHex}`)
+    throw new Error(`Invalid pkt-line: non-hex length prefix '${lenHex}'`)
   }
 
   if (len < 4) {
-    throw new Error(`Invalid pkt-line length: ${len}`)
+    throw new Error(`Invalid pkt-line: length ${len} must be >= 4`)
   }
 
   if (len > PKT_LINE_MAX_LENGTH) {
-    throw new Error(`pkt-line too long: ${len}`)
+    throw new Error(`Payload exceeds maximum: ${len} bytes (max ${PKT_LINE_MAX_LENGTH})`)
   }
 
   if (offset + len > data.length) {
@@ -269,7 +269,7 @@ export function generatePktLine(payload: string | Uint8Array): string {
   if (typeof payload === 'string') {
     const len = payload.length + 4
     if (len > PKT_LINE_MAX_LENGTH) {
-      throw new Error(`Payload too long: ${len - 4} bytes (max ${PKT_LINE_MAX_LENGTH - 4})`)
+      throw new Error(`Payload exceeds maximum: ${payload.length} bytes (max ${PKT_LINE_MAX_LENGTH - 4})`)
     }
     const hex = len.toString(16).padStart(4, '0')
     return hex + payload

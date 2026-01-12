@@ -200,9 +200,8 @@ const BufferUtils = {
 
     // Try decode and re-encode, compare lengths
     try {
-      const decoder = new TextDecoder('utf-8')
-      // @ts-expect-error - fatal option is standard but missing from CF types
-      decoder.fatal = true
+      // Use fatal: true option in constructor to throw on invalid UTF-8
+      const decoder = new TextDecoder('utf-8', { fatal: true })
       const decoded = decoder.decode(bytes)
       const reencoded = new TextEncoder().encode(decoded)
       return bytes.length === reencoded.length

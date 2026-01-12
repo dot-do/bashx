@@ -162,13 +162,22 @@ describe('TieredExecutor - Command Classification', () => {
 
   describe('Tier 1 Classification', () => {
     it('classifies pure compute commands as Tier 1', () => {
-      const commands = ['echo hello', 'printf test', 'true', 'false', 'date']
-
-      for (const cmd of commands) {
+      // true/false are pure compute commands
+      const pureComputeCommands = ['true', 'false']
+      for (const cmd of pureComputeCommands) {
         const classification = executor.classifyCommand(cmd)
         expect(classification.tier).toBe(1)
         expect(classification.handler).toBe('native')
         expect(classification.capability).toBe('compute')
+      }
+
+      // echo, printf, date are now classified as POSIX utils
+      const posixCommands = ['echo hello', 'printf test', 'date']
+      for (const cmd of posixCommands) {
+        const classification = executor.classifyCommand(cmd)
+        expect(classification.tier).toBe(1)
+        expect(classification.handler).toBe('native')
+        expect(classification.capability).toBe('posix')
       }
     })
 
@@ -195,10 +204,11 @@ describe('TieredExecutor - Command Classification', () => {
   })
 
   describe('Tier 2 Classification', () => {
-    it('classifies jq commands as Tier 2', () => {
+    it('classifies jq commands as Tier 1 (native implementation)', () => {
+      // jq is now Tier 1 with native implementation via TIER_1_DATA_COMMANDS
       const classification = executor.classifyCommand('jq .name package.json')
-      expect(classification.tier).toBe(2)
-      expect(classification.handler).toBe('rpc')
+      expect(classification.tier).toBe(1)
+      expect(classification.handler).toBe('native')
       expect(classification.capability).toBe('jq')
     })
 
@@ -666,7 +676,8 @@ describe('TieredExecutor - Tier 1 Execution', () => {
 // ============================================================================
 
 describe('TieredExecutor - Tier 2 Execution (RPC)', () => {
-  it('calls RPC endpoint for jq command', async () => {
+  // Note: jq now has a native Tier 1 implementation, so we use a custom RPC service for testing
+  it('calls RPC endpoint for custom RPC command', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -678,20 +689,21 @@ describe('TieredExecutor - Tier 2 Execution (RPC)', () => {
 
     vi.stubGlobal('fetch', mockFetch)
 
+    // Use a custom tool that doesn't have a native implementation
     const executor = new TieredExecutor({
       rpcBindings: {
-        jq: {
-          name: 'jq',
-          endpoint: 'https://jq.do',
-          commands: ['jq'],
+        customtool: {
+          name: 'customtool',
+          endpoint: 'https://customtool.do',
+          commands: ['customtool'],
         },
       },
     })
 
-    const result = await executor.execute('jq .name package.json')
+    const result = await executor.execute('customtool --process data.json')
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://jq.do/execute',
+      'https://customtool.do/execute',
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -712,17 +724,18 @@ describe('TieredExecutor - Tier 2 Execution (RPC)', () => {
 
     vi.stubGlobal('fetch', mockFetch)
 
+    // Use a custom tool that doesn't have a native implementation
     const executor = new TieredExecutor({
       rpcBindings: {
-        jq: {
-          name: 'jq',
-          endpoint: 'https://jq.do',
-          commands: ['jq'],
+        customtool: {
+          name: 'customtool',
+          endpoint: 'https://customtool.do',
+          commands: ['customtool'],
         },
       },
     })
 
-    const result = await executor.execute('jq .name package.json')
+    const result = await executor.execute('customtool --process data.json')
 
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('RPC error')
@@ -791,18 +804,19 @@ describe('TieredExecutor - Tier Fallback', () => {
     vi.stubGlobal('fetch', mockFetch)
 
     const mockSandbox = createMockSandbox()
+    // Use a custom RPC service that doesn't have a native Tier 1 implementation
     const executor = new TieredExecutor({
       rpcBindings: {
-        jq: {
-          name: 'jq',
-          endpoint: 'https://jq.do',
-          commands: ['jq'],
+        customtool: {
+          name: 'customtool',
+          endpoint: 'https://customtool.do',
+          commands: ['customtool'],
         },
       },
       sandbox: mockSandbox,
     })
 
-    const result = await executor.execute('jq .name package.json')
+    const result = await executor.execute('customtool --process data.json')
 
     // Should have tried RPC first, then fallen back to sandbox
     expect(mockFetch).toHaveBeenCalled()
@@ -903,7 +917,8 @@ describe('TieredExecutor - Edge Cases', () => {
   it('handles command with env vars prefix', async () => {
     const classification = executor.classifyCommand('VAR=value echo hello')
     expect(classification.tier).toBe(1)
-    expect(classification.capability).toBe('compute')
+    // echo is now classified as a POSIX utility command
+    expect(classification.capability).toBe('posix')
   })
 
   it('handles absolute path commands', async () => {

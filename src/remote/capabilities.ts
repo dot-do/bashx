@@ -3,9 +3,6 @@
  *
  * Parsing and handling of Git protocol capabilities.
  * See: https://git-scm.com/docs/protocol-capabilities
- *
- * STUB: This file exports types and functions that throw "not implemented"
- * for TDD RED phase.
  */
 
 /** Parsed capabilities structure */
@@ -21,23 +18,62 @@ export interface Capabilities {
 /**
  * Parse space-separated capabilities string
  */
-export function parseCapabilities(_capString: string): Capabilities {
-  throw new Error('not implemented: parseCapabilities')
+export function parseCapabilities(capString: string): Capabilities {
+  const list: string[] = []
+  const values: Record<string, string> = {}
+  const multiValues: Record<string, string[]> = {}
+
+  if (!capString || capString.trim() === '') {
+    return { list, values, multiValues }
+  }
+
+  const parts = capString.trim().split(/\s+/)
+
+  for (const part of parts) {
+    const eqIndex = part.indexOf('=')
+    if (eqIndex > 0) {
+      // Key-value capability
+      const key = part.slice(0, eqIndex)
+      const value = part.slice(eqIndex + 1)
+
+      // Store in values (last value wins)
+      values[key] = value
+
+      // Also store in multiValues for capabilities that can appear multiple times
+      if (!multiValues[key]) {
+        multiValues[key] = []
+      }
+      multiValues[key].push(value)
+    } else {
+      // Simple capability (no value)
+      list.push(part)
+    }
+  }
+
+  return { list, values, multiValues }
 }
 
 /**
  * Check if a capability is present
  */
-export function hasCapability(_caps: Capabilities, _name: string): boolean {
-  throw new Error('not implemented: hasCapability')
+export function hasCapability(caps: Capabilities, name: string): boolean {
+  // Check in simple list
+  if (caps.list.includes(name)) {
+    return true
+  }
+  // Check in key-value capabilities
+  if (name in caps.values) {
+    return true
+  }
+  return false
 }
 
 /**
  * Get the value of a key=value capability
  */
 export function getCapabilityValue(
-  _caps: Capabilities,
-  _name: string
+  caps: Capabilities,
+  name: string
 ): string | undefined {
-  throw new Error('not implemented: getCapabilityValue')
+  return caps.values[name]
 }
