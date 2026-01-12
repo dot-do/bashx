@@ -19,6 +19,7 @@ export default defineConfig({
     include: [
       // Node.js-specific tests that use child_process, fs, os
       'tests/safety-gate.test.ts',
+      'tests/quote-validation.test.ts',
       'tests/mcp/bash-tool.test.ts',
       'tests/sdk-client.test.ts',
       'tests/tree-sitter-integration.test.ts',
