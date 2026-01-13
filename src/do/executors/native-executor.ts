@@ -514,8 +514,8 @@ export class NativeExecutor implements TierExecutor {
     // Delegate to test-command module
     const fileInfo = createFileInfoProvider(this.fs!)
     try {
-      const success = await executeTest(args, fileInfo)
-      return { stdout: '', stderr: '', exitCode: success ? 0 : 1 }
+      const result = await executeTest(args, fileInfo)
+      return { stdout: '', stderr: result.stderr, exitCode: result.exitCode }
     } catch {
       return { stdout: '', stderr: '', exitCode: 1 }
     }
@@ -667,8 +667,6 @@ export class NativeExecutor implements TierExecutor {
     args: string[],
     options?: ExecOptions
   ): Promise<NativeCommandResult> {
-    const input = options?.stdin || ''
-
     // Handle uuidgen specially since it doesn't need input
     if (cmd === 'uuidgen' || cmd === 'uuid') {
       const uuid = crypto.randomUUID()
@@ -676,7 +674,8 @@ export class NativeExecutor implements TierExecutor {
     }
 
     try {
-      const result = await executeCryptoCommand(cmd, args, input)
+      // executeCryptoCommand expects a CryptoCommandContext object, not just stdin string
+      const result = await executeCryptoCommand(cmd, args, { stdin: options?.stdin, fs: this.fs })
       return result
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
