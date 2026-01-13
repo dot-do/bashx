@@ -34,7 +34,7 @@
  */
 
 import type { BashResult, ExecOptions } from '../../types.js'
-import type { TierExecutor, BaseExecutorConfig } from './types.js'
+import type { TierExecutor } from './types.js'
 import {
   RpcExecutor,
   type RpcExecutorConfig,

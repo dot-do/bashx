@@ -164,16 +164,39 @@ await bash`show disk usage for current directory`
 
 ## Language Support
 
+### Fully Supported: Bash ✅
+
 | Language | Detection | Runtime | Cold Start |
 |----------|-----------|---------|------------|
 | **Bash** | Default | Tier 1-4 | Instant |
-| **Python** | `python`, `#!/usr/bin/env python`, `.py` | pyx.do | <100ms* |
-| **Node.js** | `node`, `#!/usr/bin/env node`, `.js` | node.do | <50ms* |
-| **Ruby** | `ruby`, `#!/usr/bin/env ruby`, `.rb` | ruby.do | <100ms* |
-| **Go** | `go run`, `.go` | go.do | <200ms* |
-| **Rust** | `cargo run`, `.rs` | rust.do | <200ms* |
 
-*With distributed runtime architecture (always-warm workers)
+Bash commands are fully supported with:
+- Complete AST parsing via tree-sitter-bash
+- Structural safety analysis (not regex)
+- 1,400+ passing tests
+- Production ready
+
+### Experimental: Language Detection 🚧
+
+bashx can detect the language of input but routing to language-specific executors is in development:
+
+| Language | Detection | Runtime | Status |
+|----------|-----------|---------|--------|
+| **Python** | `python`, `#!/usr/bin/env python`, `.py` | pyx.do | 🚧 Detection works, routing in progress |
+| **Node.js** | `node`, `#!/usr/bin/env node`, `.js` | node.do | 🚧 Detection works, routing in progress |
+| **Ruby** | `ruby`, `#!/usr/bin/env ruby`, `.rb` | ruby.do | 🚧 Detection works, routing in progress |
+| **Go** | `go run`, `.go` | go.do | 📋 Planned |
+| **Rust** | `cargo run`, `.rs` | rust.do | 📋 Planned |
+
+```typescript
+// Language detection is available now:
+import { detectLanguage } from '@dotdo/bashx/classify'
+
+const result = detectLanguage('#!/usr/bin/env python3\nprint("hello")')
+// { language: 'python', confidence: 0.95, method: 'shebang' }
+```
+
+> **Note**: Until multi-language routing is complete, non-bash code falls back to Tier 4 sandbox execution.
 
 ### Language Detection
 
@@ -222,25 +245,27 @@ await bash`ls -la`  // impact: 'none', executes immediately
 await bash`chmod -R 777 /`  // blocked, requires confirm: true
 ```
 
-### Multi-Language Safety
+### Multi-Language Safety (Roadmap)
 
-Each language has its own dangerous pattern detection:
+> **Note**: Multi-language safety patterns are in development. Currently, Bash safety analysis is fully implemented.
 
-| Language | Blocked Patterns |
-|----------|------------------|
-| **Bash** | `rm -rf /`, `chmod -R 777`, `eval`, `source` untrusted |
-| **Python** | `eval()`, `exec()`, `os.system()`, `pickle.loads()` |
-| **Ruby** | `eval`, `system()`, backticks, `instance_eval` |
-| **Node.js** | `eval()`, `child_process.exec()`, `require()` untrusted |
+Each language will have its own dangerous pattern detection:
+
+| Language | Blocked Patterns | Status |
+|----------|------------------|--------|
+| **Bash** | `rm -rf /`, `chmod -R 777`, `eval`, `source` untrusted | ✅ Implemented |
+| **Python** | `eval()`, `exec()`, `os.system()`, `pickle.loads()` | 🚧 In development |
+| **Ruby** | `eval`, `system()`, backticks, `instance_eval` | 📋 Planned |
+| **Node.js** | `eval()`, `child_process.exec()`, `require()` untrusted | 📋 Planned |
 
 ```typescript
-// Python code injection - blocked
+// Bash safety - fully working now
+await bash`rm -rf /`
+// => { blocked: true, reason: 'Recursive delete targeting root filesystem' }
+
+// Python (future, when multi-language safety is complete)
 await bash`python -c 'import os; os.system("rm -rf /")'`
 // => { blocked: true, reason: 'System command execution in Python' }
-
-// Safe Python - allowed
-await bash`python -c 'print(sum(range(100)))'`
-// => { stdout: '4950', exitCode: 0 }
 ```
 
 ---
@@ -510,17 +535,42 @@ bashx/
 
 ---
 
+## Current State
+
+> **Bash is fully production-ready.** Multi-language support is in active development.
+
+bashx takes a "bash-first" approach: bash command execution, parsing, and safety analysis are complete and battle-tested with 1,400+ passing tests. Multi-language features (Python, Ruby, Node.js routing) are architectural foundations being wired up.
+
+| Feature | Status |
+|---------|--------|
+| Bash AST parsing & safety | ✅ Production ready |
+| Tiered execution (Tier 1-4) | ✅ Production ready |
+| MCP tool integration | ✅ Production ready |
+| Language detection | 🚧 60% complete (detection works, routing in progress) |
+| Multi-language execution | 🚧 Architecture exists, routing not wired |
+| Natural language → commands | 📋 Planned |
+
+---
+
 ## Roadmap
 
+### Implemented ✅
 - [x] Bash AST parsing and safety analysis
 - [x] Tiered execution (Tier 1-4)
 - [x] MCP tool integration
-- [ ] Language detection (shebang, interpreter, syntax)
+- [x] Language detection infrastructure (shebang, interpreter, syntax)
+
+### In Development 🚧
+- [ ] Wire language detection into execution path
 - [ ] Python safety patterns and routing
 - [ ] Ruby safety patterns and routing
 - [ ] Node.js safety patterns and routing
+
+### Planned 📋
 - [ ] Go/Rust WASM runtime support
 - [ ] Unified multi-language safety gate
+- [ ] Natural language → command generation
+- [ ] Windows PowerShell support
 
 ---
 

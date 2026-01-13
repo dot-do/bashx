@@ -35,6 +35,15 @@ import {
 } from './terminal-renderer.js'
 import { AIGenerator, type AIGeneratorResult, type AIGeneratorOptions } from './ai-generator.js'
 import { ErrorHandler } from '../errors/error-handler.js'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
+
+/**
+ * Convert numeric HTTP status to Hono's ContentfulStatusCode type.
+ * Clamps values to valid HTTP range (100-599).
+ */
+function toContentfulStatus(code: number): ContentfulStatusCode {
+  return Math.min(Math.max(code, 100), 599) as ContentfulStatusCode
+}
 
 // ============================================================================
 // DOTDO INTEGRATION TYPES
@@ -630,7 +639,7 @@ export class ShellDO extends ShellDOBase {
         return c.json(result)
       } catch (error: unknown) {
         const httpError = ErrorHandler.toHttpError(error)
-        return c.json(httpError, httpError.status)
+        return c.json(httpError, toContentfulStatus(httpError.status))
       }
     })
 
@@ -647,7 +656,7 @@ export class ShellDO extends ShellDOBase {
         return c.json(result)
       } catch (error: unknown) {
         const httpError = ErrorHandler.toHttpError(error)
-        return c.json(httpError, httpError.status)
+        return c.json(httpError, toContentfulStatus(httpError.status))
       }
     })
 
