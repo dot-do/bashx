@@ -11,6 +11,7 @@
 import { Parser, Language, Query, Node, Tree } from 'web-tree-sitter'
 import { createRequire } from 'module'
 import { readFile } from 'fs/promises'
+import { hasChildrenForFieldName, getChildrenForFieldName } from './tree-sitter-types.js'
 
 // ============================================================================
 // Type Definitions
@@ -170,12 +171,77 @@ async function loadBashWasmBytes(): Promise<Buffer> {
   )
 }
 
+/** Symbol for accessing the raw Node from NodeWrapper */
+const RAW_NODE = Symbol('rawNode')
+
+/** Symbol for accessing the raw Tree from TreeWrapper */
+const RAW_TREE = Symbol('rawTree')
+
+/**
+ * Interface for accessing the raw Node from a wrapped TreeSitterNode
+ */
+interface RawNodeAccessor {
+  [RAW_NODE]: Node
+}
+
+/**
+ * Type guard to check if a TreeSitterNode has raw node access
+ */
+function hasRawNode(node: TreeSitterNode): node is TreeSitterNode & RawNodeAccessor {
+  return RAW_NODE in node
+}
+
+/**
+ * Get the raw Node from a TreeSitterNode, with type safety
+ */
+function getRawNode(node: TreeSitterNode): Node {
+  if (hasRawNode(node)) {
+    return node[RAW_NODE]
+  }
+  // This should never happen in practice since all TreeSitterNodes are NodeWrappers
+  throw new Error('Unable to access raw node - node is not a NodeWrapper')
+}
+
+/**
+ * Interface for accessing the raw Tree from a wrapped TreeSitterTree
+ */
+interface RawTreeAccessor {
+  [RAW_TREE]: Tree
+}
+
+/**
+ * Type guard to check if a TreeSitterTree has raw tree access
+ */
+function hasRawTree(tree: TreeSitterTree): tree is TreeSitterTree & RawTreeAccessor {
+  return RAW_TREE in tree
+}
+
+/**
+ * Get the raw Tree from a TreeSitterTree, with type safety
+ */
+function getRawTree(tree: TreeSitterTree): Tree {
+  if (hasRawTree(tree)) {
+    return tree[RAW_TREE]
+  }
+  // This should never happen in practice since all TreeSitterTrees are TreeWrappers
+  throw new Error('Unable to access raw tree - tree is not a TreeWrapper')
+}
+
 /**
  * Wrapper class to adapt web-tree-sitter Node to our TreeSitterNode interface
  * The 0.25.x API uses properties for isNamed and hasError
  */
-class NodeWrapper implements TreeSitterNode {
-  constructor(private readonly _node: Node) {}
+class NodeWrapper implements TreeSitterNode, RawNodeAccessor {
+  readonly [RAW_NODE]: Node
+
+  constructor(node: Node) {
+    this[RAW_NODE] = node
+  }
+
+  /** Internal accessor for the raw node */
+  private get _node(): Node {
+    return this[RAW_NODE]
+  }
 
   get type(): string {
     return this._node.type
@@ -264,33 +330,30 @@ class NodeWrapper implements TreeSitterNode {
   }
 
   childrenForFieldName(fieldName: string): TreeSitterNode[] {
-    // Use the childrenForFieldName method if available, otherwise use cursor-based approach
-    const childrenMethod = (this._node as unknown as { childrenForFieldName?: (name: string) => Node[] }).childrenForFieldName
-    if (childrenMethod) {
-      return childrenMethod.call(this._node, fieldName).map((c: Node) => new NodeWrapper(c))
+    // Use the childrenForFieldName method if available (type-safe approach)
+    if (hasChildrenForFieldName(this._node)) {
+      return this._node.childrenForFieldName(fieldName).map((c: Node) => new NodeWrapper(c))
     }
 
-    // Cursor-based fallback for older API versions
-    const children: TreeSitterNode[] = []
-    const cursor = this._node.walk()
-    if (cursor.gotoFirstChild()) {
-      do {
-        const currentFieldName = cursor.currentFieldName
-        if (currentFieldName === fieldName) {
-          children.push(new NodeWrapper(cursor.currentNode))
-        }
-      } while (cursor.gotoNextSibling())
-    }
-
-    return children
+    // Fallback using getChildrenForFieldName utility which filters by field name
+    return getChildrenForFieldName(this._node, fieldName).map((c: Node) => new NodeWrapper(c))
   }
 }
 
 /**
  * Wrapper class to adapt web-tree-sitter Tree to our TreeSitterTree interface
  */
-class TreeWrapper implements TreeSitterTree {
-  constructor(private readonly _tree: Tree) {}
+class TreeWrapper implements TreeSitterTree, RawTreeAccessor {
+  readonly [RAW_TREE]: Tree
+
+  constructor(tree: Tree) {
+    this[RAW_TREE] = tree
+  }
+
+  /** Internal accessor for the raw tree */
+  private get _tree(): Tree {
+    return this[RAW_TREE]
+  }
 
   get rootNode(): TreeSitterNode {
     return new NodeWrapper(this._tree.rootNode)
@@ -320,8 +383,8 @@ class QueryWrapper implements TreeSitterQuery {
   constructor(private readonly _query: Query) {}
 
   matches(node: TreeSitterNode): QueryMatch[] {
-    // We need to unwrap the node to get the underlying Node
-    const rawNode = (node as NodeWrapper)['_node'] || (node as unknown as Node)
+    // Use type-safe getRawNode to unwrap the node
+    const rawNode = getRawNode(node)
     const rawMatches = this._query.matches(rawNode)
     return rawMatches.map((m) => ({
       pattern: m.patternIndex,
@@ -333,7 +396,8 @@ class QueryWrapper implements TreeSitterQuery {
   }
 
   captures(node: TreeSitterNode): QueryCapture[] {
-    const rawNode = (node as NodeWrapper)['_node'] || (node as unknown as Node)
+    // Use type-safe getRawNode to unwrap the node
+    const rawNode = getRawNode(node)
     const rawCaptures = this._query.captures(rawNode)
     return rawCaptures.map((c) => ({
       name: c.name,
@@ -349,7 +413,8 @@ class ParserWrapper implements TreeSitterParser {
   constructor(private readonly _parser: Parser) {}
 
   parse(source: string, oldTree?: TreeSitterTree): TreeSitterTree {
-    const rawOldTree = oldTree ? (oldTree as TreeWrapper)['_tree'] : undefined
+    // Use type-safe getRawTree to unwrap the old tree if provided
+    const rawOldTree = oldTree ? getRawTree(oldTree) : undefined
     const result = this._parser.parse(source, rawOldTree)
     if (!result) {
       throw new Error('Failed to parse source code')
