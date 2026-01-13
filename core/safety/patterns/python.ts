@@ -116,6 +116,74 @@ function determineType(
  * // Returns: { classification: { impact: 'critical', ... }, patterns: [...] }
  * ```
  */
+/**
+ * Simple impact level type including 'none' for safe patterns.
+ */
+export type SimpleImpact = 'critical' | 'high' | 'medium' | 'low' | 'none'
+
+/**
+ * Simple result type for the analyzePython function.
+ */
+export interface SimplePythonAnalysis {
+  /** Overall impact level */
+  impact: SimpleImpact
+  /** List of detected pattern names */
+  patterns: string[]
+}
+
+/**
+ * Pattern definitions for the simple analyzer.
+ * Each pattern has a name, regex, and impact level.
+ */
+const SIMPLE_PATTERNS: Array<{ name: string; pattern: RegExp; impact: SimpleImpact }> = [
+  // Critical - arbitrary code execution
+  { name: 'eval', pattern: /\beval\s*\(/, impact: 'critical' },
+  { name: 'exec', pattern: /\bexec\s*\(/, impact: 'critical' },
+
+  // High - system command execution
+  { name: 'subprocess-shell', pattern: /\bsubprocess\.\w+\s*\([^)]*shell\s*=\s*True/, impact: 'high' },
+  { name: 'os-system', pattern: /\bos\.system\s*\(/, impact: 'high' },
+]
+
+/**
+ * Simple Python safety analyzer.
+ *
+ * Analyzes Python code for dangerous patterns and returns the highest
+ * impact level found along with a list of detected pattern names.
+ *
+ * @param code - The Python code to analyze
+ * @returns Analysis result with impact level and list of detected patterns
+ *
+ * @example
+ * ```typescript
+ * const result = analyzePython('eval(user_input)')
+ * // Returns: { impact: 'critical', patterns: ['eval'] }
+ * ```
+ */
+export function analyzePython(code: string): SimplePythonAnalysis {
+  const detectedPatterns: string[] = []
+  let highestImpact: SimpleImpact = 'none'
+
+  // Impact priority order (higher index = higher priority)
+  const impactPriority: SimpleImpact[] = ['none', 'low', 'medium', 'high', 'critical']
+
+  for (const { name, pattern, impact } of SIMPLE_PATTERNS) {
+    if (pattern.test(code)) {
+      detectedPatterns.push(name)
+
+      // Update highest impact if this pattern has higher priority
+      if (impactPriority.indexOf(impact) > impactPriority.indexOf(highestImpact)) {
+        highestImpact = impact
+      }
+    }
+  }
+
+  return {
+    impact: highestImpact,
+    patterns: detectedPatterns,
+  }
+}
+
 export function analyzePythonSafety(code: string): PythonSafetyAnalysis {
   const imports: string[] = []
 

@@ -302,6 +302,12 @@ export interface SafetyClassification {
    * Human-readable explanation of the safety classification.
    */
   reason: string
+
+  /**
+   * Suggested safer alternative command or approach.
+   * Optional field to provide guidance when blocking or warning.
+   */
+  suggestion?: string
 }
 
 /**

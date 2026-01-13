@@ -52,3 +52,12 @@ export {
   type MultiLanguageAnalysis,
   type SandboxStrategy,
 } from './multi-language.js'
+
+// Safety policies
+export {
+  type SafetyPolicy,
+  type PolicyInput,
+  DEFAULT_POLICY,
+  PERMISSIVE_POLICY,
+  STRICT_POLICY,
+} from './policy.js'

@@ -72,6 +72,75 @@ function isExecError(error: unknown): error is ExecError {
   return hasValidCode || hasValidKilled || hasValidStdout || hasValidStderr
 }
 
+/**
+ * Error record structure returned by getErrorRecord
+ */
+export interface ErrorRecord {
+  /** The error message */
+  message: string
+  /** Optional error code (e.g., 'ENOENT', 'EACCES') */
+  code?: string
+}
+
+/**
+ * Convert any error type to a normalized ErrorRecord.
+ *
+ * Handles multiple error types:
+ * - Error objects: extracts message and optional code
+ * - Strings: uses the string as the message
+ * - Objects with message/code properties: extracts those properties
+ * - null/undefined: returns a generic "Unknown error" message
+ * - Other types: attempts to convert to string
+ *
+ * @param error - Any error value to normalize
+ * @returns An ErrorRecord with at least a message property
+ *
+ * @example
+ * ```typescript
+ * getErrorRecord(new Error('test'))        // { message: 'test' }
+ * getErrorRecord('string error')           // { message: 'string error' }
+ * getErrorRecord({ code: 'ENOENT' })       // { message: 'Unknown error', code: 'ENOENT' }
+ * getErrorRecord(null)                     // { message: 'Unknown error' }
+ * ```
+ */
+export function getErrorRecord(error: unknown): ErrorRecord {
+  // Handle null or undefined
+  if (error === null || error === undefined) {
+    return { message: 'Unknown error' }
+  }
+
+  // Handle Error instances
+  if (error instanceof Error) {
+    const record: ErrorRecord = { message: error.message }
+    // Check for code property (common on Node.js errors)
+    const errWithCode = error as unknown as { code?: unknown }
+    if (typeof errWithCode.code === 'string') {
+      record.code = errWithCode.code
+    }
+    return record
+  }
+
+  // Handle string errors
+  if (typeof error === 'string') {
+    return { message: error }
+  }
+
+  // Handle objects with message and/or code properties
+  if (typeof error === 'object') {
+    const obj = error as Record<string, unknown>
+    const record: ErrorRecord = {
+      message: typeof obj.message === 'string' ? obj.message : 'Unknown error',
+    }
+    if (typeof obj.code === 'string') {
+      record.code = obj.code
+    }
+    return record
+  }
+
+  // Fallback: try to convert to string
+  return { message: String(error) }
+}
+
 // ============================================================================
 // Types
 // ============================================================================

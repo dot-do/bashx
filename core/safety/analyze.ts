@@ -8,8 +8,8 @@
  * Implements structural safety analysis without regex-based detection.
  *
  * NOTE: src/ast/analyze.ts contains a parallel implementation with
- * platform-specific extensions for Cloudflare Workers. When making
- * changes to the core safety logic, both files should be updated.
+ * platform-specific extensions for Cloudflare Workers. Both files import
+ * command classification data from core/safety/command-sets.ts.
  *
  * @packageDocumentation
  */
@@ -24,107 +24,18 @@ import type {
   Redirect,
 } from '../types.js'
 
-// ============================================================================
-// Command Classification Data
-// ============================================================================
-
-/**
- * Commands that only read data and have no side effects
- */
-const READ_ONLY_COMMANDS = new Set([
-  'ls', 'cat', 'head', 'tail', 'less', 'more', 'grep', 'awk', 'sed',
-  'find', 'which', 'whereis', 'type', 'file', 'stat', 'wc', 'sort',
-  'uniq', 'diff', 'cmp', 'pwd', 'echo', 'printf', 'date', 'cal',
-  'whoami', 'id', 'groups', 'uname', 'hostname', 'uptime', 'free',
-  'df', 'du', 'ps', 'top', 'htop', 'pgrep', 'env', 'printenv',
-  'test', '[', '[[', 'true', 'false', 'expr', 'bc', 'seq',
-  'basename', 'dirname', 'realpath', 'readlink', 'md5sum', 'sha256sum',
-  'git', 'npm', 'node', 'python', 'python3', 'ruby', 'perl',
-  'man', 'help', 'info', 'apropos', 'whatis',
-  // Shell builtins that don't modify filesystem
-  'cd', 'pushd', 'popd', 'dirs', 'alias', 'unalias', 'export', 'set', 'unset',
-  'read', 'declare', 'local', 'typeset', 'readonly', 'shift', 'wait', 'jobs',
-  'fg', 'bg', 'disown', 'builtin', 'command', 'enable', 'hash', 'history',
-  'let', 'logout', 'mapfile', 'readarray', 'return', 'trap', 'ulimit', 'umask',
-])
-
-/**
- * Read-only git subcommands
- */
-const GIT_READ_ONLY_SUBCOMMANDS = new Set([
-  'status', 'log', 'diff', 'show', 'branch', 'tag', 'remote',
-  'stash', 'describe', 'rev-parse', 'ls-files', 'ls-tree',
-  'cat-file', 'shortlog', 'blame', 'bisect', 'config',
-])
-
-/**
- * Network write git subcommands
- */
-const GIT_NETWORK_SUBCOMMANDS = new Set([
-  'push', 'fetch', 'pull', 'clone',
-])
-
-/**
- * Commands that delete data
- */
-const DELETE_COMMANDS = new Set([
-  'rm', 'rmdir', 'unlink', 'shred',
-])
-
-/**
- * Commands that write/modify data
- */
-const WRITE_COMMANDS = new Set([
-  'cp', 'mv', 'touch', 'mkdir', 'ln',
-  'chmod', 'chown', 'chgrp', 'chattr',
-  'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'bzip2', 'xz',
-  'tee', 'install', 'patch',
-])
-
-/**
- * Commands that perform network operations
- */
-const NETWORK_COMMANDS = new Set([
-  'curl', 'wget', 'nc', 'netcat', 'ssh', 'scp', 'sftp', 'rsync',
-  'ftp', 'telnet', 'ping', 'traceroute', 'nslookup', 'dig', 'host',
-  'nmap', 'netstat', 'ss', 'ip', 'ifconfig', 'route',
-])
-
-/**
- * Commands that execute other code
- */
-const EXECUTE_COMMANDS = new Set([
-  'exec', 'eval', 'source', '.', 'bash', 'sh', 'zsh', 'fish',
-  'xargs', 'parallel', 'nohup', 'timeout', 'time', 'watch',
-  'sudo', 'su', 'doas', 'runuser',
-])
-
-/**
- * Critical system commands that should always require confirmation
- */
-const CRITICAL_SYSTEM_COMMANDS = new Set([
-  'shutdown', 'reboot', 'poweroff', 'halt', 'init',
-  'dd', 'mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkfs.btrfs',
-  'fdisk', 'parted', 'gdisk', 'mkswap', 'swapon', 'swapoff',
-  'mount', 'umount', 'losetup',
-  'iptables', 'ip6tables', 'firewall-cmd', 'ufw',
-  'systemctl', 'service', 'chkconfig',
-  'useradd', 'userdel', 'usermod', 'groupadd', 'groupdel',
-  'passwd', 'chpasswd', 'visudo',
-])
-
-/**
- * Critical system paths that require elevated privileges
- */
-const SYSTEM_PATHS = [
-  '/', '/etc', '/usr', '/bin', '/sbin', '/lib', '/lib64',
-  '/boot', '/dev', '/sys', '/proc', '/var', '/root', '/home',
-]
-
-/**
- * Paths that indicate device access
- */
-const DEVICE_PATHS = ['/dev/sd', '/dev/hd', '/dev/nvme', '/dev/vd', '/dev/loop']
+import {
+  READ_ONLY_COMMANDS,
+  GIT_READ_ONLY_SUBCOMMANDS,
+  GIT_NETWORK_SUBCOMMANDS,
+  DELETE_COMMANDS,
+  WRITE_COMMANDS,
+  NETWORK_COMMANDS,
+  EXECUTE_COMMANDS,
+  CRITICAL_SYSTEM_COMMANDS,
+  SYSTEM_PATHS,
+  DEVICE_PATHS,
+} from './command-sets.js'
 
 // ============================================================================
 // Helper Functions
