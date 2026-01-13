@@ -399,7 +399,8 @@ describe('Category 3: Data Processing Commands', () => {
     it('should return identity with .', async () => {
       const result = await executor.execute('jq .', { stdin: '{"x":1}' })
       expect(result.exitCode).toBe(0)
-      expect(result.stdout.trim()).toBe('{"x":1}')
+      // jq outputs pretty-printed JSON by default (use -c for compact)
+      expect(JSON.parse(result.stdout.trim())).toEqual({ x: 1 })
     })
 
     it('should read from file', async () => {

@@ -950,6 +950,59 @@ export class NativeExecutor implements TierExecutor {
         const reversed = lines.map(line => line.split('').reverse().join(''))
         return { stdout: reversed.join('\n'), stderr: '', exitCode: 0 }
       }
+      case 'timeout': {
+        // timeout DURATION COMMAND [ARGS...]
+        // For simple implementation, extract duration and execute the subcommand
+        if (args.length < 2) {
+          return { stdout: '', stderr: 'timeout: missing operand', exitCode: 125 }
+        }
+        const duration = args[0]
+        const subCommand = args.slice(1).join(' ')
+
+        // Parse duration and set up timeout
+        let timeoutMs: number
+        try {
+          // Handle duration with unit suffix (s, m, h, d)
+          const match = duration.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/)
+          if (!match) {
+            return { stdout: '', stderr: `timeout: invalid time interval '${duration}'`, exitCode: 125 }
+          }
+          const value = parseFloat(match[1])
+          const unit = match[2] || 's'
+          const TIME_UNIT_MS: Record<string, number> = { s: 1000, m: 60000, h: 3600000, d: 86400000 }
+          timeoutMs = value * (TIME_UNIT_MS[unit] ?? 1000)
+        } catch {
+          return { stdout: '', stderr: `timeout: invalid time interval '${duration}'`, exitCode: 125 }
+        }
+
+        // Execute subcommand with timeout
+        const controller = new AbortController()
+        let timedOut = false
+
+        const timer = setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, timeoutMs)
+
+        try {
+          const result = await Promise.race([
+            this.execute(subCommand, options),
+            new Promise<never>((_, reject) => {
+              controller.signal.addEventListener('abort', () => {
+                reject(new Error('TIMEOUT'))
+              })
+            }),
+          ])
+          clearTimeout(timer)
+          return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+        } catch {
+          clearTimeout(timer)
+          if (timedOut) {
+            return { stdout: '', stderr: '', exitCode: 124 }
+          }
+          throw new Error('timeout: command failed')
+        }
+      }
       default:
         throw new Error(`Unsupported compute command: ${cmd}`)
     }
