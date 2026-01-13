@@ -30,6 +30,8 @@ import {
   calculateBackoff,
 } from './errors.js'
 
+import { TestError } from '../../test/utils/test-error.js'
+
 // =============================================================================
 // Test Fixtures
 // =============================================================================
@@ -58,8 +60,7 @@ afterEach(() => server.resetHandlers())
 describe('Error Classes', () => {
   describe('NetworkError', () => {
     it('should create from ECONNRESET error', () => {
-      const originalError = new Error('Connection reset')
-      ;(originalError as any).code = 'ECONNRESET'
+      const originalError = TestError.withCode('Connection reset', 'ECONNRESET')
 
       const error = NetworkError.fromError(originalError)
 
@@ -70,8 +71,7 @@ describe('Error Classes', () => {
     })
 
     it('should create from ETIMEDOUT error', () => {
-      const originalError = new Error('Timed out')
-      ;(originalError as any).code = 'ETIMEDOUT'
+      const originalError = TestError.withCode('Timed out', 'ETIMEDOUT')
 
       const error = NetworkError.fromError(originalError)
 
@@ -80,8 +80,7 @@ describe('Error Classes', () => {
     })
 
     it('should create from ENOTFOUND error', () => {
-      const originalError = new Error('DNS failed')
-      ;(originalError as any).code = 'ENOTFOUND'
+      const originalError = TestError.withCode('DNS failed', 'ENOTFOUND')
 
       const error = NetworkError.fromError(originalError)
 
