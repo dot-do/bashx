@@ -80,6 +80,10 @@ import {
 import {
   executeSed,
   executeAwk,
+  executeDiff,
+  executePatch,
+  executeTee,
+  executeXargs,
 } from '../commands/text-processing.js'
 
 import {
@@ -543,6 +547,9 @@ export class NativeExecutor implements TierExecutor {
   private async executeCurl(args: string[]): Promise<NativeCommandResult> {
     let url = ''
     let method = 'GET'
+    let body: string | undefined = undefined
+    let followRedirects = false
+    let headersOnly = false
     const headers: Record<string, string> = {}
 
     for (let i = 0; i < args.length; i++) {
@@ -557,6 +564,20 @@ export class NativeExecutor implements TierExecutor {
         if (colonIndex > 0) {
           headers[header.slice(0, colonIndex).trim()] = header.slice(colonIndex + 1).trim()
         }
+      } else if (arg === '-d' && args[i + 1]) {
+        body = args[++i]
+        if (method === 'GET') {
+          method = 'POST' // -d implies POST unless -X is specified
+        }
+      } else if (arg === '-u' && args[i + 1]) {
+        const credentials = args[++i]
+        const base64 = btoa(credentials)
+        headers['Authorization'] = `Basic ${base64}`
+      } else if (arg === '-L' || arg === '--location') {
+        followRedirects = true
+      } else if (arg === '-I' || arg === '--head') {
+        method = 'HEAD'
+        headersOnly = true
       } else if (!arg.startsWith('-') && !url) {
         url = arg
       }
@@ -571,10 +592,25 @@ export class NativeExecutor implements TierExecutor {
     }
 
     try {
-      const response = await fetch(url, {
+      const fetchOptions: RequestInit = {
         method,
         headers: Object.keys(headers).length > 0 ? headers : undefined,
-      })
+        body,
+        redirect: followRedirects ? 'follow' : 'manual',
+      }
+
+      const response = await fetch(url, fetchOptions)
+
+      if (headersOnly) {
+        // For HEAD requests, return headers as output
+        const headerLines: string[] = []
+        headerLines.push(`HTTP/1.1 ${response.status} ${response.statusText}`)
+        response.headers.forEach((value, key) => {
+          headerLines.push(`${key}: ${value}`)
+        })
+        return { stdout: headerLines.join('\n') + '\n', stderr: '', exitCode: 0 }
+      }
+
       const content = await response.text()
       return { stdout: content, stderr: '', exitCode: response.ok ? 0 : 1 }
     } catch (error) {
@@ -585,11 +621,22 @@ export class NativeExecutor implements TierExecutor {
 
   private async executeWget(args: string[]): Promise<NativeCommandResult> {
     let url = ''
+    const headers: Record<string, string> = {}
 
     for (let i = 0; i < args.length; i++) {
       const arg = args[i]
-      if (arg === '-qO-' || arg === '-O-') {
-        // Output to stdout mode - continue parsing
+      if (arg === '-qO-' || arg === '-O-' || arg === '-O' || arg === '-q') {
+        // Output to stdout mode or quiet mode - check for next arg being '-'
+        if (arg === '-O' && args[i + 1] === '-') {
+          i++ // Skip the '-'
+        }
+        // Continue parsing
+      } else if (arg === '--header' && args[i + 1]) {
+        const header = args[++i]
+        const colonIndex = header.indexOf(':')
+        if (colonIndex > 0) {
+          headers[header.slice(0, colonIndex).trim()] = header.slice(colonIndex + 1).trim()
+        }
       } else if (!arg.startsWith('-') && !url) {
         url = arg
       }
@@ -604,7 +651,13 @@ export class NativeExecutor implements TierExecutor {
     }
 
     try {
-      const response = await fetch(url)
+      const fetchOptions: RequestInit = {
+        method: 'GET',
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        redirect: 'follow',
+      }
+
+      const response = await fetch(url, fetchOptions)
       const content = await response.text()
       return { stdout: content, stderr: '', exitCode: response.ok ? 0 : 1 }
     } catch (error) {
@@ -692,16 +745,123 @@ export class NativeExecutor implements TierExecutor {
     args: string[],
     options?: ExecOptions
   ): Promise<NativeCommandResult> {
-    const input = options?.stdin || ''
+    let input = options?.stdin || ''
 
     switch (cmd) {
       case 'sed': {
-        const result = executeSed(args, input)
+        // For sed, read file content if a file is specified
+        // Look for file paths (arguments that look like paths)
+        const fileArgs = args.filter(a =>
+          !a.startsWith('-') &&
+          !a.startsWith('s/') &&
+          (a.startsWith('/') || a.match(/\.(txt|log|conf|cfg|sh|md|json|xml|yaml|yml)$/))
+        )
+
+        if (fileArgs.length > 0 && this.fs) {
+          try {
+            input = await this.fs.read(fileArgs[fileArgs.length - 1], { encoding: 'utf-8' }) as string
+          } catch {
+            // If file read fails, continue with stdin
+          }
+        }
+
+        const result = executeSed(args, input, this.fs)
         return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
       }
       case 'awk': {
+        // For awk, read file content if specified
+        // Skip the first non-flag arg which is usually the program
+        const nonFlagArgs = args.filter(a => !a.startsWith('-'))
+        if (nonFlagArgs.length > 1 && this.fs) {
+          // Last arg is typically the file
+          const lastArg = nonFlagArgs[nonFlagArgs.length - 1]
+          if (lastArg.startsWith('/') || lastArg.match(/\.(txt|log|conf|cfg|sh|md|json|xml|yaml|yml)$/)) {
+            try {
+              input = await this.fs.read(lastArg, { encoding: 'utf-8' }) as string
+            } catch {
+              // If file read fails, continue with stdin
+            }
+          }
+        }
+
         const result = executeAwk(args, input)
         return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+      }
+      case 'diff': {
+        // diff requires two file contents
+        const diffFiles = args.filter(a => !a.startsWith('-'))
+        if (diffFiles.length >= 2 && this.fs) {
+          try {
+            const file1Content = await this.fs.read(diffFiles[0], { encoding: 'utf-8' }) as string
+            const file2Content = await this.fs.read(diffFiles[1], { encoding: 'utf-8' }) as string
+            const unified = args.includes('-u') || args.includes('--unified')
+            const context = args.includes('-c') || args.includes('--context')
+            const result = executeDiff(file1Content, file2Content, diffFiles[0], diffFiles[1], { unified, context })
+            return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return { stdout: '', stderr: `diff: ${message}`, exitCode: 1 }
+          }
+        }
+        return { stdout: '', stderr: 'diff: missing operand', exitCode: 1 }
+      }
+      case 'patch': {
+        // patch applies a diff to a file
+        const reverse = args.includes('-R') || args.includes('--reverse')
+        const dryRun = args.includes('--dry-run')
+
+        // Parse -pN for strip prefix level
+        let stripLevel = 0
+        for (const arg of args) {
+          const match = arg.match(/^-p(\d+)$/)
+          if (match) {
+            stripLevel = parseInt(match[1], 10)
+          }
+        }
+
+        // Get patch input from stdin
+        const patchContent = input
+
+        // Find target file
+        const nonFlagArgs = args.filter(a => !a.startsWith('-'))
+        const targetFile = nonFlagArgs.length > 0 ? nonFlagArgs[nonFlagArgs.length - 1] : undefined
+
+        if (this.fs && targetFile) {
+          try {
+            const originalContent = await this.fs.read(targetFile, { encoding: 'utf-8' }) as string
+            const result = executePatch(originalContent, patchContent, { reverse, dryRun, stripLevel })
+            return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return { stdout: '', stderr: `patch: ${message}`, exitCode: 1 }
+          }
+        }
+        return { stdout: '', stderr: 'patch: missing file operand', exitCode: 1 }
+      }
+      case 'tee': {
+        // tee writes stdin to file and stdout
+        // executeTee takes (input, args, fs)
+        try {
+          const result = await executeTee(input, args, this.fs)
+          return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { stdout: '', stderr: `tee: ${message}`, exitCode: 1 }
+        }
+      }
+      case 'xargs': {
+        // xargs builds command lines from stdin
+        // executeXargs takes (input, args, executor)
+        try {
+          const result = await executeXargs(input, args, async (cmd: string) => {
+            // For now, just use echo behavior for the built command
+            return { stdout: cmd + '\n', stderr: '', exitCode: 0 }
+          })
+          return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { stdout: '', stderr: `xargs: ${message}`, exitCode: 1 }
+        }
       }
       default:
         return { stdout: '', stderr: `Unsupported text command: ${cmd}`, exitCode: 1 }
