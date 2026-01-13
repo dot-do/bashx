@@ -83,6 +83,16 @@ export default defineConfig({
       'tests/errors/**/*.test.ts',
       // Tooling tests (ESLint, build tools, etc.)
       'tests/tooling/**/*.test.ts',
+      // Undo module type safety tests (error handling type guards)
+      'test/undo/**/*.test.ts',
+      // Logging tests (Logger interface and structured logging)
+      'test/logging/**/*.test.ts',
+      // Execution routing tests (language detection integration)
+      'test/execution/**/*.test.ts',
+      // Safety pattern tests (multi-language safety analysis)
+      'test/safety/**/*.test.ts',
+      // MCP pipeline stage tests (RED phase TDD tests for pipeline decomposition)
+      'test/mcp/pipeline/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
