@@ -19,7 +19,12 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { execute, type ExecuteResult } from '../src/execute.js'
+// Import commented out - execute.js uses child_process which is unavailable in workers
+// import { execute, type ExecuteResult } from '../src/execute.js'
+type ExecuteResult = { valid: boolean; errors?: string[]; exitCode: number; stdout: string }
+const execute = async (_cmd: string): Promise<ExecuteResult> => {
+  throw new Error('Not available in workers environment')
+}
 
 // Skip: Requires child_process (not available in vitest-pool-workers)
 describe.skip('Quote Validation - Edge Cases', () => {
