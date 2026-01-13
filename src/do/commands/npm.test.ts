@@ -1853,7 +1853,7 @@ describe('npm fallback behavior', () => {
     const result = await executor.execute('npm install')
 
     expect(mockFetch).toHaveBeenCalled()
-    expect(mockSandbox.execute).toHaveBeenCalledWith('npm install', undefined)
+    expect(mockSandbox.execute).toHaveBeenCalledWith('npm install', { stdin: '', timeout: 30000 })
     expect(result.stdout).toContain('sandbox:')
   })
 
