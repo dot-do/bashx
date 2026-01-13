@@ -1045,209 +1045,362 @@ function requiresConfirmation(command: string, classification: SafetyClassificat
 // Keeping for future API enhancements
 
 // ============================================================================
-// Main Execute Function
+// Result Builder Helpers
 // ============================================================================
 
 /**
- * Execute a bash command with safety gate
- *
- * @param command - The command to execute
- * @param options - Execution options
- * @returns Promise resolving to ExecuteResult
+ * Default empty intent for invalid commands
  */
-export async function execute(command: string, options?: ExecOptions): Promise<ExecuteResult> {
-  const timeout = options?.timeout ?? 30000
-  const cwd = options?.cwd ?? process.cwd()
-  const dryRun = options?.dryRun ?? false
-  const confirm = options?.confirm ?? false
+const EMPTY_INTENT = {
+  commands: [] as string[],
+  reads: [] as string[],
+  writes: [] as string[],
+  deletes: [] as string[],
+  network: false,
+  elevated: false,
+}
 
-  // Parse the command
-  const { ast, valid, errors } = parseCommand(command)
+/**
+ * Default classification for invalid commands
+ */
+const INVALID_CLASSIFICATION: SafetyClassification = {
+  type: 'read',
+  impact: 'none',
+  reversible: true,
+  reason: 'Invalid command',
+}
 
-  // Handle invalid commands
-  if (!valid) {
-    return {
-      input: command,
-      valid: false,
-      errors,
-      intent: {
-        commands: [],
-        reads: [],
-        writes: [],
-        deletes: [],
-        network: false,
-        elevated: false,
-      },
-      classification: {
-        type: 'read',
-        impact: 'none',
-        reversible: true,
-        reason: 'Invalid command',
-      },
-      command,
-      generated: false,
-      stdout: '',
-      stderr: '',
-      exitCode: 0,
-    }
+/**
+ * Parsed options from ExecOptions with defaults applied
+ */
+interface ParsedOptions {
+  timeout: number
+  cwd: string
+  dryRun: boolean
+  confirm: boolean
+}
+
+/**
+ * Extract and apply defaults to execution options
+ */
+function parseOptions(options?: ExecOptions): ParsedOptions {
+  return {
+    timeout: options?.timeout ?? 30000,
+    cwd: options?.cwd ?? process.cwd(),
+    dryRun: options?.dryRun ?? false,
+    confirm: options?.confirm ?? false,
   }
+}
 
-  // Analyze for safety
-  const { classification, intent } = analyze(ast)
+/**
+ * Build result for invalid (unparseable) commands
+ */
+function buildInvalidResult(
+  command: string,
+  errors?: Array<{ message: string; line: number; column: number }>
+): ExecuteResult {
+  return {
+    input: command,
+    valid: false,
+    errors,
+    intent: EMPTY_INTENT,
+    classification: INVALID_CLASSIFICATION,
+    command,
+    generated: false,
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }
+}
 
-  // Check for critical commands - always blocked even with confirm
+/**
+ * Context for building results
+ */
+interface ResultContext {
+  command: string
+  intent: ReturnType<typeof analyze>['intent']
+  classification: SafetyClassification
+}
+
+/**
+ * Build a dry-run result
+ */
+function buildDryRunResult(ctx: ResultContext): ExecuteResult {
+  return {
+    input: ctx.command,
+    valid: true,
+    intent: ctx.intent,
+    classification: ctx.classification,
+    command: ctx.command,
+    generated: false,
+    stdout: `[DRY RUN] Would execute: ${ctx.command}`,
+    stderr: '',
+    exitCode: 0,
+    dryRun: true,
+  }
+}
+
+/**
+ * Build a blocked result for critical or unconfirmed commands
+ */
+function buildBlockedResult(ctx: ResultContext, reason: string): ExecuteResult {
+  return {
+    input: ctx.command,
+    valid: true,
+    intent: ctx.intent,
+    classification: ctx.classification,
+    command: ctx.command,
+    generated: false,
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+    blocked: true,
+    requiresConfirm: true,
+    blockReason: reason,
+  }
+}
+
+/**
+ * Build a successful execution result
+ */
+function buildSuccessResult(
+  ctx: ResultContext,
+  stdout: string,
+  stderr: string,
+  undoCommand?: string
+): ExecuteResult {
+  return {
+    input: ctx.command,
+    valid: true,
+    intent: ctx.intent,
+    classification: ctx.classification,
+    command: ctx.command,
+    generated: false,
+    stdout,
+    stderr,
+    exitCode: 0,
+    undo: undoCommand,
+  }
+}
+
+/**
+ * Build a timeout result
+ */
+function buildTimeoutResult(ctx: ResultContext): ExecuteResult {
+  return {
+    input: ctx.command,
+    valid: true,
+    intent: ctx.intent,
+    classification: ctx.classification,
+    command: ctx.command,
+    generated: false,
+    stdout: '',
+    stderr: 'Command timed out: timeout exceeded',
+    exitCode: 124,
+    timedOut: true,
+  }
+}
+
+/**
+ * Build an error result
+ */
+function buildErrorResult(
+  ctx: ResultContext,
+  stdout: string,
+  stderr: string,
+  exitCode: number
+): ExecuteResult {
+  return {
+    input: ctx.command,
+    valid: true,
+    intent: ctx.intent,
+    classification: ctx.classification,
+    command: ctx.command,
+    generated: false,
+    stdout,
+    stderr,
+    exitCode,
+  }
+}
+
+// ============================================================================
+// Safety Gate Handlers
+// ============================================================================
+
+/**
+ * Handle critical commands - always blocked, even with confirmation
+ * Returns a result if blocked, or null to continue processing
+ */
+function handleCriticalCommand(
+  command: string,
+  ctx: ResultContext,
+  dryRun: boolean
+): ExecuteResult | null {
   const criticalCheck = isCriticalCommand(command)
-  if (criticalCheck.critical || classification.impact === 'critical') {
-    const reason = criticalCheck.reason || classification.reason || 'Critical command blocked for safety'
 
-    // In dry run mode, still show classification but mark as critical
-    if (dryRun) {
-      return {
-        input: command,
-        valid: true,
-        intent,
-        classification: {
-          ...classification,
-          impact: 'critical',
-        },
-        command,
-        generated: false,
-        stdout: `[DRY RUN] Would execute: ${command}`,
-        stderr: '',
-        exitCode: 0,
-        dryRun: true,
-      }
-    }
-
-    return {
-      input: command,
-      valid: true,
-      intent,
-      classification: {
-        ...classification,
-        impact: 'critical',
-      },
-      command,
-      generated: false,
-      stdout: '',
-      stderr: '',
-      exitCode: 0,
-      blocked: true,
-      requiresConfirm: true,
-      blockReason: `Command blocked: critical impact - ${reason}`,
-    }
+  if (!criticalCheck.critical && ctx.classification.impact !== 'critical') {
+    return null // Not critical, continue processing
   }
 
-  // Check if confirmation is required
-  const needsConfirm = requiresConfirmation(command, classification)
+  const reason = criticalCheck.reason || ctx.classification.reason || 'Critical command blocked for safety'
+  const criticalClassification: SafetyClassification = {
+    ...ctx.classification,
+    impact: 'critical',
+  }
+  const criticalCtx = { ...ctx, classification: criticalClassification }
 
-  // Dry run mode - return analysis without execution
   if (dryRun) {
-    return {
-      input: command,
-      valid: true,
-      intent,
-      classification,
-      command,
-      generated: false,
-      stdout: `[DRY RUN] Would execute: ${command}`,
-      stderr: '',
-      exitCode: 0,
-      dryRun: true,
-    }
+    return buildDryRunResult(criticalCtx)
   }
 
-  // Block dangerous commands without confirmation
+  return buildBlockedResult(criticalCtx, `Command blocked: critical impact - ${reason}`)
+}
+
+/**
+ * Handle confirmation requirements for dangerous commands
+ * Returns a result if blocked, or null to continue processing
+ */
+function handleConfirmationRequired(
+  command: string,
+  ctx: ResultContext,
+  dryRun: boolean,
+  confirm: boolean
+): ExecuteResult | null {
+  const needsConfirm = requiresConfirmation(command, ctx.classification)
+
+  // In dry-run mode, return analysis without blocking
+  if (dryRun) {
+    return buildDryRunResult(ctx)
+  }
+
+  // Block if confirmation required but not provided
   if (needsConfirm && !confirm) {
-    return {
-      input: command,
-      valid: true,
-      intent,
-      classification,
-      command,
-      generated: false,
-      stdout: '',
-      stderr: '',
-      exitCode: 0,
-      blocked: true,
-      requiresConfirm: true,
-      blockReason: `Command requires confirmation: ${classification.reason}`,
-    }
+    return buildBlockedResult(ctx, `Command requires confirmation: ${ctx.classification.reason}`)
   }
 
+  return null // Continue to execution
+}
+
+// ============================================================================
+// Command Execution
+// ============================================================================
+
+/**
+ * Execute a command with timeout handling
+ */
+async function executeWithTimeout(
+  command: string,
+  cwd: string,
+  timeout: number
+): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await Promise.race([
+    execAsync(command, { cwd, timeout }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Command timed out')), timeout)
+    ),
+  ])
+
+  return {
+    stdout: stdout.toString(),
+    stderr: stderr.toString(),
+  }
+}
+
+/**
+ * Execute a command and build the appropriate result
+ */
+async function runCommand(
+  command: string,
+  ctx: ResultContext,
+  options: ParsedOptions
+): Promise<ExecuteResult> {
   // Track for undo BEFORE execution (to capture original state)
-  const undoInfo = trackForUndo(command, classification)
+  const undoInfo = trackForUndo(command, ctx.classification)
 
   // Determine reversibility based on undo tracking capability
-  const commandIsReversible = undoInfo !== null || isReversible(command, classification)
+  const commandIsReversible = undoInfo !== null || isReversible(command, ctx.classification)
 
   // Update classification with reversibility info
   const finalClassification: SafetyClassification = {
-    ...classification,
+    ...ctx.classification,
     reversible: commandIsReversible,
   }
+  const finalCtx = { ...ctx, classification: finalClassification }
 
-  // Execute the command
   try {
-    const { stdout, stderr } = await Promise.race([
-      execAsync(command, { cwd, timeout }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Command timed out')), timeout)
-      ),
-    ])
+    const { stdout, stderr } = await executeWithTimeout(command, options.cwd, options.timeout)
 
     // Record successful execution for undo
     if (undoInfo) {
       recordUndoEntry(command, undoInfo)
     }
 
-    return {
-      input: command,
-      valid: true,
-      intent,
-      classification: finalClassification,
-      command,
-      generated: false,
-      stdout: stdout.toString(),
-      stderr: stderr.toString(),
-      exitCode: 0,
-      undo: undoInfo?.undoCommand,
-    }
+    return buildSuccessResult(finalCtx, stdout, stderr, undoInfo?.undoCommand)
   } catch (error: unknown) {
     const execError = isExecError(error) ? error : null
 
     // Handle timeout
     if (execError?.message === 'Command timed out' || execError?.killed) {
-      return {
-        input: command,
-        valid: true,
-        intent,
-        classification: finalClassification,
-        command,
-        generated: false,
-        stdout: '',
-        stderr: 'Command timed out: timeout exceeded',
-        exitCode: 124,
-        timedOut: true,
-        // Don't include undo for timed out commands
-      }
+      return buildTimeoutResult(finalCtx)
     }
 
     // Handle execution errors - don't record undo for failed commands
-    // Also don't include undo command in result for failed operations
-    return {
-      input: command,
-      valid: true,
-      intent,
-      classification: finalClassification,
-      command,
-      generated: false,
-      stdout: execError?.stdout?.toString() || '',
-      stderr: execError?.stderr?.toString() || execError?.message || 'Execution error',
-      exitCode: execError?.code || 1,
-      // No undo for failed commands
-    }
+    return buildErrorResult(
+      finalCtx,
+      execError?.stdout?.toString() || '',
+      execError?.stderr?.toString() || execError?.message || 'Execution error',
+      execError?.code || 1
+    )
   }
+}
+
+// ============================================================================
+// Main Execute Function
+// ============================================================================
+
+/**
+ * Execute a bash command with safety gate
+ *
+ * This function orchestrates the command execution pipeline:
+ * 1. Parse options and validate command syntax
+ * 2. Analyze command for safety classification
+ * 3. Check for critical commands (always blocked)
+ * 4. Handle confirmation requirements
+ * 5. Execute the command if allowed
+ *
+ * @param command - The command to execute
+ * @param options - Execution options
+ * @returns Promise resolving to ExecuteResult
+ */
+export async function execute(command: string, options?: ExecOptions): Promise<ExecuteResult> {
+  const opts = parseOptions(options)
+
+  // Parse the command
+  const { ast, valid, errors } = parseCommand(command)
+
+  // Handle invalid commands
+  if (!valid) {
+    return buildInvalidResult(command, errors)
+  }
+
+  // Analyze for safety
+  const { classification, intent } = analyze(ast)
+  const ctx: ResultContext = { command, intent, classification }
+
+  // Check for critical commands - always blocked even with confirm
+  const criticalResult = handleCriticalCommand(command, ctx, opts.dryRun)
+  if (criticalResult) {
+    return criticalResult
+  }
+
+  // Check if confirmation is required
+  const confirmResult = handleConfirmationRequired(command, ctx, opts.dryRun, opts.confirm)
+  if (confirmResult) {
+    return confirmResult
+  }
+
+  // Execute the command
+  return runCommand(command, ctx, opts)
 }
 
 export default execute

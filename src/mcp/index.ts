@@ -3,16 +3,30 @@
  *
  * Core tool: bash - AI-enhanced command execution
  * Stateful tools: execute_command, get_session_state, fork_session - persistent sessions
+ *
+ * The handleBash function orchestrates a 6-stage pipeline:
+ * 1. classifyAndGenerate - Classify input and generate command from NL
+ * 2. parseAndFix - Parse AST and auto-fix syntax errors
+ * 3. analyzeSafety - Safety classification and intent extraction
+ * 4. applyGate - Safety gate decision (block/allow)
+ * 5. executeOrBlock - Execute command or return blocked result
+ * 6. (inline) Format final BashResult
  */
 
 import type { BashMcpTool, BashResult, Intent, SafetyClassification, Fix } from '../types.js'
 import { parse } from '../ast/parser.js'
-import { analyze } from '../ast/analyze.js'
 import { autoFix } from '../ast/fix.js'
 import { classifyInput } from '../classify.js'
 import { generateCommand } from '../generate.js'
-import { execute } from '../execute.js'
 import { trackForUndo } from '../undo.js'
+
+// Pipeline stages
+import {
+  parseAndFix,
+  analyzeSafety,
+  applyGate,
+  executeOrBlock,
+} from './pipeline/index.js'
 
 /**
  * The single bash MCP tool

@@ -10,6 +10,15 @@
 
 import type { Program, SafetyClassification, Intent, OperationType, ImpactLevel } from '../../types.js'
 
+import {
+  isReadOnly,
+  isDelete,
+  isWrite,
+  isNetwork,
+  isExecute,
+  isCriticalSystem,
+} from '../../../core/safety/command-sets.js'
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -33,73 +42,6 @@ export interface SafetyResult {
   /** Extracted intent from the command */
   intent: Intent
 }
-
-// ============================================================================
-// Command Classification Data
-// ============================================================================
-
-/**
- * Commands that only read data and have no side effects
- */
-const READ_ONLY_COMMANDS = new Set([
-  'ls', 'cat', 'head', 'tail', 'less', 'more', 'grep', 'awk', 'sed',
-  'find', 'which', 'whereis', 'type', 'file', 'stat', 'wc', 'sort',
-  'uniq', 'diff', 'cmp', 'pwd', 'echo', 'printf', 'date', 'cal',
-  'whoami', 'id', 'groups', 'uname', 'hostname', 'uptime', 'free',
-  'df', 'du', 'ps', 'top', 'htop', 'pgrep', 'env', 'printenv',
-  'test', '[', '[[', 'true', 'false', 'expr', 'bc', 'seq',
-  'basename', 'dirname', 'realpath', 'readlink', 'md5sum', 'sha256sum',
-  'man', 'help', 'info', 'apropos', 'whatis',
-  'cd', 'pushd', 'popd', 'dirs', 'alias', 'unalias', 'export', 'set', 'unset',
-])
-
-/**
- * Commands that delete data
- */
-const DELETE_COMMANDS = new Set([
-  'rm', 'rmdir', 'unlink', 'shred',
-])
-
-/**
- * Commands that write/modify data
- */
-const WRITE_COMMANDS = new Set([
-  'cp', 'mv', 'touch', 'mkdir', 'ln',
-  'chmod', 'chown', 'chgrp', 'chattr',
-  'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'bzip2', 'xz',
-  'tee', 'install', 'patch',
-])
-
-/**
- * Commands that perform network operations
- */
-const NETWORK_COMMANDS = new Set([
-  'curl', 'wget', 'nc', 'netcat', 'ssh', 'scp', 'sftp', 'rsync',
-  'ftp', 'telnet', 'ping', 'traceroute', 'nslookup', 'dig', 'host',
-  'nmap', 'netstat', 'ss', 'ip', 'ifconfig', 'route',
-])
-
-/**
- * Commands that execute other code
- */
-const EXECUTE_COMMANDS = new Set([
-  'exec', 'eval', 'source', '.', 'bash', 'sh', 'zsh', 'fish',
-  'xargs', 'parallel', 'nohup', 'timeout', 'time', 'watch',
-])
-
-/**
- * Critical system commands
- */
-const SYSTEM_COMMANDS = new Set([
-  'shutdown', 'reboot', 'poweroff', 'halt', 'init',
-  'dd', 'mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkfs.btrfs',
-  'fdisk', 'parted', 'gdisk', 'mkswap', 'swapon', 'swapoff',
-  'mount', 'umount', 'losetup',
-  'iptables', 'ip6tables', 'firewall-cmd', 'ufw',
-  'systemctl', 'service', 'chkconfig',
-  'useradd', 'userdel', 'usermod', 'groupadd', 'groupdel',
-  'passwd', 'chpasswd', 'visudo',
-])
 
 // ============================================================================
 // Helper Functions
@@ -174,7 +116,7 @@ function extractReadPaths(command: string, cmdName: string, args: string[]): str
   }
 
   // Handle read commands
-  if (READ_ONLY_COMMANDS.has(cmdName) && paths.length > 0) {
+  if (isReadOnly(cmdName) && paths.length > 0) {
     reads.push(...paths)
   }
 
@@ -200,7 +142,7 @@ function extractWritePaths(command: string, cmdName: string, args: string[]): st
   }
 
   // Handle write commands
-  if (WRITE_COMMANDS.has(cmdName)) {
+  if (isWrite(cmdName)) {
     writes.push(...paths)
   }
 
@@ -211,7 +153,7 @@ function extractWritePaths(command: string, cmdName: string, args: string[]): st
  * Extract delete paths from command
  */
 function extractDeletePaths(cmdName: string, args: string[]): string[] {
-  if (!DELETE_COMMANDS.has(cmdName)) {
+  if (!isDelete(cmdName)) {
     return []
   }
   return extractPaths(args)
@@ -244,7 +186,7 @@ function classifyCommand(
   }
 
   // System commands
-  if (SYSTEM_COMMANDS.has(cmdName)) {
+  if (isCriticalSystem(cmdName)) {
     return {
       type: 'system',
       impact: 'critical',
@@ -254,7 +196,7 @@ function classifyCommand(
   }
 
   // Delete commands
-  if (DELETE_COMMANDS.has(cmdName)) {
+  if (isDelete(cmdName)) {
     if (hasCritical && (recursive || paths.some(p => p === '/'))) {
       return {
         type: 'delete',
@@ -280,7 +222,7 @@ function classifyCommand(
   }
 
   // Network commands
-  if (NETWORK_COMMANDS.has(cmdName)) {
+  if (isNetwork(cmdName)) {
     return {
       type: 'network',
       impact: 'low',
@@ -290,7 +232,7 @@ function classifyCommand(
   }
 
   // Execute commands (eval, exec, etc.)
-  if (EXECUTE_COMMANDS.has(cmdName)) {
+  if (isExecute(cmdName)) {
     return {
       type: 'execute',
       impact: 'medium',
@@ -300,7 +242,7 @@ function classifyCommand(
   }
 
   // Write commands
-  if (WRITE_COMMANDS.has(cmdName)) {
+  if (isWrite(cmdName)) {
     // mv is reversible (can be moved back)
     if (cmdName === 'mv') {
       return {
@@ -329,7 +271,7 @@ function classifyCommand(
   }
 
   // Read-only commands
-  if (READ_ONLY_COMMANDS.has(cmdName)) {
+  if (isReadOnly(cmdName)) {
     return {
       type: 'read',
       impact: 'none',
@@ -472,7 +414,7 @@ export function analyzeSafety(input: SafetyInput): SafetyResult {
     intent.deletes.push(...extractDeletePaths(cmdName, cmdArgs))
 
     // Check for network
-    if (NETWORK_COMMANDS.has(cmdName)) {
+    if (isNetwork(cmdName)) {
       intent.network = true
     }
 
