@@ -81,6 +81,8 @@ export default defineConfig({
       'tests/do/security/**/*.test.ts',
       // Error handling tests (BashxError hierarchy and context preservation)
       'tests/errors/**/*.test.ts',
+      // Tooling tests (ESLint, build tools, etc.)
+      'tests/tooling/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
