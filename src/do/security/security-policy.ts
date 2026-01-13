@@ -366,10 +366,12 @@ export function createSecurityPolicy(config: SecurityPolicyConfig = {}): Securit
     ...(config.blockedPatterns ?? []),
   ]
   const checkSymlinks = config.checkSymlinks ?? true
+  // Default blocked ports for security
+  const DEFAULT_BLOCKED_PORTS = [22, 23, 3389, 5900, 5901, 5902, 5903] // SSH, Telnet, RDP, VNC
   const networkPolicy = config.networkPolicy ?? {
     allowOutbound: true,
     blockedHosts: [],
-    blockedPorts: [],
+    blockedPorts: DEFAULT_BLOCKED_PORTS,
   }
 
   /**
@@ -490,6 +492,40 @@ export function createSecurityPolicy(config: SecurityPolicyConfig = {}): Securit
    * Validate network-related commands.
    */
   function validateNetworkCommand(command: string): ValidationResult {
+    // Check blocked ports first (always check regardless of outbound setting)
+    if (networkPolicy.blockedPorts?.length) {
+      const portMatch = command.match(/(?:\s|:)(\d{2,5})(?:\s|$)/)
+      if (portMatch) {
+        const port = parseInt(portMatch[1], 10)
+        if (networkPolicy.blockedPorts.includes(port)) {
+          const violation = createViolation(
+            'network',
+            `Access to blocked port: ${port}`,
+            'high',
+            { command, blockedPort: port }
+          )
+          logViolation(violation)
+          return { valid: false, violation }
+        }
+      }
+    }
+
+    // Check blocked hosts
+    if (networkPolicy.blockedHosts?.length) {
+      for (const host of networkPolicy.blockedHosts) {
+        if (command.includes(host)) {
+          const violation = createViolation(
+            'network',
+            `Access to blocked host: ${host}`,
+            'high',
+            { command }
+          )
+          logViolation(violation)
+          return { valid: false, violation }
+        }
+      }
+    }
+
     // If outbound is completely disabled, block all network commands
     if (!networkPolicy.allowOutbound) {
       // Check if target is in allowed hosts
@@ -509,40 +545,6 @@ export function createSecurityPolicy(config: SecurityPolicyConfig = {}): Securit
       )
       logViolation(violation)
       return { valid: false, violation }
-    }
-
-    // Check blocked hosts
-    if (networkPolicy.blockedHosts?.length) {
-      for (const host of networkPolicy.blockedHosts) {
-        if (command.includes(host)) {
-          const violation = createViolation(
-            'network',
-            `Access to blocked host: ${host}`,
-            'high',
-            { command }
-          )
-          logViolation(violation)
-          return { valid: false, violation }
-        }
-      }
-    }
-
-    // Check blocked ports
-    if (networkPolicy.blockedPorts?.length) {
-      const portMatch = command.match(/(?:\s|:)(\d{2,5})(?:\s|$)/)
-      if (portMatch) {
-        const port = parseInt(portMatch[1], 10)
-        if (networkPolicy.blockedPorts.includes(port)) {
-          const violation = createViolation(
-            'network',
-            `Access to blocked port: ${port}`,
-            'high',
-            { command, blockedPort: port }
-          )
-          logViolation(violation)
-          return { valid: false, violation }
-        }
-      }
     }
 
     return { valid: true }
