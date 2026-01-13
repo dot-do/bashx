@@ -56,8 +56,9 @@ export const DEFAULT_SENSITIVE_FIELDS: SensitiveFields = [
   'authorization',
   'Authorization',
   'auth',
-  'credential',
-  'credentials',
+  // Note: 'credential' and 'credentials' are NOT included here because
+  // they often contain nested objects where we want to preserve structure
+  // while only redacting the actual secret values (e.g., password inside)
   'private_key',
   'privateKey',
   'access_token',

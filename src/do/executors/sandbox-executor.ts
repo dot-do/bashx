@@ -31,6 +31,13 @@
 
 import type { BashResult, ExecOptions, SpawnOptions, SpawnHandle } from '../../types.js'
 import type { TierExecutor, BaseExecutorConfig } from './types.js'
+import {
+  ResourceLimits,
+  ResourceLimitEnforcer,
+  createResourceLimitEnforcer,
+  DEFAULT_RESOURCE_LIMITS,
+  type BashResultWithResourceUsage,
+} from '../security/resource-limits.js'
 
 // ============================================================================
 // TYPES
@@ -100,6 +107,14 @@ export interface SandboxExecutorConfig extends BaseExecutorConfig {
    * execute() returns an error result.
    */
   sandbox?: SandboxBackend
+
+  /**
+   * Resource limits for sandbox execution.
+   *
+   * Controls execution time and output size limits.
+   * If not specified, DEFAULT_RESOURCE_LIMITS are used.
+   */
+  resourceLimits?: Partial<ResourceLimits>
 }
 
 /**
@@ -208,10 +223,24 @@ export class SandboxExecutor implements TierExecutor {
   private readonly sandbox?: SandboxBackend
   readonly defaultTimeout: number
   private readonly sessions: Map<string, SandboxSession> = new Map()
+  private readonly resourceLimitEnforcer: ResourceLimitEnforcer
+  private readonly resourceLimits: ResourceLimits
 
   constructor(config: SandboxExecutorConfig = {}) {
     this.sandbox = config.sandbox
     this.defaultTimeout = config.defaultTimeout ?? 30000
+    this.resourceLimits = {
+      ...DEFAULT_RESOURCE_LIMITS,
+      ...config.resourceLimits,
+    }
+    this.resourceLimitEnforcer = createResourceLimitEnforcer(this.resourceLimits)
+  }
+
+  /**
+   * Get the current resource limits
+   */
+  getResourceLimits(): ResourceLimits {
+    return { ...this.resourceLimits }
   }
 
   /**
@@ -303,33 +332,46 @@ export class SandboxExecutor implements TierExecutor {
   }
 
   /**
-   * Execute a command in the sandbox
+   * Execute a command in the sandbox with resource limit enforcement
    */
-  async execute(command: string, options?: ExecOptions): Promise<BashResult> {
+  async execute(command: string, options?: ExecOptions): Promise<BashResultWithResourceUsage> {
     if (!this.sandbox) {
       return this.createErrorResult(command, 'No sandbox available')
     }
 
-    try {
-      const result = await this.sandbox.execute(command, {
-        ...options,
-        timeout: options?.timeout ?? this.defaultTimeout,
-      })
+    const sandbox = this.sandbox
+    const category = this.getCommandCategory(command)
+    const timeout = options?.timeout ?? this.defaultTimeout
 
-      // Add tier information to the result
-      const category = this.getCommandCategory(command)
-      return {
-        ...result,
-        classification: {
-          ...result.classification,
-          reason: `${result.classification.reason} (Tier 4: Sandbox)`,
-          category,
-        } as BashResult['classification'],
+    // Support per-execution limit overrides from options
+    const effectiveTimeoutMs = options?.timeout ?? this.resourceLimits.maxExecutionTimeMs
+    const effectiveMaxOutput = options?.maxOutputSize ?? this.resourceLimits.maxOutputBytes
+
+    // Use resource limit enforcer to wrap execution
+    const result = await this.resourceLimitEnforcer.enforce(
+      async () => {
+        const sandboxResult = await sandbox.execute(command, {
+          ...options,
+          timeout,
+        })
+
+        // Add tier information to the result
+        return {
+          ...sandboxResult,
+          classification: {
+            ...sandboxResult.classification,
+            reason: `${sandboxResult.classification.reason} (Tier 4: Sandbox)`,
+            category,
+          } as BashResult['classification'],
+        }
+      },
+      {
+        timeoutMs: effectiveTimeoutMs,
+        maxOutputBytes: effectiveMaxOutput,
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Tier 4 sandbox execution failed: ${message}`)
-    }
+    )
+
+    return result
   }
 
   /**

@@ -197,10 +197,10 @@ export const SAFE_DEVICE_FILES: readonly string[] = [
 export const DEFAULT_BLOCKED_PATTERNS: readonly RegExp[] = [
   // Shell metacharacters for command injection
   /;/,                          // Command separator
+  /&&/,                         // AND chaining (check before single &)
+  /\|\|/,                       // OR chaining (check before single |)
   /\|(?!\|)/,                   // Pipe (but allow ||)
   /&(?!&)/,                     // Background (but allow &&)
-  /&&/,                         // AND chaining
-  /\|\|/,                       // OR chaining
   /`/,                          // Backtick command substitution
   /\$\(/,                       // $() command substitution
   /\$\{[^}]*![^}]*\}/,          // Indirect variable expansion ${!var}
@@ -458,8 +458,8 @@ export function createSecurityPolicy(config: SecurityPolicyConfig = {}): Securit
       }
     }
 
-    // Check for redirection to sensitive paths
-    const redirectMatch = command.match(/[>]\s*(\S+)/)
+    // Check for redirection to sensitive paths (both > and >>)
+    const redirectMatch = command.match(/>>?\s*(\S+)/)
     if (redirectMatch) {
       const targetPath = redirectMatch[1]
       const pathResult = validatePath(targetPath)
@@ -528,10 +528,10 @@ export function createSecurityPolicy(config: SecurityPolicyConfig = {}): Securit
 
     // If outbound is completely disabled, block all network commands
     if (!networkPolicy.allowOutbound) {
-      // Check if target is in allowed hosts
-      const hostMatch = command.match(/(?:https?:\/\/|@)?([a-zA-Z0-9.-]+)(?::\d+)?/)
-      if (hostMatch) {
-        const host = hostMatch[1]
+      // Check if target is in allowed hosts - extract host from URL properly
+      const urlMatch = command.match(/https?:\/\/([a-zA-Z0-9.-]+)/)
+      if (urlMatch) {
+        const host = urlMatch[1]
         if (networkPolicy.allowedHosts?.includes(host)) {
           return { valid: true }
         }

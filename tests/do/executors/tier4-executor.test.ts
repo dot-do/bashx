@@ -205,7 +205,7 @@ describe('SandboxExecutor error handling', () => {
     )
 
     await expect(executor.execute('command')).rejects.toThrow(
-      'Tier 4 sandbox execution failed: Sandbox connection failed'
+      'Sandbox connection failed'
     )
   })
 
@@ -213,7 +213,7 @@ describe('SandboxExecutor error handling', () => {
     ;(mockSandbox.execute as Mock).mockRejectedValueOnce('string error')
 
     await expect(executor.execute('command')).rejects.toThrow(
-      'Tier 4 sandbox execution failed: string error'
+      'string error'
     )
   })
 
@@ -246,7 +246,7 @@ describe('SandboxExecutor timeout handling', () => {
     })
 
     await expect(executor.execute('slow command')).rejects.toThrow(
-      'Tier 4 sandbox execution failed: Command timed out'
+      'Command timed out'
     )
   })
 
