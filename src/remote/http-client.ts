@@ -588,7 +588,7 @@ export class GitHttpClient {
           this.detectedProtocolVersion = 2
           return result
         }
-      } catch (error) {
+      } catch (_error) {
         // Fall through to v1 on any error
       }
     }

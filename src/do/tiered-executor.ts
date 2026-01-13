@@ -2890,8 +2890,6 @@ export class TieredExecutor implements BashExecutor {
         case 'tr': {
           // Parse tr options
           const trOptions: TrOptions = {}
-          let set1 = ''
-          let set2: string | undefined
           const nonFlagArgs: string[] = []
 
           for (let i = 0; i < args.length; i++) {
@@ -2907,8 +2905,8 @@ export class TieredExecutor implements BashExecutor {
             }
           }
 
-          set1 = nonFlagArgs[0] || ''
-          set2 = nonFlagArgs[1]
+          const set1 = nonFlagArgs[0] || ''
+          const set2 = nonFlagArgs[1]
 
           const stdout = executeTr(input, set1, set2, trOptions)
           return this.createResult(fullCommand, stdout, '', 0, 1)
@@ -3091,7 +3089,7 @@ export class TieredExecutor implements BashExecutor {
             try {
               const content = await this.fs.read(inputFile)
               inputData = typeof content === 'string' ? new TextEncoder().encode(content) : content
-            } catch (e) {
+            } catch (_e) {
               return this.createResult(fullCommand, '', `dd: ${inputFile}: No such file or directory`, 1, 1)
             }
           } else {

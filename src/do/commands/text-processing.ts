@@ -1582,7 +1582,7 @@ export async function executeTee(
         } else {
           await fs.write(file, input)
         }
-      } catch (error) {
+      } catch (_error) {
         // Continue with other files
       }
     }

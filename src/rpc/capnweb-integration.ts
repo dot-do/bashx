@@ -493,7 +493,7 @@ export function handleWebSocketRpc(
           })
         )
       }
-    } catch (error) {
+    } catch (_error) {
       // JSON parse error
       socket.send(
         JSON.stringify({

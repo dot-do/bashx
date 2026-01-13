@@ -1565,7 +1565,7 @@ async function executeHashCommandWithHasher(
       } else {
         stdout += `${hash}  ${file}\n`
       }
-    } catch (error) {
+    } catch (_error) {
       stderr += `${config.algorithm}sum: ${file}: No such file or directory\n`
       exitCode = 1
     }
@@ -1747,7 +1747,7 @@ async function verifyChecksums(
         stderr += `${checksumFile}: no properly formatted checksum lines found\n`
         exitCode = 1
       }
-    } catch (error) {
+    } catch (_error) {
       stderr += `Cannot read ${checksumFile}\n`
       exitCode = 1
     }
@@ -1913,7 +1913,7 @@ export async function executeCksum(
       const data = stringToBytes(content)
       const crc = crc32(data)
       stdout += `${crc} ${data.length} ${file}\n`
-    } catch (error) {
+    } catch (_error) {
       stderr += `cksum: ${file}: No such file or directory\n`
       exitCode = 1
     }
@@ -1968,7 +1968,7 @@ export async function executeSum(
       const data = stringToBytes(content)
       const { checksum, blocks } = sumFn(data)
       stdout += `${checksum} ${blocks} ${file}\n`
-    } catch (error) {
+    } catch (_error) {
       stderr += `sum: ${file}: No such file or directory\n`
       exitCode = 1
     }
@@ -2092,7 +2092,7 @@ async function executeOpensslDgst(
       } else {
         stdout += `${tagName}(${file})= ${hash}\n`
       }
-    } catch (error) {
+    } catch (_error) {
       stderr += `openssl dgst: ${file}: No such file or directory\n`
       exitCode = 1
     }
@@ -2157,7 +2157,7 @@ async function executeOpensslEnc(
     }
 
     return { stdout: output + (decode ? '' : '\n'), stderr: '', exitCode: 0 }
-  } catch (error) {
+  } catch (_error) {
     return { stdout: '', stderr: 'openssl enc: error encoding/decoding\n', exitCode: 1 }
   }
 }

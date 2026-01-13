@@ -366,7 +366,7 @@ export class BashModule implements BashCapability {
         default:
           return null
       }
-    } catch (error) {
+    } catch (_error) {
       // If native execution fails, return null to fall back to executor
       return null
     }
