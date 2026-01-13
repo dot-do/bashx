@@ -276,7 +276,7 @@ function computeDelta(base: Uint8Array, derived: Uint8Array): Uint8Array | null 
     copyCmd |= 0x01
 
     // Size
-    let copySize = commonPrefix
+    const copySize = commonPrefix
     if (copySize & 0xff) {
       copyBytes.push(copySize & 0xff)
       copyCmd |= 0x10

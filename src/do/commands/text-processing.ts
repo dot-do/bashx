@@ -186,11 +186,11 @@ function parseSedSubstitution(script: string): { pattern: RegExp; replacement: s
   // \\) -> ) (grouping in sed basic regex)
   // Note: In patterns, \1 stays as \1 for backreferences (JS regex uses \1 in pattern)
   // Only in replacements, \1 becomes $1 (JS uses $1 in replacement strings)
-  let jsPattern = pattern
+  const jsPattern = pattern
     .replace(/\\\(/g, '(')
     .replace(/\\\)/g, ')')
 
-  let jsReplacement = replacement
+  const jsReplacement = replacement
     .replace(/\\1/g, '$1')
     .replace(/\\2/g, '$2')
     .replace(/\\3/g, '$3')
@@ -268,7 +268,7 @@ export function executeSed(args: string[], input: string, _fs?: FsCapability): {
   const scripts = options.expressions!.length > 0 ? options.expressions! : [script]
 
   // If files provided, we'd need to read from fs - for now just use input
-  let content = input
+  const content = input
 
   const processLine = (line: string, lineNum: number, totalLines: number): string | null => {
     let result: string | null = line

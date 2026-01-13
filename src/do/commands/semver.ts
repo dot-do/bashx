@@ -814,7 +814,7 @@ export function inc(
   const parsed = parseSemver(version)
   if (!parsed) return null
 
-  let { major, minor, patch, prerelease } = parsed
+  const { major, minor, patch, prerelease } = parsed
 
   switch (release) {
     case 'major':

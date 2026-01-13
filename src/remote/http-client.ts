@@ -853,7 +853,7 @@ export class GitHttpClient {
       if (firstSpaceIdx === -1) continue
 
       const oid = line.slice(0, firstSpaceIdx)
-      let refPart = line.slice(firstSpaceIdx + 1)
+      const refPart = line.slice(firstSpaceIdx + 1)
 
       // First line has capabilities after NUL byte
       let refName: string

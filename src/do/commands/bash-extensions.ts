@@ -804,7 +804,7 @@ function replacePattern(value: string, pattern: string, replacement: string, rep
   const regex = globToRegex(pattern, replaceAll ? 'g' : '')
 
   // Handle special replacement patterns
-  let processedReplacement = replacement
+  const processedReplacement = replacement
     .replace(/&/g, '$&')  // & means matched text in bash
 
   return value.replace(regex, processedReplacement)

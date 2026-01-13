@@ -730,7 +730,7 @@ export function executeBasename(path: string, suffix?: string): string {
  */
 export function executeDirname(path: string): string {
   // Remove trailing slashes (except for root)
-  let result = path.replace(/\/+$/, '') || '/'
+  const result = path.replace(/\/+$/, '') || '/'
 
   // Find last slash
   const lastSlash = result.lastIndexOf('/')

@@ -274,7 +274,7 @@ export function toWindowsPath(path: string): string {
  */
 export function resolvePath(path: string, base?: string): string {
   // Convert to Unix format first
-  let unixPath = toUnixPath(path)
+  const unixPath = toUnixPath(path)
   const unixBase = base ? toUnixPath(base) : ''
 
   // If path is empty, return base

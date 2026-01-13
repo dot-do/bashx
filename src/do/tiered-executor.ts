@@ -2210,7 +2210,7 @@ export class TieredExecutor implements BashExecutor {
         // Parse shuf options
         const shufOptions: ShufOptions = {}
         const input = options?.stdin || ''
-        let inputLines = input.split('\n').filter(l => l.length > 0)
+        const inputLines = input.split('\n').filter(l => l.length > 0)
 
         for (let i = 0; i < args.length; i++) {
           const arg = args[i]
