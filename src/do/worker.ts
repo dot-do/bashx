@@ -34,6 +34,7 @@ import {
   type RenderTier,
 } from './terminal-renderer.js'
 import { AIGenerator, type AIGeneratorResult, type AIGeneratorOptions } from './ai-generator.js'
+import { ErrorHandler } from '../errors/error-handler.js'
 
 // ============================================================================
 // DOTDO INTEGRATION TYPES
@@ -628,15 +629,8 @@ export class ShellDO extends ShellDOBase {
         const result = await this.handleMethod(method, params)
         return c.json(result)
       } catch (error: unknown) {
-        const err = error as { code?: string; message?: string }
-        return c.json(
-          {
-            error: true,
-            code: err.code || 'UNKNOWN',
-            message: err.message || 'Unknown error',
-          },
-          400
-        )
+        const httpError = ErrorHandler.toHttpError(error)
+        return c.json(httpError, httpError.status)
       }
     })
 
@@ -652,15 +646,8 @@ export class ShellDO extends ShellDOBase {
         const result = await this.bashModule.exec(command, args, options)
         return c.json(result)
       } catch (error: unknown) {
-        const err = error as { code?: string; message?: string }
-        return c.json(
-          {
-            error: true,
-            code: err.code || 'EXEC_ERROR',
-            message: err.message || 'Execution failed',
-          },
-          400
-        )
+        const httpError = ErrorHandler.toHttpError(error)
+        return c.json(httpError, httpError.status)
       }
     })
 

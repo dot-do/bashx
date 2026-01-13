@@ -3,17 +3,19 @@
  *
  * Tier 1 execution: Native in-Worker commands via nodejs_compat_v2.
  *
- * This module handles commands that can be executed natively without
- * external services or sandbox:
+ * This module is a THIN DISPATCHER that routes commands to their
+ * respective command modules:
+ *
  * - Filesystem operations via FsCapability (cat, ls, head, tail, etc.)
  * - HTTP operations via fetch API (curl, wget)
- * - Data processing (jq, yq, base64, envsubst)
- * - Crypto operations via Web Crypto API (sha256sum, md5sum, etc.)
- * - Text processing (sed, awk, diff, patch, tee, xargs)
- * - POSIX utilities (cut, sort, tr, uniq, wc, echo, printf, etc.)
- * - System utilities (yes, whoami, hostname, printenv)
- * - Extended utilities (env, id, uname, tac)
- * - Pure computation (true, false, pwd, dirname, basename)
+ * - Data processing (jq, yq, base64, envsubst) - delegates to data-processing.ts
+ * - Crypto operations (sha256sum, md5sum, etc.) - delegates to crypto.ts
+ * - Text processing (sed, awk, diff, patch, tee, xargs) - delegates to text-processing.ts
+ * - POSIX utilities (cut, sort, tr, uniq, wc, etc.) - delegates to posix-utils.ts
+ * - System utilities (yes, whoami, hostname, printenv) - delegates to system-utils.ts
+ * - Extended utilities (env, id, uname, tac) - delegates to extended-utils.ts
+ * - Math & control (bc, expr, seq, sleep, timeout) - delegates to math-control.ts
+ * - Pure computation (true, false, pwd, echo)
  *
  * Interface Contract:
  * -------------------
@@ -21,17 +23,89 @@
  * - canExecute(command): Returns true if command is in NATIVE_COMMANDS
  * - execute(command, options): Executes and returns BashResult
  *
- * Dependency Injection:
- * ---------------------
- * - FsCapability: Optional filesystem capability for file operations
- * - defaultTimeout: Optional timeout configuration
- *
  * @module bashx/do/executors/native-executor
  */
 
 import type { BashResult, ExecOptions, FsCapability } from '../../types.js'
 import type { TierExecutor, BaseExecutorConfig } from './types.js'
-import { safeEval, SafeExprError } from '../commands/safe-expr.js'
+
+// Import from shared command-parser module
+import {
+  extractCommandName,
+  extractArgs,
+  hasPipeline,
+  splitPipeline,
+} from '../utils/command-parser.js'
+
+// Import from command modules
+import {
+  executeCut,
+  executeSort,
+  executeTr,
+  executeUniq,
+  executeWc,
+  executeBasename,
+  executeDirname,
+  executeEcho,
+  executePrintf,
+  executeDate,
+  type CutOptions,
+  type SortOptions,
+  type TrOptions,
+  type UniqOptions,
+  type EchoOptions,
+} from '../commands/posix-utils.js'
+
+import {
+  executeBc,
+  executeExpr,
+  executeSeq,
+  executeSleep as executeSleepMathControl,
+} from '../commands/math-control.js'
+
+import {
+  executeJq,
+  executeBase64,
+  executeEnvsubst,
+  parseJqArgs,
+  parseBase64Args,
+  JqError,
+  Base64Error,
+} from '../commands/data-processing.js'
+
+import {
+  executeCryptoCommand,
+} from '../commands/crypto.js'
+
+import {
+  executeSed,
+  executeAwk,
+} from '../commands/text-processing.js'
+
+import {
+  executeYes,
+  executeWhoami,
+  executeHostname,
+  executePrintenv,
+} from '../commands/system-utils.js'
+
+import {
+  parseEnvArgs,
+  executeEnv,
+  formatEnv,
+  parseIdArgs,
+  executeId,
+  DEFAULT_WORKER_IDENTITY,
+  parseUnameArgs,
+  executeUname,
+  DEFAULT_WORKER_SYSINFO,
+  executeTac,
+} from '../commands/extended-utils.js'
+
+import {
+  executeTest,
+  createFileInfoProvider,
+} from '../commands/test-command.js'
 
 // ============================================================================
 // TYPES
@@ -39,22 +113,10 @@ import { safeEval, SafeExprError } from '../commands/safe-expr.js'
 
 /**
  * Configuration for NativeExecutor.
- *
- * @example
- * ```typescript
- * const config: NativeExecutorConfig = {
- *   fs: myFsCapability,
- *   defaultTimeout: 30000,
- * }
- * const executor = createNativeExecutor(config)
- * ```
  */
 export interface NativeExecutorConfig extends BaseExecutorConfig {
   /**
    * Filesystem capability for file operations.
-   *
-   * When provided, commands like cat, ls, head, tail can access the filesystem.
-   * Without this, filesystem commands will return an error.
    */
   fs?: FsCapability
 }
@@ -172,27 +234,10 @@ export const EXTENDED_UTILS_COMMANDS = new Set([
 // ============================================================================
 
 /**
- * NativeExecutor - Execute commands natively in-Worker
+ * NativeExecutor - Thin dispatcher for native in-Worker commands
  *
- * Provides Tier 1 execution for commands that don't require external
- * services or a sandbox environment. This is the fastest execution tier.
- *
- * Implements the TierExecutor interface for composition with TieredExecutor.
- *
- * @example
- * ```typescript
- * // Create executor with filesystem capability
- * const executor = new NativeExecutor({ fs: myFsCapability })
- *
- * // Check if command can be handled
- * if (executor.canExecute('echo hello')) {
- *   const result = await executor.execute('echo hello')
- *   console.log(result.stdout) // 'hello\n'
- * }
- *
- * // Execute filesystem commands
- * const catResult = await executor.execute('cat /path/to/file.txt')
- * ```
+ * Routes commands to their respective command modules for execution.
+ * This class focuses on dispatch logic rather than implementation.
  *
  * @implements {TierExecutor}
  */
@@ -216,7 +261,7 @@ export class NativeExecutor implements TierExecutor {
    * Check if this executor can handle a command
    */
   canExecute(command: string): boolean {
-    const cmd = this.extractCommandName(command)
+    const cmd = extractCommandName(command)
     return NATIVE_COMMANDS.has(cmd)
   }
 
@@ -224,7 +269,7 @@ export class NativeExecutor implements TierExecutor {
    * Check if a command requires filesystem capability
    */
   requiresFsCapability(command: string): boolean {
-    const cmd = this.extractCommandName(command)
+    const cmd = extractCommandName(command)
     return FS_COMMANDS.has(cmd)
   }
 
@@ -232,7 +277,7 @@ export class NativeExecutor implements TierExecutor {
    * Get the capability type for a command
    */
   getCapability(command: string): NativeCapability {
-    const cmd = this.extractCommandName(command)
+    const cmd = extractCommandName(command)
 
     if (FS_COMMANDS.has(cmd)) return 'fs'
     if (HTTP_COMMANDS.has(cmd)) return 'http'
@@ -249,13 +294,13 @@ export class NativeExecutor implements TierExecutor {
    * Execute a command natively
    */
   async execute(command: string, options?: ExecOptions): Promise<BashResult> {
-    // Handle pipelines by splitting and chaining (only if pipe is not inside quotes)
-    if (this.hasPipeline(command)) {
+    // Handle pipelines by splitting and chaining
+    if (hasPipeline(command)) {
       return this.executePipeline(command, options)
     }
 
-    const cmd = this.extractCommandName(command)
-    const args = this.extractArgs(command)
+    const cmd = extractCommandName(command)
+    const args = extractArgs(command)
     const capability = this.getCapability(cmd)
 
     // Special case: commands that can work with stdin don't need fs
@@ -314,35 +359,8 @@ export class NativeExecutor implements TierExecutor {
   // PIPELINE EXECUTION
   // ============================================================================
 
-  /**
-   * Check if command contains a shell pipeline (| outside of quotes)
-   */
-  private hasPipeline(command: string): boolean {
-    let inSingleQuote = false
-    let inDoubleQuote = false
-
-    for (let i = 0; i < command.length; i++) {
-      const char = command[i]
-
-      if (char === "'" && !inDoubleQuote) {
-        inSingleQuote = !inSingleQuote
-      } else if (char === '"' && !inSingleQuote) {
-        inDoubleQuote = !inDoubleQuote
-      } else if (char === '|' && !inSingleQuote && !inDoubleQuote) {
-        // Check for pipe with spaces (to distinguish from || and other operators)
-        if (i > 0 && command[i - 1] === ' ' && i + 1 < command.length && command[i + 1] === ' ') {
-          return true
-        }
-      }
-    }
-
-    return false
-  }
-
   private async executePipeline(command: string, options?: ExecOptions): Promise<BashResult> {
-    // Split by pipe, respecting quotes
-    const commands = command.split(' | ').map(c => c.trim())
-
+    const commands = splitPipeline(command)
     let currentInput = options?.stdin || ''
 
     for (const cmd of commands) {
@@ -387,7 +405,7 @@ export class NativeExecutor implements TierExecutor {
         return this.executeLs(args)
       case 'test':
       case '[':
-        return this.executeTest(args)
+        return this.executeTestCommand(args)
       default:
         throw new Error(`Unsupported fs command: ${cmd}`)
     }
@@ -397,7 +415,6 @@ export class NativeExecutor implements TierExecutor {
     const files = args.filter(a => !a.startsWith('-'))
 
     if (files.length === 0) {
-      // Read from stdin
       return { stdout: options?.stdin || '', stderr: '', exitCode: 0 }
     }
 
@@ -437,7 +454,6 @@ export class NativeExecutor implements TierExecutor {
       } else if (args[i].startsWith('-n')) {
         lines = parseInt(args[i].slice(2), 10)
       } else if (args[i].match(/^-\d+$/)) {
-        // Handle shorthand -N (e.g., -3)
         lines = parseInt(args[i].slice(1), 10)
       } else if (!args[i].startsWith('-')) {
         files.push(args[i])
@@ -494,40 +510,12 @@ export class NativeExecutor implements TierExecutor {
     }
   }
 
-  private async executeTest(args: string[]): Promise<NativeCommandResult> {
-    // Handle closing bracket for [ command
-    const testArgs = args.filter(a => a !== ']')
-
-    if (testArgs.length === 0) {
-      return { stdout: '', stderr: '', exitCode: 1 }
-    }
-
-    const flag = testArgs[0]
-    const path = testArgs[1]
-
-    if (!path) {
-      return { stdout: '', stderr: '', exitCode: 1 }
-    }
-
+  private async executeTestCommand(args: string[]): Promise<NativeCommandResult> {
+    // Delegate to test-command module
+    const fileInfo = createFileInfoProvider(this.fs!)
     try {
-      switch (flag) {
-        case '-e': {
-          const exists = await this.fs!.exists(path)
-          return { stdout: '', stderr: '', exitCode: exists ? 0 : 1 }
-        }
-        case '-f': {
-          const stat = await this.fs!.stat(path)
-          return { stdout: '', stderr: '', exitCode: stat.isFile?.() ? 0 : 1 }
-        }
-        case '-d': {
-          const stat = await this.fs!.stat(path)
-          return { stdout: '', stderr: '', exitCode: stat.isDirectory?.() ? 0 : 1 }
-        }
-        default:
-          // Default to existence test
-          const exists = await this.fs!.exists(path)
-          return { stdout: '', stderr: '', exitCode: exists ? 0 : 1 }
-      }
+      const success = await executeTest(args, fileInfo)
+      return { stdout: '', stderr: '', exitCode: success ? 0 : 1 }
     } catch {
       return { stdout: '', stderr: '', exitCode: 1 }
     }
@@ -578,7 +566,6 @@ export class NativeExecutor implements TierExecutor {
       return { stdout: '', stderr: 'curl: no URL specified', exitCode: 1 }
     }
 
-    // Ensure protocol
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://' + url
     }
@@ -612,7 +599,6 @@ export class NativeExecutor implements TierExecutor {
       return { stdout: '', stderr: 'wget: missing URL', exitCode: 1 }
     }
 
-    // Ensure protocol
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://' + url
     }
@@ -628,7 +614,7 @@ export class NativeExecutor implements TierExecutor {
   }
 
   // ============================================================================
-  // DATA PROCESSING COMMANDS
+  // DATA PROCESSING COMMANDS - Delegating to data-processing.ts
   // ============================================================================
 
   private async executeData(
@@ -639,154 +625,67 @@ export class NativeExecutor implements TierExecutor {
     const input = options?.stdin || ''
 
     switch (cmd) {
-      case 'jq':
-        return this.executeJq(args, input)
-      case 'base64':
-        return this.executeBase64(args, input)
-      case 'envsubst':
-        return this.executeEnvsubst(input, options?.env || {})
+      case 'jq': {
+        const { query, options: jqOpts } = parseJqArgs(args)
+        try {
+          const result = executeJq(query || '.', input, jqOpts)
+          return { stdout: result, stderr: '', exitCode: 0 }
+        } catch (error) {
+          if (error instanceof JqError) {
+            return { stdout: '', stderr: `jq: ${error.message}`, exitCode: error.exitCode }
+          }
+          throw error
+        }
+      }
+      case 'base64': {
+        const { options: b64Opts } = parseBase64Args(args)
+        try {
+          const result = executeBase64(input, b64Opts)
+          return { stdout: result, stderr: '', exitCode: 0 }
+        } catch (error) {
+          if (error instanceof Base64Error) {
+            return { stdout: '', stderr: `base64: ${error.message}`, exitCode: 1 }
+          }
+          throw error
+        }
+      }
+      case 'envsubst': {
+        const result = executeEnvsubst(input, { env: options?.env || {} })
+        return { stdout: result, stderr: '', exitCode: 0 }
+      }
       default:
         throw new Error(`Unsupported data command: ${cmd}`)
     }
   }
 
-  private executeJq(args: string[], input: string): NativeCommandResult {
-    // Get the query - may have quotes around it
-    let query = args.find(a => !a.startsWith('-')) || '.'
-    // Strip quotes
-    query = query.replace(/^['"]|['"]$/g, '')
-
-    try {
-      const data = JSON.parse(input)
-      let result: unknown
-
-      // Simple jq query execution
-      if (query === '.') {
-        result = data
-      } else if (query.startsWith('.') && !query.includes('[') && !query.includes('|')) {
-        // Simple property access: .name, .foo.bar
-        const path = query.slice(1).split('.')
-        result = path.reduce<unknown>((obj, key) => {
-          if (obj && typeof obj === 'object' && key in obj) {
-            return (obj as Record<string, unknown>)[key]
-          }
-          return undefined
-        }, data)
-      } else if (query.match(/^\.[a-zA-Z_][a-zA-Z0-9_]*\s*\|\s*length$/)) {
-        // .items | length
-        const prop = query.match(/\.([a-zA-Z_][a-zA-Z0-9_]*)/)?.[1]
-        const arr = prop ? (data as Record<string, unknown>)[prop] : data
-        result = Array.isArray(arr) ? arr.length : 0
-      } else {
-        result = data
-      }
-
-      const output = JSON.stringify(result)
-      return { stdout: output + '\n', stderr: '', exitCode: 0 }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return { stdout: '', stderr: `jq: ${message}`, exitCode: 1 }
-    }
-  }
-
-  private executeBase64(args: string[], input: string): NativeCommandResult {
-    const decode = args.includes('-d') || args.includes('--decode')
-
-    try {
-      if (decode) {
-        const decoded = atob(input.trim())
-        return { stdout: decoded, stderr: '', exitCode: 0 }
-      } else {
-        const encoded = btoa(input)
-        return { stdout: encoded + '\n', stderr: '', exitCode: 0 }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return { stdout: '', stderr: `base64: ${message}`, exitCode: 1 }
-    }
-  }
-
-  private executeEnvsubst(input: string, env: Record<string, string>): NativeCommandResult {
-    let result = input
-    for (const [key, value] of Object.entries(env)) {
-      result = result.replace(new RegExp(`\\$${key}\\b`, 'g'), value)
-      result = result.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), value)
-    }
-    return { stdout: result, stderr: '', exitCode: 0 }
-  }
-
   // ============================================================================
-  // CRYPTO COMMANDS
+  // CRYPTO COMMANDS - Delegating to crypto.ts
   // ============================================================================
 
   private async executeCrypto(
     cmd: string,
-    _args: string[],
+    args: string[],
     options?: ExecOptions
   ): Promise<NativeCommandResult> {
     const input = options?.stdin || ''
 
-    switch (cmd) {
-      case 'sha256sum':
-        return this.executeHash(input, 'SHA-256')
-      case 'md5sum':
-        return this.executeHash(input, 'MD5')
-      case 'uuidgen':
-        return this.executeUuidgen()
-      default:
-        throw new Error(`Unsupported crypto command: ${cmd}`)
+    // Handle uuidgen specially since it doesn't need input
+    if (cmd === 'uuidgen' || cmd === 'uuid') {
+      const uuid = crypto.randomUUID()
+      return { stdout: uuid + '\n', stderr: '', exitCode: 0 }
     }
-  }
 
-  private async executeHash(input: string, algorithm: string): Promise<NativeCommandResult> {
     try {
-      const encoder = new TextEncoder()
-      const data = encoder.encode(input)
-
-      if (algorithm === 'MD5') {
-        // MD5 is not supported by Web Crypto, use a simple implementation
-        const hash = await this.md5(input)
-        return { stdout: `${hash}  -\n`, stderr: '', exitCode: 0 }
-      }
-
-      const hashBuffer = await crypto.subtle.digest(algorithm, data)
-      const hashArray = Array.from(new Uint8Array(hashBuffer))
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-      return { stdout: `${hashHex}  -\n`, stderr: '', exitCode: 0 }
+      const result = await executeCryptoCommand(cmd, args, input)
+      return result
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return { stdout: '', stderr: message, exitCode: 1 }
     }
   }
 
-  // Simple MD5 implementation for compatibility
-  private async md5(input: string): Promise<string> {
-    // Use a simplified MD5 implementation
-    const encoder = new TextEncoder()
-    const data = encoder.encode(input)
-
-    // Note: This is a placeholder - real implementation would need proper MD5
-    // For now, returning a consistent hash based on input
-    let hash = 0x5d41402a
-    for (let i = 0; i < data.length; i++) {
-      hash = ((hash << 5) - hash + data[i]) | 0
-    }
-
-    // Standard MD5 for "hello" is 5d41402abc4b2a76b9719d911017c592
-    if (input === 'hello') {
-      return '5d41402abc4b2a76b9719d911017c592'
-    }
-
-    return hash.toString(16).padStart(32, '0')
-  }
-
-  private executeUuidgen(): NativeCommandResult {
-    const uuid = crypto.randomUUID()
-    return { stdout: uuid + '\n', stderr: '', exitCode: 0 }
-  }
-
   // ============================================================================
-  // TEXT PROCESSING COMMANDS
+  // TEXT PROCESSING COMMANDS - Delegating to text-processing.ts
   // ============================================================================
 
   private async executeText(
@@ -797,63 +696,21 @@ export class NativeExecutor implements TierExecutor {
     const input = options?.stdin || ''
 
     switch (cmd) {
-      case 'sed':
-        return this.executeSed(args, input)
-      case 'awk':
-        return this.executeAwk(args, input)
+      case 'sed': {
+        const result = executeSed(args, input)
+        return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+      }
+      case 'awk': {
+        const result = executeAwk(args, input)
+        return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+      }
       default:
         return { stdout: '', stderr: `Unsupported text command: ${cmd}`, exitCode: 1 }
     }
   }
 
-  private executeSed(args: string[], input: string): NativeCommandResult {
-    // Find the sed expression (s/pattern/replacement/)
-    const expr = args.find(a => a.startsWith('s/') || a.startsWith("'s/") || a.startsWith('"s/'))
-    if (!expr) {
-      return { stdout: input, stderr: '', exitCode: 0 }
-    }
-
-    // Parse the expression
-    const cleanExpr = expr.replace(/^['"]|['"]$/g, '')
-    const match = cleanExpr.match(/^s\/(.+?)\/(.*)\/([gi]*)$/)
-    if (!match) {
-      return { stdout: input, stderr: 'sed: invalid expression', exitCode: 1 }
-    }
-
-    const [, pattern, replacement, flags] = match
-    const regex = new RegExp(pattern, flags.includes('g') ? 'g' : '')
-
-    const result = input.split('\n').map(line => line.replace(regex, replacement)).join('\n')
-    return { stdout: result + (result && !result.endsWith('\n') ? '\n' : ''), stderr: '', exitCode: 0 }
-  }
-
-  private executeAwk(args: string[], input: string): NativeCommandResult {
-    // Find the awk program
-    const program = args.find(a => a.includes('{'))?.replace(/^['"]|['"]$/g, '') || ''
-
-    if (!program) {
-      return { stdout: input, stderr: '', exitCode: 0 }
-    }
-
-    // Simple awk: {print $N}
-    const printMatch = program.match(/\{print \$(\d+)\}/)
-    if (printMatch) {
-      const fieldNum = parseInt(printMatch[1], 10) - 1
-      const result = input.split('\n')
-        .map(line => {
-          const fields = line.split(/\s+/)
-          return fields[fieldNum] || ''
-        })
-        .filter(line => line)
-        .join('\n')
-      return { stdout: result + (result ? '\n' : ''), stderr: '', exitCode: 0 }
-    }
-
-    return { stdout: input, stderr: '', exitCode: 0 }
-  }
-
   // ============================================================================
-  // POSIX UTILITY COMMANDS
+  // POSIX UTILITY COMMANDS - Delegating to posix-utils.ts
   // ============================================================================
 
   private async executePosix(
@@ -864,176 +721,116 @@ export class NativeExecutor implements TierExecutor {
     const input = options?.stdin || ''
 
     switch (cmd) {
-      case 'printf':
-        return this.executePrintf(args)
-      case 'cut':
-        return this.executeCut(args, input)
-      case 'sort':
-        return this.executeSort(args, input)
-      case 'uniq':
-        return this.executeUniq(args, input)
-      case 'tr':
-        return this.executeTr(args, input)
-      case 'wc':
-        return this.executeWc(args, input)
-      case 'basename':
-        return this.executeBasename(args)
-      case 'dirname':
-        return this.executeDirname(args)
-      case 'date':
-        return this.executeDate(args)
+      case 'printf': {
+        if (args.length === 0) {
+          return { stdout: '', stderr: '', exitCode: 0 }
+        }
+        const format = args[0]
+        const values = args.slice(1)
+        const result = executePrintf(format, values)
+        return { stdout: result, stderr: '', exitCode: 0 }
+      }
+      case 'cut': {
+        const cutOpts = this.parseCutArgs(args)
+        const result = executeCut(input, cutOpts)
+        return { stdout: result, stderr: '', exitCode: 0 }
+      }
+      case 'sort': {
+        const sortOpts = this.parseSortArgs(args)
+        const lines = input.split('\n').filter(l => l)
+        try {
+          const sorted = executeSort(lines, sortOpts)
+          return { stdout: sorted.join('\n') + (sorted.length ? '\n' : ''), stderr: '', exitCode: 0 }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { stdout: '', stderr: message, exitCode: 1 }
+        }
+      }
+      case 'uniq': {
+        const uniqOpts = this.parseUniqArgs(args)
+        const lines = input.split('\n')
+        const result = executeUniq(lines, uniqOpts)
+        return { stdout: result.join('\n'), stderr: '', exitCode: 0 }
+      }
+      case 'tr': {
+        const set1 = args[0] || ''
+        const set2 = args[1] || ''
+        const trOpts: TrOptions = {}
+        const result = executeTr(input, set1, set2, trOpts)
+        return { stdout: result, stderr: '', exitCode: 0 }
+      }
+      case 'wc': {
+        const wcResult = executeWc(input)
+        if (args.includes('-l')) {
+          return { stdout: String(wcResult.lines) + '\n', stderr: '', exitCode: 0 }
+        }
+        return { stdout: `${wcResult.lines} ${wcResult.words} ${wcResult.chars}\n`, stderr: '', exitCode: 0 }
+      }
+      case 'basename': {
+        const path = args[0] || ''
+        const suffix = args[1]
+        const result = executeBasename(path, suffix)
+        return { stdout: result + '\n', stderr: '', exitCode: 0 }
+      }
+      case 'dirname': {
+        const path = args[0] || ''
+        const result = executeDirname(path)
+        return { stdout: result + '\n', stderr: '', exitCode: 0 }
+      }
+      case 'date': {
+        const format = args.find(a => a.startsWith('+'))
+        try {
+          const result = executeDate(format)
+          return { stdout: result + '\n', stderr: '', exitCode: 0 }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { stdout: '', stderr: message, exitCode: 1 }
+        }
+      }
       default:
         throw new Error(`Unsupported posix command: ${cmd}`)
     }
   }
 
-  private executeEcho(args: string[]): NativeCommandResult {
-    let noNewline = false
-    let startIdx = 0
-
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-n') {
-        noNewline = true
-        startIdx = i + 1
-      } else {
-        break
-      }
-    }
-
-    const output = args.slice(startIdx).join(' ')
-    return { stdout: output + (noNewline ? '' : '\n'), stderr: '', exitCode: 0 }
-  }
-
-  private executePrintf(args: string[]): NativeCommandResult {
-    if (args.length === 0) {
-      return { stdout: '', stderr: '', exitCode: 0 }
-    }
-
-    const format = args[0]
-    const values = args.slice(1)
-
-    let result = format
-    let valueIndex = 0
-
-    // Replace %s, %d with values
-    result = result.replace(/%([sd])/g, (_match, type) => {
-      if (valueIndex >= values.length) return ''
-      const value = values[valueIndex++]
-      return type === 'd' ? String(parseInt(value, 10)) : value
-    })
-
-    return { stdout: result, stderr: '', exitCode: 0 }
-  }
-
-  private executeCut(args: string[], input: string): NativeCommandResult {
-    let delimiter = '\t'
-    let field = '1'
-
+  private parseCutArgs(args: string[]): CutOptions {
+    const opts: CutOptions = {}
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '-d' && args[i + 1]) {
-        delimiter = args[++i]
+        opts.delimiter = args[++i]
       } else if (args[i].startsWith('-d')) {
-        delimiter = args[i].slice(2)
+        opts.delimiter = args[i].slice(2)
       } else if (args[i] === '-f' && args[i + 1]) {
-        field = args[++i]
+        opts.fields = args[++i]
       } else if (args[i].startsWith('-f')) {
-        field = args[i].slice(2)
+        opts.fields = args[i].slice(2)
       }
     }
-
-    const fieldNum = parseInt(field, 10) - 1
-    const result = input.split('\n')
-      .map(line => line.split(delimiter)[fieldNum] || '')
-      .join('\n')
-
-    return { stdout: result, stderr: '', exitCode: 0 }
+    return opts
   }
 
-  private executeSort(args: string[], input: string): NativeCommandResult {
-    const lines = input.split('\n').filter(l => l)
-    lines.sort()
-    if (args.includes('-r')) {
-      lines.reverse()
+  private parseSortArgs(args: string[]): SortOptions {
+    const opts: SortOptions = {}
+    for (const arg of args) {
+      if (arg === '-r' || arg === '--reverse') opts.reverse = true
+      if (arg === '-n' || arg === '--numeric-sort') opts.numeric = true
+      if (arg === '-u' || arg === '--unique') opts.unique = true
     }
-    return { stdout: lines.join('\n') + (lines.length ? '\n' : ''), stderr: '', exitCode: 0 }
+    return opts
   }
 
-  private executeUniq(_args: string[], input: string): NativeCommandResult {
-    const lines = input.split('\n')
-    const unique = lines.filter((line, i) => i === 0 || line !== lines[i - 1])
-    return { stdout: unique.join('\n'), stderr: '', exitCode: 0 }
-  }
-
-  private executeTr(args: string[], input: string): NativeCommandResult {
-    const set1 = args[0] || ''
-    const set2 = args[1] || ''
-
-    let result = input
-
-    // Handle character ranges like a-z
-    const expandRange = (s: string): string => {
-      return s.replace(/(.)-(.)/g, (_match, start, end) => {
-        let chars = ''
-        for (let i = start.charCodeAt(0); i <= end.charCodeAt(0); i++) {
-          chars += String.fromCharCode(i)
-        }
-        return chars
-      })
+  private parseUniqArgs(args: string[]): UniqOptions {
+    const opts: UniqOptions = {}
+    for (const arg of args) {
+      if (arg === '-c' || arg === '--count') opts.count = true
+      if (arg === '-d' || arg === '--repeated') opts.repeated = true
+      if (arg === '-u' || arg === '--unique') opts.unique = true
+      if (arg === '-i' || arg === '--ignore-case') opts.ignoreCase = true
     }
-
-    const expanded1 = expandRange(set1)
-    const expanded2 = expandRange(set2)
-
-    for (let i = 0; i < expanded1.length && i < expanded2.length; i++) {
-      result = result.split(expanded1[i]).join(expanded2[i])
-    }
-
-    return { stdout: result, stderr: '', exitCode: 0 }
-  }
-
-  private executeWc(args: string[], input: string): NativeCommandResult {
-    const lines = input.split('\n').length - (input.endsWith('\n') ? 1 : 0)
-    const words = input.split(/\s+/).filter(Boolean).length
-    const chars = input.length
-
-    if (args.includes('-l')) {
-      return { stdout: String(lines) + '\n', stderr: '', exitCode: 0 }
-    }
-
-    return { stdout: `${lines} ${words} ${chars}\n`, stderr: '', exitCode: 0 }
-  }
-
-  private executeBasename(args: string[]): NativeCommandResult {
-    const path = args[0] || ''
-    const result = path.split('/').pop() || ''
-    return { stdout: result + '\n', stderr: '', exitCode: 0 }
-  }
-
-  private executeDirname(args: string[]): NativeCommandResult {
-    const path = args[0] || ''
-    const parts = path.split('/')
-    parts.pop()
-    const result = parts.join('/') || (path.startsWith('/') ? '/' : '.')
-    return { stdout: result + '\n', stderr: '', exitCode: 0 }
-  }
-
-  private executeDate(args: string[]): NativeCommandResult {
-    const format = args.find(a => a.startsWith('+'))
-    const now = new Date()
-
-    if (format) {
-      let result = format.slice(1)
-      result = result.replace(/%Y/g, String(now.getFullYear()))
-      result = result.replace(/%m/g, String(now.getMonth() + 1).padStart(2, '0'))
-      result = result.replace(/%d/g, String(now.getDate()).padStart(2, '0'))
-      return { stdout: result + '\n', stderr: '', exitCode: 0 }
-    }
-
-    return { stdout: now.toString() + '\n', stderr: '', exitCode: 0 }
+    return opts
   }
 
   // ============================================================================
-  // SYSTEM UTILITY COMMANDS
+  // SYSTEM UTILITY COMMANDS - Delegating to system-utils.ts
   // ============================================================================
 
   private async executeSystem(
@@ -1041,45 +838,35 @@ export class NativeExecutor implements TierExecutor {
     args: string[],
     options?: ExecOptions
   ): Promise<NativeCommandResult> {
+    const context = {
+      cwd: options?.cwd,
+      env: options?.env,
+    }
+
     switch (cmd) {
-      case 'yes':
-        return this.executeYes(args)
-      case 'whoami':
-        return { stdout: 'worker\n', stderr: '', exitCode: 0 }
-      case 'hostname':
-        return { stdout: 'cloudflare-worker\n', stderr: '', exitCode: 0 }
-      case 'printenv':
-        return this.executePrintenv(args, options?.env || {})
+      case 'yes': {
+        const result = executeYes(args)
+        return result
+      }
+      case 'whoami': {
+        const result = executeWhoami(args, context)
+        return result
+      }
+      case 'hostname': {
+        const result = executeHostname(args, context)
+        return result
+      }
+      case 'printenv': {
+        const result = executePrintenv(args, context)
+        return result
+      }
       default:
         throw new Error(`Unsupported system command: ${cmd}`)
     }
   }
 
-  private executeYes(args: string[]): NativeCommandResult {
-    const text = args[0] || 'y'
-    // Limit output for safety
-    const lines = Array(3).fill(text)
-    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 }
-  }
-
-  private executePrintenv(args: string[], env: Record<string, string>): NativeCommandResult {
-    if (args.length === 0) {
-      const output = Object.entries(env)
-        .map(([k, v]) => `${k}=${v}`)
-        .join('\n')
-      return { stdout: output + (output ? '\n' : ''), stderr: '', exitCode: 0 }
-    }
-
-    const varName = args[0]
-    const value = env[varName]
-    if (value !== undefined) {
-      return { stdout: value + '\n', stderr: '', exitCode: 0 }
-    }
-    return { stdout: '', stderr: '', exitCode: 1 }
-  }
-
   // ============================================================================
-  // EXTENDED UTILITY COMMANDS
+  // EXTENDED UTILITY COMMANDS - Delegating to extended-utils.ts
   // ============================================================================
 
   private async executeExtended(
@@ -1088,41 +875,38 @@ export class NativeExecutor implements TierExecutor {
     options?: ExecOptions
   ): Promise<NativeCommandResult> {
     switch (cmd) {
-      case 'env':
-        return this.executeEnv(args, options?.env || {})
-      case 'id':
-        return { stdout: 'uid=1000(worker) gid=1000(worker)\n', stderr: '', exitCode: 0 }
-      case 'uname':
-        return this.executeUname(args)
-      case 'tac':
-        return this.executeTac(options?.stdin || '')
+      case 'env': {
+        const envOpts = parseEnvArgs(args)
+        const envResult = executeEnv(options?.env || {}, envOpts)
+        if (envResult.command) {
+          // Would need to execute subcommand - not supported in thin dispatcher
+          return { stdout: '', stderr: 'env: command execution not supported', exitCode: 1 }
+        }
+        const output = formatEnv(envResult.env)
+        return { stdout: output, stderr: '', exitCode: 0 }
+      }
+      case 'id': {
+        const idOpts = parseIdArgs(args)
+        const result = executeId(DEFAULT_WORKER_IDENTITY, idOpts)
+        return { stdout: result + '\n', stderr: '', exitCode: 0 }
+      }
+      case 'uname': {
+        const unameOpts = parseUnameArgs(args)
+        const result = executeUname(DEFAULT_WORKER_SYSINFO, unameOpts)
+        return { stdout: result + '\n', stderr: '', exitCode: 0 }
+      }
+      case 'tac': {
+        const input = options?.stdin || ''
+        const result = executeTac(input)
+        return { stdout: result, stderr: '', exitCode: 0 }
+      }
       default:
         throw new Error(`Unsupported extended command: ${cmd}`)
     }
   }
 
-  private executeEnv(_args: string[], env: Record<string, string>): NativeCommandResult {
-    const output = Object.entries(env)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n')
-    return { stdout: output + (output ? '\n' : ''), stderr: '', exitCode: 0 }
-  }
-
-  private executeUname(args: string[]): NativeCommandResult {
-    if (args.includes('-s')) {
-      return { stdout: 'Linux\n', stderr: '', exitCode: 0 }
-    }
-    return { stdout: 'Linux cloudflare-worker 6.0.0 #1 SMP x86_64 GNU/Linux\n', stderr: '', exitCode: 0 }
-  }
-
-  private executeTac(input: string): NativeCommandResult {
-    const lines = input.split('\n').filter(l => l)
-    lines.reverse()
-    return { stdout: lines.join('\n') + (lines.length ? '\n' : ''), stderr: '', exitCode: 0 }
-  }
-
   // ============================================================================
-  // PURE COMPUTATION COMMANDS
+  // PURE COMPUTATION COMMANDS - Delegating to math-control.ts and others
   // ============================================================================
 
   private async executeCompute(
@@ -1137,219 +921,44 @@ export class NativeExecutor implements TierExecutor {
         return { stdout: '', stderr: '', exitCode: 1 }
       case 'pwd':
         return { stdout: (options?.cwd || '/') + '\n', stderr: '', exitCode: 0 }
-      case 'echo':
-        return this.executeEcho(args)
-      case 'seq':
-        return this.executeSeq(args)
-      case 'expr':
-        return this.executeExpr(args)
-      case 'bc':
-        return this.executeBc(options?.stdin || args.join(' '))
-      case 'sleep':
-        return this.executeSleep(args, options?.timeout)
-      case 'timeout':
-        return this.executeTimeout(args, options)
+      case 'echo': {
+        const echoOpts: EchoOptions = { noNewline: args[0] === '-n' }
+        const echoArgs = echoOpts.noNewline ? args.slice(1) : args
+        const result = executeEcho(echoArgs, echoOpts)
+        return { stdout: result, stderr: '', exitCode: 0 }
+      }
+      case 'seq': {
+        const nums = args.filter(a => !a.startsWith('-')).map(Number)
+        const seqResult = executeSeq(nums)
+        return { stdout: seqResult.result + '\n', stderr: '', exitCode: seqResult.exitCode }
+      }
+      case 'expr': {
+        const exprResult = executeExpr(args)
+        return { stdout: exprResult.result + '\n', stderr: exprResult.stderr, exitCode: exprResult.exitCode }
+      }
+      case 'bc': {
+        const input = options?.stdin || args.join(' ')
+        const bcResult = executeBc(input.trim())
+        return { stdout: bcResult.result + '\n', stderr: bcResult.stderr, exitCode: bcResult.exitCode }
+      }
+      case 'sleep': {
+        const sleepResult = await executeSleepMathControl(args)
+        return { stdout: '', stderr: sleepResult.stderr, exitCode: sleepResult.exitCode }
+      }
+      case 'rev': {
+        const input = options?.stdin || ''
+        const lines = input.split('\n')
+        const reversed = lines.map(line => line.split('').reverse().join(''))
+        return { stdout: reversed.join('\n'), stderr: '', exitCode: 0 }
+      }
       default:
         throw new Error(`Unsupported compute command: ${cmd}`)
-    }
-  }
-
-  private executeSeq(args: string[]): NativeCommandResult {
-    const nums = args.filter(a => !a.startsWith('-')).map(Number)
-
-    let start = 1
-    let end = 1
-    let step = 1
-
-    if (nums.length === 1) {
-      end = nums[0]
-    } else if (nums.length === 2) {
-      [start, end] = nums
-    } else if (nums.length >= 3) {
-      [start, step, end] = nums
-    }
-
-    const result: number[] = []
-    for (let i = start; step > 0 ? i <= end : i >= end; i += step) {
-      result.push(i)
-    }
-
-    return { stdout: result.join('\n') + '\n', stderr: '', exitCode: 0 }
-  }
-
-  private executeExpr(args: string[]): NativeCommandResult {
-    // Simple arithmetic: expr 2 + 3
-    if (args.length === 3) {
-      const [a, op, b] = args
-      const numA = parseInt(a, 10)
-      const numB = parseInt(b, 10)
-
-      let result: number
-      switch (op) {
-        case '+': result = numA + numB; break
-        case '-': result = numA - numB; break
-        case '*': result = numA * numB; break
-        case '/': result = Math.floor(numA / numB); break
-        default:
-          return { stdout: '', stderr: `expr: unknown operator: ${op}`, exitCode: 1 }
-      }
-
-      return { stdout: String(result) + '\n', stderr: '', exitCode: 0 }
-    }
-
-    return { stdout: '', stderr: 'expr: syntax error', exitCode: 1 }
-  }
-
-  private executeBc(input: string): NativeCommandResult {
-    try {
-      // Use safe expression evaluator instead of eval()
-      // This prevents code injection attacks
-      const expr = input.trim()
-      const result = safeEval(expr)
-      return { stdout: result + '\n', stderr: '', exitCode: 0 }
-    } catch (error) {
-      if (error instanceof SafeExprError) {
-        return { stdout: '', stderr: error.message, exitCode: 1 }
-      }
-      return { stdout: '', stderr: 'bc: error', exitCode: 1 }
-    }
-  }
-
-  private async executeSleep(args: string[], timeout?: number): Promise<NativeCommandResult> {
-    const seconds = parseFloat(args[0] || '0')
-    const ms = seconds * 1000
-
-    // If timeout is set and sleep duration exceeds it, return error
-    if (timeout && ms > timeout) {
-      await new Promise(resolve => setTimeout(resolve, timeout))
-      return { stdout: '', stderr: 'sleep: timed out', exitCode: 124 }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, ms))
-    return { stdout: '', stderr: '', exitCode: 0 }
-  }
-
-  private async executeTimeout(args: string[], options?: ExecOptions): Promise<NativeCommandResult> {
-    // timeout DURATION COMMAND [ARG...]
-    // Find the duration and command
-    let duration = 0
-    let cmdIndex = 0
-
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i]
-      // Skip flags
-      if (arg.startsWith('-')) continue
-
-      // First non-flag is duration
-      if (duration === 0) {
-        duration = parseFloat(arg)
-        cmdIndex = i + 1
-        break
-      }
-    }
-
-    if (cmdIndex >= args.length) {
-      return { stdout: '', stderr: '', exitCode: 0 }
-    }
-
-    // Get the subcommand and its args
-    const subCommand = args.slice(cmdIndex).join(' ')
-
-    // Execute the subcommand with the duration as timeout
-    const subCmd = this.extractCommandName(subCommand)
-    const subArgs = this.extractArgs(subCommand)
-    const capability = this.getCapability(subCmd)
-
-    try {
-      let result: NativeCommandResult
-
-      // Execute with timeout context
-      const timeoutMs = duration * 1000
-      const timeoutPromise = new Promise<NativeCommandResult>((resolve) => {
-        setTimeout(() => resolve({ stdout: '', stderr: 'timeout', exitCode: 124 }), timeoutMs)
-      })
-
-      let execPromise: Promise<NativeCommandResult>
-
-      switch (capability) {
-        case 'posix':
-          execPromise = this.executePosix(subCmd, subArgs, options)
-          break
-        case 'compute':
-          execPromise = this.executeCompute(subCmd, subArgs, options)
-          break
-        default:
-          // For simplicity, just run posix commands for now
-          execPromise = this.executePosix(subCmd, subArgs, options)
-      }
-
-      result = await Promise.race([execPromise, timeoutPromise])
-      return result
-    } catch {
-      return { stdout: '', stderr: 'timeout: execution failed', exitCode: 1 }
     }
   }
 
   // ============================================================================
   // HELPER METHODS
   // ============================================================================
-
-  private extractCommandName(command: string): string {
-    const trimmed = command.trim()
-    const withoutEnvVars = trimmed.replace(/^(\w+=\S+\s+)+/, '')
-    const match = withoutEnvVars.match(/^[\w\-./]+/)
-    if (!match) return ''
-    return match[0].split('/').pop() || ''
-  }
-
-  private extractArgs(command: string): string[] {
-    const trimmed = command.trim()
-    const withoutEnvVars = trimmed.replace(/^(\w+=\S+\s+)+/, '')
-    const parts = this.tokenize(withoutEnvVars)
-    return parts.slice(1)
-  }
-
-  private tokenize(input: string): string[] {
-    const tokens: string[] = []
-    let current = ''
-    let inSingleQuote = false
-    let inDoubleQuote = false
-
-    for (let i = 0; i < input.length; i++) {
-      const char = input[i]
-
-      if (char === "'" && !inDoubleQuote) {
-        inSingleQuote = !inSingleQuote
-        current += char
-      } else if (char === '"' && !inSingleQuote) {
-        inDoubleQuote = !inDoubleQuote
-        current += char
-      } else if (/\s/.test(char) && !inSingleQuote && !inDoubleQuote) {
-        if (current) {
-          tokens.push(this.stripQuotes(current))
-          current = ''
-        }
-      } else {
-        current += char
-      }
-    }
-
-    if (current) {
-      tokens.push(this.stripQuotes(current))
-    }
-
-    return tokens
-  }
-
-  private stripQuotes(s: string): string {
-    if (s.startsWith('"') && s.endsWith('"')) {
-      return s.slice(1, -1).replace(/\\"/g, '"')
-    }
-    if (s.startsWith("'") && s.endsWith("'")) {
-      return s.slice(1, -1)
-    }
-    return s
-  }
 
   private createResult(
     command: string,
@@ -1366,7 +975,7 @@ export class NativeExecutor implements TierExecutor {
       stderr,
       exitCode,
       intent: {
-        commands: [this.extractCommandName(command)],
+        commands: [extractCommandName(command)],
         reads: [],
         writes: [],
         deletes: [],

@@ -75,6 +75,12 @@ export default defineConfig({
       'tests/do/utils/**/*.test.ts',
       // General utility tests (path normalizer, etc.)
       'tests/utils/**/*.test.ts',
+      // Cache module tests (extracted from TieredExecutor)
+      'tests/do/cache/**/*.test.ts',
+      // Security policy tests (pure unit tests for sandbox security boundaries)
+      'tests/do/security/**/*.test.ts',
+      // Error handling tests (BashxError hierarchy and context preservation)
+      'tests/errors/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
