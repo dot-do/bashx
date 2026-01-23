@@ -41,6 +41,8 @@ export default defineConfig({
       'tests/rpc/**/*.test.ts',
       // Storage patterns tests (pure unit tests)
       'src/storage/**/*.test.ts',
+      // Query accelerator tests (RED phase TDD tests for DO query optimization)
+      'src/db/query/tests/**/*.test.ts',
       // CLI client tests (uses mock WebSocket)
       'cli/**/*.test.ts',
       // Web terminal client tests (uses mock xterm.js and WebSocket)

@@ -1,0 +1,34 @@
+{
+  "name": "@dotdo/path-utils",
+  "version": "0.1.0",
+  "description": "Cross-platform path normalization utilities - Unix/Windows conversion, security validation, environment expansion",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts"
+  ],
+  "keywords": [
+    "path",
+    "normalize",
+    "unix",
+    "windows",
+    "security",
+    "validation",
+    "cross-platform",
+    "dotdo"
+  ],
+  "author": "workers.do",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dot-do/bashx.git",
+    "directory": "packages/path-utils"
+  }
+}

@@ -22,6 +22,7 @@ import type {
   List,
   BashNode,
   Word,
+  Redirect,
 } from './types.js'
 import { analyze, classifyCommand } from './ast/analyze.js'
 import {
@@ -311,33 +312,44 @@ function parseCommandParts(input: string): Command {
     }
   }
 
+  // Supported redirect operators in this lightweight parser
+  type SupportedRedirectOp = '>' | '>>' | '<' | '>|'
+
+  /**
+   * Type guard for supported redirect operators
+   */
+  function isSupportedRedirectOp(op: string): op is SupportedRedirectOp {
+    return op === '>' || op === '>>' || op === '<' || op === '>|'
+  }
+
   // Parse redirects
-  const redirects: Array<{ type: 'Redirect'; op: '>' | '>>' | '<' | '<<' | '<<<' | '>&' | '<&' | '<>' | '>|'; target: Word }> = []
+  const redirects: Redirect[] = []
   const nonRedirectParts: string[] = []
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i]
-    if (part === '>' || part === '>>' || part === '<' || part === '>|') {
+    if (isSupportedRedirectOp(part)) {
       if (i + 1 < parts.length) {
         redirects.push({
           type: 'Redirect',
-          op: part as any,
+          op: part,
           target: { type: 'Word', value: parts[i + 1] },
         })
         i++ // Skip the target
       }
+    } else if (part.startsWith('>>')) {
+      // Check '>>' before '>' since '>>' starts with '>'
+      const target = part.slice(2)
+      redirects.push({
+        type: 'Redirect',
+        op: '>>',
+        target: { type: 'Word', value: target },
+      })
     } else if (part.startsWith('>')) {
       const target = part.slice(1)
       redirects.push({
         type: 'Redirect',
         op: '>',
-        target: { type: 'Word', value: target },
-      })
-    } else if (part.startsWith('>>')) {
-      const target = part.slice(2)
-      redirects.push({
-        type: 'Redirect',
-        op: '>>',
         target: { type: 'Word', value: target },
       })
     } else {
@@ -353,7 +365,7 @@ function parseCommandParts(input: string): Command {
     name: name ? { type: 'Word', value: name } : null,
     prefix: [],
     args: args.map(arg => ({ type: 'Word', value: arg })),
-    redirects: redirects as any,
+    redirects,
   }
 }
 

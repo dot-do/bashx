@@ -16,17 +16,11 @@
 import type { BashMcpTool, BashResult, Intent, SafetyClassification, Fix } from '../types.js'
 import { parse } from '../ast/parser.js'
 import { autoFix } from '../ast/fix.js'
+import { analyze } from '../ast/analyze.js'
 import { classifyInput } from '../classify.js'
 import { generateCommand } from '../generate.js'
+import { execute } from '../execute.js'
 import { trackForUndo } from '../undo.js'
-
-// Pipeline stages
-import {
-  parseAndFix,
-  analyzeSafety,
-  applyGate,
-  executeOrBlock,
-} from './pipeline/index.js'
 
 /**
  * The single bash MCP tool
