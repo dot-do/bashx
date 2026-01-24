@@ -1,16 +1,43 @@
 /**
  * Type definitions for MCP Search/Fetch/Do Tools
  *
- * Imports shared tool infrastructure types from @dotdo/mcp,
+ * This module directly re-exports types from @dotdo/mcp where appropriate,
  * and defines BashX-specific types for bash execution binding.
+ *
+ * Types re-exported from @dotdo/mcp:
+ * - Tool, ToolHandler, ToolRegistry (infrastructure)
+ * - SearchInput, FetchInput, DoInput (input types)
+ * - DoResult, DoOptions, DoError (do-related types)
+ *
+ * Types defined here (BashX-specific):
+ * - SearchToolOutput, FetchToolOutput, DoToolOutput (bashx output format)
+ * - BashBinding, ExecResult (bash execution binding)
+ * - SearchResult (bashx version with optional description)
  *
  * @packageDocumentation
  */
 
-import type { Tool, ToolHandler, ToolRegistry } from '@dotdo/mcp'
+// Import types from @dotdo/mcp that we need to reference in this file
+import type { Tool as McpTool } from '@dotdo/mcp'
 
 // Re-export shared types from @dotdo/mcp for convenience
-export type { Tool, ToolHandler, ToolRegistry }
+// The main entry point re-exports all types from tools/index.js
+export type {
+  // Infrastructure types
+  Tool,
+  ToolHandler,
+  ToolRegistry,
+  // Input types for the three core tools
+  SearchInput,
+  FetchInput,
+  DoInput,
+  // Do tool types
+  DoResult,
+  DoError,
+  DoOptions,
+  DoOptionsWithEnv,
+  LegacyDoResult,
+} from '@dotdo/mcp'
 
 // ============================================================================
 // Search Tool Types
@@ -159,7 +186,7 @@ export interface BashBinding {
  * MCP Tool definition - uses the shared Tool type from @dotdo/mcp.
  * Kept as a type alias for backward compatibility.
  */
-export type ToolDefinition = Tool
+export type ToolDefinition = McpTool
 
 /**
  * JSON Schema for tool input.

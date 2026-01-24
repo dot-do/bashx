@@ -86,4 +86,8 @@ export {
   clearHistory,
   getHistoryCount,
   defaultBashBinding,
+  // DoScope integration with @dotdo/mcp
+  createBashScope,
+  createBashDoHandler,
+  type CreateBashScopeOptions,
 } from './bash-binding.js'

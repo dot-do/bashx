@@ -97,6 +97,8 @@ export default defineConfig({
       'test/mcp/pipeline/**/*.test.ts',
       // MCP search/fetch/do pattern tests (RED phase TDD tests)
       'tests/mcp/pattern.test.ts',
+      // MCP do handler integration tests (uses @dotdo/mcp createDoHandler)
+      'tests/mcp/do-handler-integration.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
