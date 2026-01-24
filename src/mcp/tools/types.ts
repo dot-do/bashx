@@ -1,12 +1,16 @@
 /**
  * Type definitions for MCP Search/Fetch/Do Tools
  *
- * Defines the interfaces for:
- * - Tool input/output types
- * - BashBinding interface for code execution
+ * Imports shared tool infrastructure types from @dotdo/mcp,
+ * and defines BashX-specific types for bash execution binding.
  *
  * @packageDocumentation
  */
+
+import type { Tool, ToolHandler, ToolRegistry } from '@dotdo/mcp'
+
+// Re-export shared types from @dotdo/mcp for convenience
+export type { Tool, ToolHandler, ToolRegistry }
 
 // ============================================================================
 // Search Tool Types
@@ -22,6 +26,9 @@ export interface SearchToolInput {
 
 /**
  * A single search result
+ *
+ * BashX-specific: description is optional (unlike @dotdo/mcp's SearchResult
+ * which requires it). This allows indexing items without descriptions.
  */
 export interface SearchResult {
   /** Unique identifier for the result */
@@ -95,7 +102,7 @@ export interface DoToolOutput {
 }
 
 // ============================================================================
-// Bash Binding Types
+// Bash Binding Types (BashX-specific)
 // ============================================================================
 
 /**
@@ -113,8 +120,8 @@ export interface ExecResult {
 /**
  * Bash binding interface for executing shell commands
  *
- * Provides methods to:
- * - exec(): Execute shell commands
+ * This is BashX-specific and provides methods to:
+ * - exec(): Execute shell commands with safety analysis
  * - history(): Retrieve command history
  * - env(): Access environment variables
  */
@@ -145,11 +152,18 @@ export interface BashBinding {
 }
 
 // ============================================================================
-// Tool Schema Types
+// Tool Definition Type (uses @dotdo/mcp's Tool interface)
 // ============================================================================
 
 /**
- * JSON Schema for tool input
+ * MCP Tool definition - uses the shared Tool type from @dotdo/mcp.
+ * Kept as a type alias for backward compatibility.
+ */
+export type ToolDefinition = Tool
+
+/**
+ * JSON Schema for tool input.
+ * Matches the inputSchema shape within the Tool interface from @dotdo/mcp.
  */
 export interface ToolInputSchema {
   type: 'object'
@@ -158,18 +172,6 @@ export interface ToolInputSchema {
     description: string
   }>
   required: string[]
-}
-
-/**
- * MCP Tool definition
- */
-export interface ToolDefinition {
-  /** Tool name */
-  name: string
-  /** Tool description */
-  description: string
-  /** Input schema */
-  inputSchema: ToolInputSchema
 }
 
 // ============================================================================

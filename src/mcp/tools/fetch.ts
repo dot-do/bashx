@@ -8,7 +8,7 @@
  */
 
 import type {
-  ToolDefinition,
+  Tool,
   FetchToolInput,
   FetchToolOutput,
   FetchHandler,
@@ -17,7 +17,7 @@ import type {
 /**
  * Fetch tool schema definition
  */
-export const fetchTool: ToolDefinition = {
+export const fetchTool: Tool = {
   name: 'fetch',
   description: 'Fetch a resource by its identifier. Can retrieve history entries, environment variables, or other registered resources.',
   inputSchema: {

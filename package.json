@@ -1,6 +1,6 @@
 {
   "name": "bashx.do",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "AI-enhanced bash execution with safety, intent understanding, and intelligent recovery",
   "type": "module",
   "main": "dist/index.js",
@@ -64,10 +64,11 @@
     }
   },
   "dependencies": {
+    "@dotdo/mcp": "file:../mcp/core",
     "devalue": "^5.6.2",
     "dotdo": "^0.1.0",
     "fflate": "^0.8.2",
-    "fsx.do": "0.1.0",
+    "fsx.do": "0.1.2",
     "hono": "^4.11.5",
     "pako": "^2.1.0"
   },

@@ -8,7 +8,7 @@
  */
 
 import type {
-  ToolDefinition,
+  Tool,
   SearchToolInput,
   SearchToolOutput,
   SearchResult,
@@ -18,7 +18,7 @@ import type {
 /**
  * Search tool schema definition
  */
-export const searchTool: ToolDefinition = {
+export const searchTool: Tool = {
   name: 'search',
   description: 'Search for resources, commands, or history entries by query. Returns matching results that can be fetched or executed.',
   inputSchema: {

@@ -369,7 +369,11 @@ export {
   clearHistory,
   getHistoryCount,
   defaultBashBinding,
-  // Types
+  // Types (shared from @dotdo/mcp, re-exported)
+  type Tool,
+  type ToolHandler,
+  type ToolRegistry,
+  // Types (BashX-specific)
   type SearchToolInput,
   type SearchToolOutput,
   type SearchResult,

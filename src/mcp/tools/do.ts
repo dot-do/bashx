@@ -8,7 +8,7 @@
  */
 
 import type {
-  ToolDefinition,
+  Tool,
   DoToolInput,
   DoToolOutput,
   DoHandler,
@@ -20,7 +20,7 @@ import { createBashBinding } from './bash-binding.js'
 /**
  * Do tool schema definition
  */
-export const doTool: ToolDefinition = {
+export const doTool: Tool = {
   name: 'do',
   description: 'Execute code with access to a bash binding. The code can use `bash.exec()`, `bash.history()`, and `bash.env()` to interact with the shell.',
   inputSchema: {

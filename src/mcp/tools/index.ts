@@ -6,6 +6,9 @@
  * - fetch: Resource retrieval by identifier
  * - do: Code execution with bash binding
  *
+ * Shared tool infrastructure types (Tool, ToolHandler, ToolRegistry)
+ * are re-exported from @dotdo/mcp.
+ *
  * @packageDocumentation
  */
 
@@ -14,6 +17,10 @@
 // ============================================================================
 
 export type {
+  // Shared types from @dotdo/mcp (re-exported via ./types.js)
+  Tool,
+  ToolHandler,
+  ToolRegistry,
   // Search types
   SearchToolInput,
   SearchToolOutput,
@@ -28,7 +35,7 @@ export type {
   DoToolOutput,
   DoHandler,
   DoHandlerOptions,
-  // Bash binding types
+  // Bash binding types (BashX-specific)
   BashBinding,
   ExecResult,
   // Tool schema types
