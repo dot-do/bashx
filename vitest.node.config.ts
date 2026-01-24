@@ -95,6 +95,8 @@ export default defineConfig({
       'test/safety/**/*.test.ts',
       // MCP pipeline stage tests (RED phase TDD tests for pipeline decomposition)
       'test/mcp/pipeline/**/*.test.ts',
+      // MCP search/fetch/do pattern tests (RED phase TDD tests)
+      'tests/mcp/pattern.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
   },
