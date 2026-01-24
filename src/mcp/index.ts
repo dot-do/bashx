@@ -1,8 +1,22 @@
 /**
  * bashx MCP Tools
  *
- * Core tool: bash - AI-enhanced command execution
- * Stateful tools: execute_command, get_session_state, fork_session - persistent sessions
+ * This module provides three categories of MCP tools:
+ *
+ * 1. Core Tool: bash
+ *    - AI-enhanced command execution with safety analysis
+ *    - Natural language to command translation
+ *    - AST-based validation and auto-fix
+ *
+ * 2. Stateful Shell Tools:
+ *    - execute_command: Run commands in persistent sessions
+ *    - get_session_state: Retrieve session environment
+ *    - fork_session: Create new sessions from existing state
+ *
+ * 3. Search/Fetch/Do Pattern (3-tool MCP pattern):
+ *    - search: Query-based resource discovery
+ *    - fetch: Resource retrieval by identifier
+ *    - do: Code execution with bash binding
  *
  * The handleBash function orchestrates a 6-stage pipeline:
  * 1. classifyAndGenerate - Classify input and generate command from NL
@@ -10,7 +24,9 @@
  * 3. analyzeSafety - Safety classification and intent extraction
  * 4. applyGate - Safety gate decision (block/allow)
  * 5. executeOrBlock - Execute command or return blocked result
- * 6. (inline) Format final BashResult
+ * 6. formatResult - Assemble final BashResult
+ *
+ * @packageDocumentation
  */
 
 import type { BashMcpTool, BashResult, Intent, SafetyClassification, Fix } from '../types.js'
@@ -325,3 +341,76 @@ export {
   clearAllSessions,
   getSessionCount,
 } from './stateful-shell.js'
+
+// ============================================================================
+// Search/Fetch/Do Tool Exports
+// ============================================================================
+
+export {
+  // Tool definitions
+  searchTool,
+  fetchTool,
+  doTool,
+  // Handler factories
+  createSearchHandler,
+  createFetchHandler,
+  createDoHandler,
+  // Search index utilities
+  registerSearchItem,
+  clearSearchIndex,
+  getSearchIndexSize,
+  // Fetch resource utilities
+  registerResource,
+  unregisterResource,
+  clearResources,
+  getResourceCount,
+  // Bash binding utilities
+  createBashBinding,
+  clearHistory,
+  getHistoryCount,
+  defaultBashBinding,
+  // Types
+  type SearchToolInput,
+  type SearchToolOutput,
+  type SearchResult,
+  type SearchHandler,
+  type FetchToolInput,
+  type FetchToolOutput,
+  type FetchHandler,
+  type DoToolInput,
+  type DoToolOutput,
+  type DoHandler,
+  type DoHandlerOptions,
+  type BashBinding,
+  type ExecResult,
+  type ToolDefinition,
+  type ToolInputSchema,
+} from './tools/index.js'
+
+// ============================================================================
+// Pipeline Stage Exports
+// ============================================================================
+
+export {
+  // Pipeline stages
+  classifyAndGenerate,
+  parseAndFix,
+  analyzeSafety,
+  applyGate,
+  executeOrBlock,
+  formatResult,
+  // Pipeline types
+  type ClassifyInput,
+  type ClassifyResult,
+  type ParseInput,
+  type ParseResult,
+  type SafetyInput,
+  type SafetyResult,
+  type GateInput,
+  type GateResult,
+  type ExecuteInput,
+  type ExecuteResult,
+  type ExecuteOptions,
+  type FormatInput,
+  type FormatResult,
+} from './pipeline/index.js'

@@ -11,13 +11,59 @@
 import type { Program, SafetyClassification, Intent, OperationType, ImpactLevel } from '../../types.js'
 
 import {
-  isReadOnly,
-  isDelete,
-  isWrite,
-  isNetwork,
-  isExecute,
-  isCriticalSystem,
+  READ_ONLY_COMMANDS,
+  DELETE_COMMANDS,
+  WRITE_COMMANDS,
+  NETWORK_COMMANDS,
+  EXECUTE_COMMANDS,
+  CRITICAL_SYSTEM_COMMANDS,
 } from '../../../core/safety/command-sets.js'
+
+// ============================================================================
+// Command Classification Helpers
+// ============================================================================
+
+/**
+ * Check if a command is read-only.
+ */
+function isReadOnly(cmd: string): boolean {
+  return READ_ONLY_COMMANDS.has(cmd)
+}
+
+/**
+ * Check if a command performs delete operations.
+ */
+function isDelete(cmd: string): boolean {
+  return DELETE_COMMANDS.has(cmd)
+}
+
+/**
+ * Check if a command performs write operations.
+ */
+function isWrite(cmd: string): boolean {
+  return WRITE_COMMANDS.has(cmd)
+}
+
+/**
+ * Check if a command performs network operations.
+ */
+function isNetwork(cmd: string): boolean {
+  return NETWORK_COMMANDS.has(cmd)
+}
+
+/**
+ * Check if a command executes other code.
+ */
+function isExecute(cmd: string): boolean {
+  return EXECUTE_COMMANDS.has(cmd)
+}
+
+/**
+ * Check if a command is a critical system command.
+ */
+function isCriticalSystem(cmd: string): boolean {
+  return CRITICAL_SYSTEM_COMMANDS.has(cmd)
+}
 
 // ============================================================================
 // Types
