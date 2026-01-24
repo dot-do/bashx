@@ -4,18 +4,139 @@
  * Provides OAuth integration for bashx.do with:
  * - Token extraction from Authorization header (Bearer token)
  * - Token extraction from Cookie
- * - JWT verification using verifyJWT() from oauth.do/server
+ * - JWT verification using verifyJWT() from @dotdo/oauth/server
  * - Session validation caching
  * - Permission scopes for bash: exec (run commands), admin (dangerous commands)
  * - Rejection of invalid/expired tokens
  * - Integration with BashModule and security policies
+ *
+ * ## Usage with @dotdo/oauth
+ *
+ * ```typescript
+ * import { verifyJWT } from '@dotdo/oauth/server'
+ * import { createOAuthMiddleware, wrapVerifyJWT } from 'bashx.do/do/oauth'
+ *
+ * // Option 1: Use the wrapper to adapt @dotdo/oauth's verifyJWT
+ * const middleware = createOAuthMiddleware({
+ *   jwksUrl: 'https://oauth.do/.well-known/jwks.json',
+ *   verifyJWT: wrapVerifyJWT(verifyJWT),
+ * })
+ *
+ * // Option 2: Create a custom wrapper if you need more control
+ * const middleware = createOAuthMiddleware({
+ *   jwksUrl: 'https://oauth.do/.well-known/jwks.json',
+ *   verifyJWT: async (token, opts) => {
+ *     const result = await verifyJWT(token, opts)
+ *     if (!result.valid || !result.payload) {
+ *       throw new Error(result.error || 'Token verification failed')
+ *     }
+ *     return {
+ *       payload: result.payload as JWTPayload,
+ *       protectedHeader: result.header || { alg: 'RS256' }
+ *     }
+ *   }
+ * })
+ * ```
  *
  * @module bashx/do/oauth
  */
 
 import { BashModule, type BashExecutor, type BashModuleOptions } from './index.js'
 import type { BashResult, ExecOptions, FsCapability } from '../types.js'
-import { createSecurityPolicy, type SecurityPolicy, type ValidationResult as SecurityValidationResult } from './security/security-policy.js'
+import { createSecurityPolicy, type SecurityPolicy } from './security/security-policy.js'
+
+// ============================================================================
+// @dotdo/oauth INTEGRATION
+// ============================================================================
+
+/**
+ * Type definition for @dotdo/oauth's verifyJWT result
+ * This matches the structure from @dotdo/oauth/server (v0.1.5+)
+ */
+export interface DotdoOAuthVerifyResult {
+  /** Whether the token is valid */
+  valid: boolean
+  /** Decoded JWT payload (if valid) */
+  payload?: {
+    iss?: string
+    sub?: string
+    aud?: string | string[]
+    exp?: number
+    nbf?: number
+    iat?: number
+    jti?: string
+    [key: string]: unknown
+  }
+  /** Error message (if invalid) */
+  error?: string
+  /** JWT header */
+  header?: {
+    alg: string
+    typ?: string
+    kid?: string
+  }
+}
+
+/**
+ * Type definition for @dotdo/oauth's verifyJWT function
+ */
+export type DotdoVerifyJWTFn = (
+  token: string,
+  options?: { jwksUrl?: string; issuer?: string; audience?: string | string[] }
+) => Promise<DotdoOAuthVerifyResult>
+
+/**
+ * Wrap @dotdo/oauth's verifyJWT to match bashx's expected interface.
+ *
+ * The @dotdo/oauth package returns { valid, payload, error, header }
+ * while bashx expects { payload, protectedHeader } and throws on error.
+ *
+ * @param dotdoVerifyJWT - The verifyJWT function from @dotdo/oauth/server
+ * @returns A wrapped function compatible with bashx's VerifyTokenOptions
+ *
+ * @example
+ * ```typescript
+ * import { verifyJWT } from '@dotdo/oauth/server'
+ * import { wrapVerifyJWT, createOAuthMiddleware } from 'bashx.do/do/oauth'
+ *
+ * const middleware = createOAuthMiddleware({
+ *   jwksUrl: 'https://oauth.do/.well-known/jwks.json',
+ *   verifyJWT: wrapVerifyJWT(verifyJWT),
+ * })
+ * ```
+ */
+export function wrapVerifyJWT(
+  dotdoVerifyJWT: DotdoVerifyJWTFn
+): (token: string, options: { jwksUrl: string }) => Promise<JWTVerifyResult> {
+  return async (token: string, options: { jwksUrl: string }): Promise<JWTVerifyResult> => {
+    const result = await dotdoVerifyJWT(token, { jwksUrl: options.jwksUrl })
+
+    if (!result.valid) {
+      throw new Error(result.error || 'Token verification failed')
+    }
+
+    if (!result.payload) {
+      throw new Error('Token payload is missing')
+    }
+
+    // Map the payload to bashx's JWTPayload structure
+    const payload: JWTPayload = {
+      sub: result.payload.sub || '',
+      iss: result.payload.iss || '',
+      aud: result.payload.aud || '',
+      exp: result.payload.exp || 0,
+      iat: result.payload.iat || 0,
+      jti: result.payload.jti,
+      scope: result.payload.scope as string | undefined,
+      'bashx:permissions': result.payload['bashx:permissions'] as BashPermissions | undefined,
+    }
+
+    return {
+      payload,
+      protectedHeader: result.header || { alg: 'RS256' },
+    }
+  }
+}
 
 // ============================================================================
 // TYPES
@@ -99,7 +220,7 @@ export interface TokenExtractionOptions {
 export interface VerifyTokenOptions {
   /** JWKS URL for verifying JWT signatures */
   jwksUrl: string
-  /** The verifyJWT function from oauth.do/server */
+  /** The verifyJWT function - use wrapVerifyJWT() to adapt @dotdo/oauth/server's verifyJWT */
   verifyJWT: (token: string, options: { jwksUrl: string }) => Promise<JWTVerifyResult>
   /** Expected issuer claim */
   issuer?: string
@@ -866,12 +987,12 @@ export class OAuthBashModule extends BashModule {
 
     // Check authentication
     if (!options?.authContext) {
-      return this.createBlockedResult(fullCommand, 'authentication required')
+      return this.createOAuthBlockedResult(fullCommand, 'authentication required')
     }
 
     const context = options.authContext
     if (!context.authenticated) {
-      return this.createBlockedResult(fullCommand, 'authentication required')
+      return this.createOAuthBlockedResult(fullCommand, 'authentication required')
     }
 
     // Check if command is dangerous and requires admin - do this FIRST before security checks
@@ -880,14 +1001,14 @@ export class OAuthBashModule extends BashModule {
       if (!this.middleware.checkPermission(context, 'admin', fullCommand)) {
         const reason = 'admin scope required for dangerous commands'
         this.auditCommand(context.userId || 'unknown', fullCommand, true, reason)
-        return this.createBlockedResult(fullCommand, reason)
+        return this.createOAuthBlockedResult(fullCommand, reason)
       }
     } else {
       // Check basic exec permission for non-dangerous commands
       if (!this.middleware.checkPermission(context, 'exec', fullCommand)) {
         const reason = 'exec permission denied'
         this.auditCommand(context.userId || 'unknown', fullCommand, true, reason)
-        return this.createBlockedResult(fullCommand, reason)
+        return this.createOAuthBlockedResult(fullCommand, reason)
       }
     }
 
@@ -898,7 +1019,7 @@ export class OAuthBashModule extends BashModule {
         if (!pathResult.valid) {
           const reason = `security: ${pathResult.violation?.message || 'path traversal blocked'}`
           this.auditCommand(context.userId || 'unknown', fullCommand, true, reason)
-          return this.createBlockedResult(fullCommand, reason)
+          return this.createOAuthBlockedResult(fullCommand, reason)
         }
       }
     }
@@ -908,7 +1029,7 @@ export class OAuthBashModule extends BashModule {
       if (arg.includes('$(') || arg.includes('`')) {
         const reason = 'security: command injection blocked'
         this.auditCommand(context.userId || 'unknown', fullCommand, true, reason)
-        return this.createBlockedResult(fullCommand, reason)
+        return this.createOAuthBlockedResult(fullCommand, reason)
       }
     }
 
@@ -936,9 +1057,9 @@ export class OAuthBashModule extends BashModule {
   }
 
   /**
-   * Create a blocked result.
+   * Create a blocked result for OAuth-specific blocks.
    */
-  private createBlockedResult(command: string, reason: string): BashResult {
+  private createOAuthBlockedResult(command: string, reason: string): BashResult {
     return {
       input: command,
       command,
