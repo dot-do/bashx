@@ -20,3 +20,19 @@
 
 export { analyze, isDangerous, classifyCommand } from '../ast/analyze.js'
 export type { SafetyClassification, Intent, CommandClassification } from '../types.js'
+
+// Re-export @dotdo/types/bash safety types for API consumers
+export type {
+  SafetyLevel,
+  SafetyClassification as ApiSafetyClassification,
+  Intent as ApiIntent,
+} from '@dotdo/types/bash'
+
+// Re-export converters for interoperability
+export {
+  toApiSafetyClassification,
+  toApiIntent,
+  isApiSafetyLevel,
+  isApiSafetyClassification,
+  isInternalSafetyClassification,
+} from '../types-bridge.js'

@@ -36,6 +36,17 @@ import type { BashResult, BashOptions, BashClientExtended } from './types.js'
 
 export * from './types.js'
 
+// Re-export type bridge utilities for @dotdo/types interoperability
+export {
+  toApiSafetyClassification,
+  toApiIntent,
+  toApiBashResult,
+  fromApiBashResult,
+  isApiSafetyLevel,
+  isApiSafetyClassification,
+  isInternalSafetyClassification,
+} from './types-bridge.js'
+
 // Re-export escape utilities
 export { shellEscape, shellEscapeArg } from './escape.js'
 

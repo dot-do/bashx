@@ -52,6 +52,40 @@ export type {
   LanguageContext,
 } from '../core/types.js'
 
+// ============================================================================
+// Re-export @dotdo/types/bash Types for API Consumers
+// ============================================================================
+
+/**
+ * Public API types from @dotdo/types/bash.
+ *
+ * These types are designed for the public RPC/API layer and may have
+ * a different structure than the internal bashx types. Use the converters
+ * in types-bridge.ts when you need to convert between the two formats.
+ *
+ * @see {@link ./types-bridge.ts} for type converters
+ */
+export {
+  type BashEncoding,
+  type SafetyLevel,
+  type ShellApi,
+  type ShellStream,
+  type ShellResult,
+  type BashCapability as ShellCapability,
+  type SupportedLanguage as ShellLanguage,
+  type BashResult as ApiBashResult,
+  type ExecOptions as ApiExecOptions,
+  type SafetyClassification as ApiSafetyClassification,
+  type Intent as ApiIntent,
+  type Program as ApiProgram,
+  type Command as ApiCommand,
+  type Redirect as ApiRedirect,
+  type Assignment as ApiAssignment,
+  type BashNode as ApiBashNode,
+  type BashNodeType,
+  type LanguageContext as ApiLanguageContext,
+} from '@dotdo/types/bash'
+
 // Import types we need to reference in this file
 import type {
   Program,
